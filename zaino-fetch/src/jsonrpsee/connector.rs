@@ -712,9 +712,9 @@ impl JsonRpSeeConnector {
         let mut params = Vec::new();
         if let Some(b) = blocks {
             params.push(serde_json::json!(b));
-            if let Some(h) = height {
-                params.push(serde_json::json!(h));
-            }
+        }
+        if let Some(h) = height {
+            params.push(serde_json::json!(h));
         }
         self.send_request("getnetworksolps", params).await
     }
