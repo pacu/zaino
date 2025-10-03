@@ -26,14 +26,12 @@ use crate::jsonrpsee::{
     error::{JsonRpcError, TransportError},
     response::{
         GetBalanceError, GetBalanceResponse, GetBlockCountResponse, GetBlockError, GetBlockHash,
-        GetBlockResponse, GetBlockchainInfoResponse, GetInfoResponse, GetMempoolInfoResponse,
-        GetSubtreesError, GetSubtreesResponse, GetTransactionResponse, GetTreestateError,
-        GetTreestateResponse, GetUtxosError, GetUtxosResponse, SendTransactionError,
-        SendTransactionResponse, TxidsError, TxidsResponse,
+        GetBlockResponse, GetBlockchainInfoResponse, GetDifficultyResponse, GetInfoResponse,
+        GetMempoolInfoResponse, GetNetworkSolPsResponse, GetSubtreesError, GetSubtreesResponse,
+        GetTransactionResponse, GetTreestateError, GetTreestateResponse, GetUtxosError,
+        GetUtxosResponse, SendTransactionError, SendTransactionResponse, TxidsError, TxidsResponse,
     },
 };
-
-use super::response::{GetDifficultyResponse, GetNetworkSolPsResponse};
 
 #[derive(Serialize, Deserialize, Debug)]
 struct RpcRequest<T> {
@@ -701,7 +699,9 @@ impl JsonRpSeeConnector {
     /// tags: blockchain
     ///
     /// This RPC is implemented in the [mining.cpp](https://github.com/zcash/zcash/blob/d00fc6f4365048339c83f463874e4d6c240b63af/src/rpc/mining.cpp#L104)
-    /// file of the Zcash repository. The Zebra implementation can be found [here](https://github.com/ZcashFoundation/zebra/blob/19bca3f1159f9cb9344c9944f7e1cb8d6a82a07f/zebra-rpc/src/methods.rs#L2687).
+    /// file of the Zcash repository.
+    ///
+    /// The Zebra implementation can be found [here](https://github.com/ZcashFoundation/zebra/blob/19bca3f1159f9cb9344c9944f7e1cb8d6a82a07f/zebra-rpc/src/methods.rs#L2687).
     ///
     /// # Parameters
     ///
