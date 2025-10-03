@@ -701,8 +701,10 @@ impl JsonRpSeeConnector {
     /// This RPC is implemented in the [mining.cpp](https://github.com/zcash/zcash/blob/d00fc6f4365048339c83f463874e4d6c240b63af/src/rpc/mining.cpp#L104)
     /// file of the Zcash repository.
     /// This function is backed by [`GetNetworkHashPS` here](https://github.com/zcash/zcash/blob/d00fc6f4365048339c83f463874e4d6c240b63af/src/rpc/mining.cpp#L49).
-    /// Generally speaking, it returns a single 64 bit work over time, where work is Chainwork and time is measured in blocks.
-    /// If the `blocks` is nonpositive, then the [difficulty averaging window](https://github.com/zcash/zcash/blob/d00fc6f4365048339c83f463874e4d6c240b63af/src/consensus/params.h#L498) is used, which is a PoW consensus paramter.
+    /// Generally speaking, it returns a single 64 bit int representing work over time, where work is Chainwork and time is measured in blocks.
+    /// `blocks` is the number of blocks evaluated, (average network hashes per second based on the last n blocks)
+    /// `height` returns estimated solps at the time when a given block was found
+    /// If the `blocks` is present but nonpositive, then the [difficulty averaging window](https://github.com/zcash/zcash/blob/d00fc6f4365048339c83f463874e4d6c240b63af/src/consensus/params.h#L498) is used, which is a PoW consensus paramter.
     ///
     /// The Zebra implementation can be found [here](https://github.com/ZcashFoundation/zebra/blob/19bca3f1159f9cb9344c9944f7e1cb8d6a82a07f/zebra-rpc/src/methods.rs#L2687).
     ///
