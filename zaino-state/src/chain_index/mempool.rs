@@ -4,7 +4,10 @@ use std::{collections::HashSet, sync::Arc};
 
 use crate::{
     broadcast::{Broadcast, BroadcastSubscriber},
-    chain_index::source::{BlockchainSource, BlockchainSourceError},
+    chain_index::{
+        source::{BlockchainSource, BlockchainSourceError},
+        types::MempoolInfo,
+    },
     error::{MempoolError, StatusError},
     status::{AtomicStatus, StatusType},
     BlockHash,
@@ -521,7 +524,7 @@ impl MempoolSubscriber {
 
     /// Returns information about the mempool. Used by the `getmempoolinfo` RPC.
     /// Computed from local Broadcast state.
-    pub async fn get_mempool_info(&self) -> Result<GetMempoolInfoResponse, MempoolError> {
+    pub async fn get_mempool_info(&self) -> MempoolInfo {
         let mempool_transactions: Vec<(MempoolKey, MempoolValue)> =
             self.subscriber.get_filtered_state(&HashSet::new());
 
@@ -541,7 +544,7 @@ impl MempoolSubscriber {
 
         let usage: u64 = bytes.saturating_add(key_heap_bytes);
 
-        Ok(GetMempoolInfoResponse { size, bytes, usage })
+        MempoolInfo { size, bytes, usage }
     }
 
     // TODO noted here too

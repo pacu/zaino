@@ -12,14 +12,15 @@
 //!   - NOTE: Full transaction and block data is served from the backend finalizer.
 
 use crate::chain_index::non_finalised_state::BestTip;
-use crate::chain_index::types::{BestChainLocation, NonBestChainLocation};
+use crate::chain_index::types::{BestChainLocation, MempoolInfo, NonBestChainLocation};
 use crate::error::{ChainIndexError, ChainIndexErrorKind, FinalisedStateError};
-use crate::IndexedBlock;
 use crate::{AtomicStatus, StatusType, SyncError};
+use crate::{IndexedBlock, TransactionHash};
 use std::collections::HashSet;
 use std::{sync::Arc, time::Duration};
 
 use futures::{FutureExt, Stream};
+use hex::FromHex as _;
 use non_finalised_state::NonfinalizedBlockCacheSnapshot;
 use source::{BlockchainSource, ValidatorConnector};
 use tokio_stream::StreamExt;
@@ -196,6 +197,21 @@ pub trait ChainIndex {
         end: Option<types::Height>,
     ) -> Option<impl futures::Stream<Item = Result<Vec<u8>, Self::Error>>>;
 
+    /// Returns the *compact* block for the given height.
+    ///
+    /// Returns None if the specified height
+    /// is greater than the snapshot's tip
+    ///
+    /// TODO: Add range fetch method or update this?
+    #[allow(clippy::type_complexity)]
+    fn get_compact_block(
+        &self,
+        nonfinalized_snapshot: &Self::Snapshot,
+        height: types::Height,
+    ) -> impl std::future::Future<
+        Output = Result<Option<zaino_proto::proto::compact_formats::CompactBlock>, Self::Error>,
+    >;
+
     /// Finds the newest ancestor of the given block on the main
     /// chain, or the block itself if it is on the main chain.
     fn find_fork_point(
@@ -238,6 +254,11 @@ pub trait ChainIndex {
         Output = Result<(Option<BestChainLocation>, HashSet<NonBestChainLocation>), Self::Error>,
     >;
 
+    /// Returns all txids currently in the mempool.
+    fn get_mempool_txids(
+        &self,
+    ) -> impl std::future::Future<Output = Result<Vec<types::TransactionHash>, Self::Error>>;
+
     /// Returns all transactions currently in the mempool, filtered by `exclude_list`.
     ///
     /// The `exclude_list` may contain shortened transaction ID hex prefixes (client-endian).
@@ -249,12 +270,18 @@ pub trait ChainIndex {
     /// Returns a stream of mempool transactions, ending the stream when the chain tip block hash
     /// changes (a new block is mined or a reorg occurs).
     ///
-    /// If the chain tip has changed from the given spanshot returns None.
+    /// If a snapshot is given and the chain tip has changed from the given spanshot, returns None.
     #[allow(clippy::type_complexity)]
     fn get_mempool_stream(
         &self,
-        snapshot: &Self::Snapshot,
+        snapshot: Option<&Self::Snapshot>,
     ) -> Option<impl futures::Stream<Item = Result<Vec<u8>, Self::Error>>>;
+
+    /// Returns Information about the mempool state:
+    /// - size: Current tx count
+    /// - bytes: Sum of all tx sizes
+    /// - usage: Total memory usage for the mempool
+    fn get_mempool_info(&self) -> impl std::future::Future<Output = MempoolInfo>;
 }
 
 /// The combined index. Contains a view of the mempool, and the full
@@ -380,6 +407,7 @@ pub trait ChainIndex {
 /// - Unified access to finalized and non-finalized blockchain state
 /// - Automatic synchronization between state layers
 /// - Snapshot-based consistency for queries
+#[derive(Debug)]
 pub struct NodeBackedChainIndex<Source: BlockchainSource = ValidatorConnector> {
     blockchain_source: std::sync::Arc<Source>,
     #[allow(dead_code)]
@@ -434,7 +462,7 @@ impl<Source: BlockchainSource> NodeBackedChainIndex<Source> {
 
     /// Creates a [`NodeBackedChainIndexSubscriber`] from self,
     /// a clone-safe, drop-safe, read-only view onto the running indexer.
-    pub async fn subscriber(&self) -> NodeBackedChainIndexSubscriber<Source> {
+    pub fn subscriber(&self) -> NodeBackedChainIndexSubscriber<Source> {
         NodeBackedChainIndexSubscriber {
             blockchain_source: self.blockchain_source.as_ref().clone(),
             mempool: self.mempool.subscriber(),
@@ -532,7 +560,7 @@ impl<Source: BlockchainSource> NodeBackedChainIndex<Source> {
 /// Designed for concurrent efficiency.
 ///
 /// [`NodeBackedChainIndexSubscriber`] can safely be cloned and dropped freely.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct NodeBackedChainIndexSubscriber<Source: BlockchainSource = ValidatorConnector> {
     blockchain_source: Source,
     mempool: mempool::MempoolSubscriber,
@@ -692,6 +720,30 @@ impl<Source: BlockchainSource> ChainIndex for NodeBackedChainIndexSubscriber<Sou
             )
         } else {
             None
+        }
+    }
+
+    /// Returns the *compact* block for the given height.
+    ///
+    /// Returns None if the specified height
+    /// is greater than the snapshot's tip
+    async fn get_compact_block(
+        &self,
+        nonfinalized_snapshot: &Self::Snapshot,
+        height: types::Height,
+    ) -> Result<Option<zaino_proto::proto::compact_formats::CompactBlock>, Self::Error> {
+        if height <= nonfinalized_snapshot.best_tip.height {
+            Ok(Some(
+                match nonfinalized_snapshot.get_chainblock_by_height(&height) {
+                    Some(block) => block.to_compact_block(),
+                    None => match self.finalized_state.get_compact_block(height).await {
+                        Ok(block) => block,
+                        Err(_e) => return Err(ChainIndexError::database_hole(height)),
+                    },
+                },
+            ))
+        } else {
+            Ok(None)
         }
     }
 
@@ -868,6 +920,19 @@ impl<Source: BlockchainSource> ChainIndex for NodeBackedChainIndexSubscriber<Sou
         Ok((best_chain_block, non_best_chain_blocks))
     }
 
+    /// Returns all txids currently in the mempool.
+    async fn get_mempool_txids(&self) -> Result<Vec<types::TransactionHash>, Self::Error> {
+        self.mempool
+            .get_mempool()
+            .await
+            .into_iter()
+            .map(|(txid_key, _)| {
+                TransactionHash::from_hex(&txid_key.txid)
+                    .map_err(ChainIndexError::backing_validator)
+            })
+            .collect::<Result<_, _>>()
+    }
+
     /// Returns all transactions currently in the mempool, filtered by `exclude_list`.
     ///
     /// The `exclude_list` may contain shortened transaction ID hex prefixes (client-endian).
@@ -879,11 +944,9 @@ impl<Source: BlockchainSource> ChainIndex for NodeBackedChainIndexSubscriber<Sou
         &self,
         exclude_list: Vec<String>,
     ) -> Result<Vec<Vec<u8>>, Self::Error> {
-        let subscriber = self.mempool.clone();
-
         // Use the mempool's own filtering (it already handles client-endian shortened prefixes).
         let pairs: Vec<(mempool::MempoolKey, mempool::MempoolValue)> =
-            subscriber.get_filtered_mempool(exclude_list).await;
+            self.mempool.get_filtered_mempool(exclude_list).await;
 
         // Transform to the Vec<Vec<u8>> that the trait requires.
         let bytes: Vec<Vec<u8>> = pairs
@@ -897,16 +960,16 @@ impl<Source: BlockchainSource> ChainIndex for NodeBackedChainIndexSubscriber<Sou
     /// Returns a stream of mempool transactions, ending the stream when the chain tip block hash
     /// changes (a new block is mined or a reorg occurs).
     ///
-    /// Returns None if the chain tip has changed from the given snapshot.
+    /// If a snapshot is given and the chain tip has changed from the given spanshot, returns None.
     fn get_mempool_stream(
         &self,
-        snapshot: &Self::Snapshot,
+        snapshot: Option<&Self::Snapshot>,
     ) -> Option<impl futures::Stream<Item = Result<Vec<u8>, Self::Error>>> {
-        let expected_chain_tip = snapshot.best_tip.blockhash;
+        let expected_chain_tip = snapshot.map(|snapshot| snapshot.best_tip.blockhash);
         let mut subscriber = self.mempool.clone();
 
         match subscriber
-            .get_mempool_stream(Some(expected_chain_tip))
+            .get_mempool_stream(expected_chain_tip)
             .now_or_never()
         {
             Some(Ok((in_rx, _handle))) => {
@@ -956,6 +1019,14 @@ impl<Source: BlockchainSource> ChainIndex for NodeBackedChainIndexSubscriber<Sou
                 Some(tokio_stream::wrappers::ReceiverStream::new(out_rx))
             }
         }
+    }
+
+    /// Returns Information about the mempool state:
+    /// - size: Current tx count
+    /// - bytes: Sum of all tx sizes
+    /// - usage: Total memory usage for the mempool
+    async fn get_mempool_info(&self) -> MempoolInfo {
+        self.mempool.get_mempool_info().await
     }
 }
 
