@@ -1,3 +1,5 @@
+//! These tests compare the output of `FetchService` with the output of `JsonRpcConnector`.
+
 use futures::StreamExt as _;
 use zaino_common::network::ActivationHeights;
 use zaino_common::{DatabaseConfig, Network, ServiceConfig, StorageConfig};
@@ -581,7 +583,7 @@ async fn fetch_service_get_latest_block(validator: &ValidatorKind) {
         hash: json_service_blockchain_info.best_block_hash.0.to_vec(),
     });
 
-    assert_eq!(fetch_service_get_latest_block.height, 2);
+    assert_eq!(fetch_service_get_latest_block.height, 3);
     assert_eq!(
         fetch_service_get_latest_block,
         json_service_get_latest_block
@@ -613,6 +615,66 @@ async fn assert_fetch_service_difficulty_matches_rpc(validator: &ValidatorKind) 
 
     let rpc_difficulty_response = jsonrpc_client.get_difficulty().await.unwrap();
     assert_eq!(fetch_service_get_difficulty, rpc_difficulty_response.0);
+}
+
+async fn assert_fetch_service_peerinfo_matches_rpc(validator: &ValidatorKind) {
+    let (test_manager, _fetch_service, fetch_service_subscriber) =
+        create_test_manager_and_fetch_service(validator, None, true, true, true, true).await;
+
+    let fetch_service_get_peer_info = fetch_service_subscriber.get_peer_info().await.unwrap();
+
+    let jsonrpc_client = JsonRpSeeConnector::new_with_basic_auth(
+        test_node_and_return_url(
+            test_manager.zebrad_rpc_listen_address,
+            false,
+            None,
+            Some("xxxxxx".to_string()),
+            Some("xxxxxx".to_string()),
+        )
+        .await
+        .unwrap(),
+        "xxxxxx".to_string(),
+        "xxxxxx".to_string(),
+    )
+    .unwrap();
+
+    let rpc_peer_info_response = jsonrpc_client.get_peer_info().await.unwrap();
+
+    dbg!(&rpc_peer_info_response);
+    dbg!(&fetch_service_get_peer_info);
+    assert_eq!(fetch_service_get_peer_info, rpc_peer_info_response);
+}
+
+async fn fetch_service_get_block_subsidy(validator: &ValidatorKind) {
+    let (test_manager, _fetch_service, fetch_service_subscriber) =
+        create_test_manager_and_fetch_service(validator, None, true, true, true, true).await;
+
+    const BLOCK_LIMIT: u32 = 10;
+
+    for i in 0..BLOCK_LIMIT {
+        test_manager.local_net.generate_blocks(1).await.unwrap();
+        tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+        let fetch_service_get_block_subsidy =
+            fetch_service_subscriber.get_block_subsidy(i).await.unwrap();
+
+        let jsonrpc_client = JsonRpSeeConnector::new_with_basic_auth(
+            test_node_and_return_url(
+                test_manager.zebrad_rpc_listen_address,
+                false,
+                None,
+                Some("xxxxxx".to_string()),
+                Some("xxxxxx".to_string()),
+            )
+            .await
+            .unwrap(),
+            "xxxxxx".to_string(),
+            "xxxxxx".to_string(),
+        )
+        .unwrap();
+
+        let rpc_block_subsidy_response = jsonrpc_client.get_block_subsidy(i).await.unwrap();
+        assert_eq!(fetch_service_get_block_subsidy, rpc_block_subsidy_response);
+    }
 }
 
 async fn fetch_service_get_block(validator: &ValidatorKind) {
@@ -652,7 +714,7 @@ async fn fetch_service_get_best_blockhash(validator: &ValidatorKind) {
 
     let inspected_block: GetBlock = fetch_service_subscriber
         // Some(verbosity) : 1 for JSON Object, 2 for tx data as JSON instead of hex
-        .z_get_block("6".to_string(), Some(1))
+        .z_get_block("7".to_string(), Some(1))
         .await
         .unwrap();
 
@@ -680,7 +742,7 @@ async fn fetch_service_get_block_count(validator: &ValidatorKind) {
     tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
 
     let block_id = BlockId {
-        height: 6,
+        height: 7,
         hash: Vec::new(),
     };
 
@@ -1464,6 +1526,16 @@ mod zcashd {
         }
 
         #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+        pub(crate) async fn peer_info() {
+            assert_fetch_service_peerinfo_matches_rpc(&ValidatorKind::Zcashd).await;
+        }
+
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+        pub(crate) async fn block_subsidy() {
+            fetch_service_get_block_subsidy(&ValidatorKind::Zcashd).await;
+        }
+
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
         pub(crate) async fn best_blockhash() {
             fetch_service_get_best_blockhash(&ValidatorKind::Zcashd).await;
         }
@@ -1656,6 +1728,16 @@ mod zebrad {
         #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
         pub(crate) async fn difficulty() {
             assert_fetch_service_difficulty_matches_rpc(&ValidatorKind::Zebrad).await;
+        }
+
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+        pub(crate) async fn peer_info() {
+            assert_fetch_service_peerinfo_matches_rpc(&ValidatorKind::Zebrad).await;
+        }
+
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+        pub(crate) async fn block_subsidy() {
+            fetch_service_get_block_subsidy(&ValidatorKind::Zcashd).await;
         }
 
         #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

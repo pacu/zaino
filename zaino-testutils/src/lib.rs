@@ -561,10 +561,8 @@ impl TestManager {
             clients,
         };
 
-        // NOTE: We currently havee to turn nu5 and nu6 on at block height = 2,
-        // for this reason we generate an extra block to activate the expexted network upgrades.
-        //
-        // Not doing this here would require changing many tests temporarily while we wait for the atual fix.
+        // Generate an extra block to turn on NU5 and NU6,
+        // as they currently must be turned on at block height = 2.
         test_manager.generate_blocks_with_delay(1).await;
 
         Ok(test_manager)
@@ -1270,7 +1268,6 @@ mod launch_testmanager {
             /// This test shows currently we do not receive mining rewards from Zebra unless we mine 100 blocks at a time.
             /// This is not the case with Zcashd and should not be the case here.
             /// Even if rewards need 100 confirmations these blocks should not have to be mined at the same time.
-            // #[ignore = "Bug in zingolib 1.0 sync, reinstate on zinglib 2.0 upgrade."]
             #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
             pub(crate) async fn zaino_clients_receive_mining_reward() {
                 let mut test_manager = TestManager::launch_with_default_activation_heights(
@@ -1319,7 +1316,6 @@ mod launch_testmanager {
                 test_manager.close().await;
             }
 
-            // #[ignore = "Bug in zingolib 1.0 sync, reinstate on zinglib 2.0 upgrade."]
             #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
             pub(crate) async fn zaino_clients_receive_mining_reward_and_send() {
                 let mut test_manager = TestManager::launch_with_default_activation_heights(

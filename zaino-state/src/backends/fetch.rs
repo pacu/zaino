@@ -24,7 +24,9 @@ use zaino_fetch::{
     chain::{transaction::FullTransaction, utils::ParseFromSlice},
     jsonrpsee::{
         connector::{JsonRpSeeConnector, RpcError},
-        response::GetMempoolInfoResponse,
+        response::{
+            block_subsidy::GetBlockSubsidy, peer_info::GetPeerInfo, GetMempoolInfoResponse,
+        },
     },
 };
 
@@ -235,6 +237,10 @@ impl ZcashIndexer for FetchServiceSubscriber {
         Ok(self.indexer.get_mempool_info().await.into())
     }
 
+    async fn get_peer_info(&self) -> Result<GetPeerInfo, Self::Error> {
+        Ok(self.fetcher.get_peer_info().await?)
+    }
+
     /// Returns the proof-of-work difficulty as a multiple of the minimum difficulty.
     ///
     /// zcashd reference: [`getdifficulty`](https://zcash.github.io/rpc/getdifficulty.html)
@@ -242,6 +248,10 @@ impl ZcashIndexer for FetchServiceSubscriber {
     /// tags: blockchain
     async fn get_difficulty(&self) -> Result<f64, Self::Error> {
         Ok(self.fetcher.get_difficulty().await?.0)
+    }
+
+    async fn get_block_subsidy(&self, height: u32) -> Result<GetBlockSubsidy, Self::Error> {
+        Ok(self.fetcher.get_block_subsidy(height).await?)
     }
 
     /// Returns the total balance of a provided `addresses` in an [`AddressBalance`] instance.
