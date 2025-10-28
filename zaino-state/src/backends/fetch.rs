@@ -1644,6 +1644,7 @@ impl LightWalletIndexer for FetchServiceSubscriber {
             estimated_height: blockchain_info.estimated_height().0 as u64,
             zcashd_build: self.data.zebra_build(),
             zcashd_subversion: self.data.zebra_subversion(),
+            donation_address: "".to_string(),
         })
     }
 

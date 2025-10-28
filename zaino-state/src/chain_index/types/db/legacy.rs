@@ -34,6 +34,7 @@ use hex::{FromHex, ToHex};
 use primitive_types::U256;
 use std::{fmt, io::Cursor};
 use zebra_chain::serialization::BytesInDisplayOrder as _;
+use zaino_proto::proto::compact_formats::{CompactTxIn, OutPoint, TxOut};
 
 use crate::chain_index::encoding::{
     read_fixed_le, read_i64_le, read_option, read_u16_be, read_u32_be, read_u32_le, read_u64_le,
@@ -1465,6 +1466,35 @@ impl CompactTxData {
             )
             .collect();
 
+        let vout = self
+            .transparent
+            .vout
+            .iter()
+            .map(|tx_out| TxOut {
+                value: tx_out.value,
+                script_pub_key: tx_out.script_hash.to_vec(),
+            })
+            .collect();
+
+        let vin = self
+            .transparent
+            .vin
+            .iter()
+            .map(|t_in| {
+                if t_in.is_null_prevout() {
+                    None
+                } else {
+                    Some(CompactTxIn {
+                        prevout: Some(OutPoint {
+                            txid: t_in.prevout_txid.to_vec(),
+                            index: t_in.prevout_index,
+                        }),
+                    })
+                }
+            })
+            .filter_map(|t_in| t_in)
+            .collect();
+
         zaino_proto::proto::compact_formats::CompactTx {
             index: self.index(),
             hash: self.txid().0.to_vec(),
@@ -1472,6 +1502,8 @@ impl CompactTxData {
             spends,
             outputs,
             actions,
+            vin,
+            vout,
         }
     }
 }

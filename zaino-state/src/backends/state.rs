@@ -2538,7 +2538,9 @@ impl LightWalletIndexer for StateServiceSubscriber {
             build_user: self.data.build_info().build_user(),
             estimated_height: blockchain_info.estimated_height().0 as u64,
             zcashd_build: self.data.zebra_build(),
-            zcashd_subversion: self.data.zebra_subversion(),
+            zcashd_subversion: self.data.zebra_subversion(), 
+            // TODO: support donation addresses see https://github.com/zingolabs/zaino/issues/626
+            donation_address: "".to_string(), 
         })
     }
 
