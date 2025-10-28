@@ -3041,6 +3041,21 @@ impl DbV1 {
         })
     }
 
+
+    // NOTE: @AloeAreV: can you take a look at this? there seems to be a method that
+    // transforms an Indexed block into a compact block already. IDK why the `get_compact_blocks`
+    // method doesn't use it.
+    async fn get_compact_block2(
+        &self,
+        height: Height,
+    
+    ) -> Result<zaino_proto::proto::compact_formats::CompactBlock, FinalisedStateError> {
+        let block = self.get_chain_block(height)
+            .await?
+            .unwrap(); // FIX
+
+        Ok(block.to_compact_block())
+    }
     /// Returns the CompactBlock for the given Height.
     ///
     /// TODO: Add separate range fetch method!

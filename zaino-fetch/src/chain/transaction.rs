@@ -6,7 +6,8 @@ use crate::chain::{
 };
 use std::io::Cursor;
 use zaino_proto::proto::compact_formats::{
-    CompactOrchardAction, CompactSaplingOutput, CompactSaplingSpend, CompactTx,
+    CompactOrchardAction, CompactSaplingOutput, CompactSaplingSpend, CompactTx, CompactTxIn,
+    OutPoint, TxOut as CompactTxOut,
 };
 
 /// Txin format as described in <https://en.bitcoin.it/wiki/Transaction>
@@ -26,6 +27,12 @@ pub struct TxIn {
 impl TxIn {
     fn into_inner(self) -> (Vec<u8>, u32, Vec<u8>) {
         (self.prev_txid, self.prev_index, self.script_sig)
+    }
+
+    /// Returns `true` if this `OutPoint` is "null" in the Bitcoin sense: it has txid set to
+    /// all-zeroes and output index set to `u32::MAX`.
+    fn is_null(&self) -> bool {
+        self.prev_txid.as_slice() == [0u8; 32] && self.prev_index == u32::MAX
     }
 }
 
@@ -1160,6 +1167,35 @@ impl FullTransaction {
             })
             .collect();
 
+        let vout = self
+            .raw_transaction
+            .transparent_outputs
+            .iter()
+            .map(|t_out| CompactTxOut {
+                value: t_out.value,
+                script_pub_key: t_out.script_hash.clone(),
+            })
+            .collect();
+
+        let vin = self
+            .raw_transaction
+            .transparent_inputs
+            .iter()
+            .map(|t_in| {
+                if t_in.is_null() {
+                    None
+                } else {
+                    Some(CompactTxIn {
+                        prevout: Some(OutPoint {
+                            txid: t_in.prev_txid.clone(),
+                            index: t_in.prev_index,
+                        }),
+                    })
+                }
+            })
+            .filter_map(|t_in| t_in)
+            .collect();
+
         Ok(CompactTx {
             index,
             hash,
@@ -1167,6 +1203,8 @@ impl FullTransaction {
             spends,
             outputs,
             actions,
+            vin,
+            vout,
         })
     }
 
