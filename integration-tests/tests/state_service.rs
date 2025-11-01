@@ -1827,7 +1827,8 @@ mod zebra {
     pub(crate) mod lightwallet_indexer {
         use futures::StreamExt as _;
         use zaino_proto::proto::service::{
-            AddressList, BlockId, BlockRange, GetAddressUtxosArg, GetSubtreeRootsArg, TxFilter,
+            AddressList, BlockId, BlockRange, GetAddressUtxosArg, GetSubtreeRootsArg, PoolType,
+            TxFilter,
         };
         use zebra_rpc::methods::{GetAddressTxIdsRequest, GetBlock};
 
@@ -2121,7 +2122,15 @@ mod zebra {
                 height: 5,
                 hash: vec![],
             });
-            let request = BlockRange { start, end };
+            let request = BlockRange {
+                start,
+                end,
+                pool_types: vec![
+                    PoolType::Transparent as i32,
+                    PoolType::Sapling as i32,
+                    PoolType::Orchard as i32,
+                ],
+            };
             if nullifiers_only {
                 let fetch_service_get_block_range = fetch_service_subscriber
                     .get_block_range_nullifiers(request.clone())
@@ -2215,7 +2224,7 @@ mod zebra {
                 .await
                 .unwrap();
             let coinbase_tx = state_service_block_by_height.vtx.first().unwrap();
-            let hash = coinbase_tx.hash.clone();
+            let hash = coinbase_tx.txid.clone();
             let request = TxFilter {
                 block: None,
                 index: 0,

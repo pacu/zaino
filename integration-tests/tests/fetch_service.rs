@@ -3,7 +3,7 @@
 use futures::StreamExt as _;
 use zaino_fetch::jsonrpsee::connector::{test_node_and_return_url, JsonRpSeeConnector};
 use zaino_proto::proto::service::{
-    AddressList, BlockId, BlockRange, Exclude, GetAddressUtxosArg, GetSubtreeRootsArg,
+    AddressList, BlockId, BlockRange, Exclude, GetAddressUtxosArg, GetSubtreeRootsArg, PoolType,
     TransparentAddressBlockFilter, TxFilter,
 };
 use zaino_state::FetchServiceSubscriber;
@@ -1040,6 +1040,11 @@ async fn fetch_service_get_block_range<V: ValidatorExt>(validator: &ValidatorKin
             height: 10,
             hash: Vec::new(),
         }),
+        pool_types: vec![
+            PoolType::Transparent as i32,
+            PoolType::Sapling as i32,
+            PoolType::Orchard as i32,
+        ],
     };
 
     let fetch_service_stream = fetch_service_subscriber
@@ -1080,6 +1085,11 @@ async fn fetch_service_get_block_range_nullifiers<V: ValidatorExt>(validator: &V
             height: 10,
             hash: Vec::new(),
         }),
+        pool_types: vec![
+            PoolType::Transparent as i32,
+            PoolType::Sapling as i32,
+            PoolType::Orchard as i32,
+        ],
     };
 
     let fetch_service_stream = fetch_service_subscriber
@@ -1263,6 +1273,11 @@ async fn fetch_service_get_taddress_txids<V: ValidatorExt>(validator: &Validator
                 height: chain_height as u64,
                 hash: Vec::new(),
             }),
+            pool_types: vec![
+                PoolType::Transparent as i32,
+                PoolType::Sapling as i32,
+                PoolType::Orchard as i32,
+            ],
         }),
     };
 
@@ -1412,7 +1427,7 @@ async fn fetch_service_get_mempool_tx<V: ValidatorExt>(validator: &ValidatorKind
         .collect();
 
     let mut sorted_fetch_mempool_tx = fetch_mempool_tx.clone();
-    sorted_fetch_mempool_tx.sort_by_key(|tx| tx.hash.clone());
+    sorted_fetch_mempool_tx.sort_by_key(|tx| tx.txid.clone());
 
     let tx1_bytes = *tx_1.first().as_ref();
     let tx2_bytes = *tx_2.first().as_ref();
@@ -1439,7 +1454,7 @@ async fn fetch_service_get_mempool_tx<V: ValidatorExt>(validator: &ValidatorKind
         .collect();
 
     let mut sorted_exclude_fetch_mempool_tx = exclude_fetch_mempool_tx.clone();
-    sorted_exclude_fetch_mempool_tx.sort_by_key(|tx| tx.hash.clone());
+    sorted_exclude_fetch_mempool_tx.sort_by_key(|tx| tx.txid.clone());
 
     assert_eq!(sorted_exclude_fetch_mempool_tx[0].hash, sorted_txids[1]);
     assert_eq!(sorted_exclude_fetch_mempool_tx.len(), 1);

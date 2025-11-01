@@ -142,6 +142,8 @@ where
         get_transaction(TxFilter) -> RawTransaction,
         "submit the given transaction to the zcash network."
         send_transaction(RawTransaction) -> SendResponse,
+        "Return the transactions corresponding to the given t-address within the given block range"
+        get_taddress_transactions(TransparentAddressBlockFilter) -> Self::GetTaddressTransactionsStream as streaming,
         "This name is misleading, returns the full transactions that have either inputs or outputs connected to the given transparent address."
         get_taddress_txids(TransparentAddressBlockFilter) -> Self::GetTaddressTxidsStream as streaming,
         "Returns the total balance for a list of taddrs"
@@ -198,6 +200,10 @@ where
     /// Server streaming response type for the GetBlockRangeNullifiers method.
     #[doc = " Server streaming response type for the GetBlockRangeNullifiers method."]
     type GetBlockRangeNullifiersStream = std::pin::Pin<Box<CompactBlockStream>>;
+
+    /// Server streaming response type for the  GetTaddressTransactions method.
+    #[doc = "Server streaming response type for the GetTaddressTransactions method."]
+    type GetTaddressTransactionsStream = std::pin::Pin<Box<RawTransactionStream>>;
 
     /// Server streaming response type for the GetTaddressTxids method.
     #[doc = "Server streaming response type for the GetTaddressTxids method."]

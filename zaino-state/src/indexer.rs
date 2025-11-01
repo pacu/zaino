@@ -603,6 +603,12 @@ pub trait LightWalletIndexer: Send + Sync + Clone + ZcashIndexer + 'static {
     /// Submit the given transaction to the Zcash network
     async fn send_transaction(&self, request: RawTransaction) -> Result<SendResponse, Self::Error>;
 
+    /// Return the transactions corresponding to the given t-address within the given block range
+    async fn get_taddress_transactions(
+        &self,
+        request: TransparentAddressBlockFilter,
+    ) -> Result<RawTransactionStream, Self::Error>;
+
     /// Return the txids corresponding to the given t-address within the given block range
     async fn get_taddress_txids(
         &self,
