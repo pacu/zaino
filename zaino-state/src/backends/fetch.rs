@@ -1041,6 +1041,14 @@ impl LightWalletIndexer for FetchServiceSubscriber {
         })
     }
 
+    // Return the transactions corresponding to the given t-address within the given block range
+    async fn get_taddress_transactions(
+        &self,
+        request: TransparentAddressBlockFilter,
+    ) -> Result<RawTransactionStream, Self::Error> {
+        todo!("Implement this method")
+    }
+
     /// Return the txids corresponding to the given t-address within the given block range
     #[allow(deprecated)]
     async fn get_taddress_txids(

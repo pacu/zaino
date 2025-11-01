@@ -34,7 +34,7 @@ use hex::{FromHex, ToHex};
 use primitive_types::U256;
 use std::{fmt, io::Cursor};
 use zebra_chain::serialization::BytesInDisplayOrder as _;
-use zaino_proto::proto::compact_formats::{CompactTxIn, OutPoint, TxOut};
+use zaino_proto::proto::compact_formats::{CompactTxIn, TxOut};
 
 use crate::chain_index::encoding::{
     read_fixed_le, read_i64_le, read_option, read_u16_be, read_u32_be, read_u32_le, read_u64_le,
@@ -1485,10 +1485,8 @@ impl CompactTxData {
                     None
                 } else {
                     Some(CompactTxIn {
-                        prevout: Some(OutPoint {
-                            txid: t_in.prevout_txid.to_vec(),
-                            index: t_in.prevout_index,
-                        }),
+                        prevout_txid: t_in.prevout_txid.to_vec(),
+                        prevout_index: t_in.prevout_index,
                     })
                 }
             })
@@ -1497,7 +1495,7 @@ impl CompactTxData {
 
         zaino_proto::proto::compact_formats::CompactTx {
             index: self.index(),
-            hash: self.txid().0.to_vec(),
+            txid: self.txid().bytes_in_display_order().to_vec(),
             fee,
             spends,
             outputs,

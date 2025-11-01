@@ -7,7 +7,7 @@ use crate::chain::{
 use std::io::Cursor;
 use zaino_proto::proto::compact_formats::{
     CompactOrchardAction, CompactSaplingOutput, CompactSaplingSpend, CompactTx, CompactTxIn,
-    OutPoint, TxOut as CompactTxOut,
+    TxOut as CompactTxOut,
 };
 
 /// Txin format as described in <https://en.bitcoin.it/wiki/Transaction>
@@ -1130,9 +1130,11 @@ impl FullTransaction {
 
     /// Converts a zcash full transaction into a compact transaction.
     pub fn to_compact(self, index: u64) -> Result<CompactTx, ParseError> {
-        let hash = self.tx_id;
+        let hash = self.tx_id();
 
-        // NOTE: LightWalletD currently does not return a fee and is not currently priority here. Please open an Issue or PR at the Zingo-Indexer github (https://github.com/zingolabs/zingo-indexer) if you require this functionality.
+        // NOTE: LightWalletD currently does not return a fee and is not currently priority here.
+        // Please open an Issue or PR at the Zingo-Indexer github (https://github.com/zingolabs/zingo-indexer)
+        // if you require this functionality.
         let fee = 0;
 
         let spends = self
@@ -1186,10 +1188,8 @@ impl FullTransaction {
                     None
                 } else {
                     Some(CompactTxIn {
-                        prevout: Some(OutPoint {
-                            txid: t_in.prev_txid.clone(),
-                            index: t_in.prev_index,
-                        }),
+                        prevout_txid: t_in.prev_txid.clone(),
+                        prevout_index: t_in.prev_index,
                     })
                 }
             })
@@ -1198,7 +1198,7 @@ impl FullTransaction {
 
         Ok(CompactTx {
             index,
-            hash,
+            txid: hash,
             fee,
             spends,
             outputs,
