@@ -1096,6 +1096,15 @@ impl LightWalletIndexer for FetchServiceSubscriber {
         Ok(RawTransactionStream::new(receiver))
     }
 
+    /// Return the txids corresponding to the given t-address within the given block range
+    /// this function is deprecated: use `get_taddress_transactions`
+    async fn get_taddress_txids(
+        &self,
+        request: TransparentAddressBlockFilter,
+    ) -> Result<RawTransactionStream, Self::Error> {
+        self.get_taddress_transactions(request).await
+    }
+
     /// Returns the total balance for a list of taddrs
     async fn get_taddress_balance(&self, request: AddressList) -> Result<Balance, Self::Error> {
         let taddrs = GetAddressBalanceRequest::new(request.addresses);
