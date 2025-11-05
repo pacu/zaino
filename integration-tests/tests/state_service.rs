@@ -1,7 +1,9 @@
+use futures::StreamExt;
 use zaino_common::network::ActivationHeights;
 use zaino_common::{DatabaseConfig, ServiceConfig, StorageConfig};
 use zaino_fetch::jsonrpsee::response::address_deltas::GetAddressDeltasParams;
-use zaino_state::{LightWalletService, ZcashService};
+use zaino_proto::proto::service::{BlockId, BlockRange, PoolType, TransparentAddressBlockFilter};
+use zaino_state::{LightWalletService, ZcashService, BackendType};
 
 #[allow(deprecated)]
 use zaino_state::{
@@ -957,7 +959,79 @@ async fn state_service_get_raw_transaction_testnet() {
     test_manager.close().await;
 }
 
-async fn state_service_get_address_tx_ids<V: ValidatorExt>(validator: &ValidatorKind) {
+async fn state_service_get_address_transactions_regtest<V: ValidatorExt>(validator: &ValidatorKind) {
+   let (
+        mut test_manager,
+        _fetch_service,
+        fetch_service_subscriber,
+        _state_service,
+        state_service_subscriber,
+    ) = create_test_manager_and_services::<V>(validator, None, true, true, None).await;
+
+    let mut clients = test_manager
+        .clients
+        .take()
+        .expect("Clients are not initialized");
+    let recipient_taddr = clients.get_recipient_address("transparent").await;
+    clients.faucet.sync_and_await().await.unwrap();
+
+    if matches!(validator, ValidatorKind::Zebrad) {
+        test_manager.local_net.generate_blocks(100).await.unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        clients.faucet.sync_and_await().await.unwrap();
+        clients.faucet.quick_shield(AccountId::ZERO).await.unwrap();
+        test_manager.local_net.generate_blocks(1).await.unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        clients.faucet.sync_and_await().await.unwrap();
+    };
+
+    let tx = from_inputs::quick_send(
+        &mut clients.faucet,
+        vec![(recipient_taddr.as_str(), 250_000, None)],
+    )
+    .await
+    .unwrap();
+    test_manager.local_net.generate_blocks(1).await.unwrap();
+    tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+
+    let chain_height = fetch_service_subscriber
+        .block_cache
+        .get_chain_height()
+        .await
+        .unwrap()
+        .0;
+    dbg!(&chain_height);
+
+    let state_service_txids = state_service_subscriber
+        .get_taddress_transactions(TransparentAddressBlockFilter {
+            address: recipient_taddr,
+            range: Some(BlockRange {
+                start: Some(BlockId {
+                    height: (chain_height - 2) as u64,
+                    hash: vec![],
+                }),
+                end: Some(BlockId {
+                    height: chain_height as u64,
+                    hash: vec![],
+                }),
+                pool_types: vec![
+                    PoolType::Transparent as i32,
+                    PoolType::Sapling as i32,
+                    PoolType::Orchard as i32,
+                ],
+            }),
+        })
+        .await
+        .unwrap();
+
+    dbg!(&tx);
+
+    dbg!(&state_service_txids);
+    assert!(state_service_txids.count().await > 0);
+
+    test_manager.close().await;
+}
+async fn state_service_get_address_tx_ids(validator: &ValidatorKind) {
     let (
         mut test_manager,
         _fetch_service,
@@ -1359,7 +1433,12 @@ mod zebra {
             state_service_get_address_utxos_testnet().await;
         }
 
-        #[tokio::test(flavor = "multi_thread")]
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+        async fn taddress_transactions_regtest() {
+            state_service_get_address_transactions_regtest(&ValidatorKind::Zebrad).await;
+        }
+
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
         async fn address_tx_ids_regtest() {
             state_service_get_address_tx_ids::<Zebrad>(&ValidatorKind::Zebrad).await;
         }

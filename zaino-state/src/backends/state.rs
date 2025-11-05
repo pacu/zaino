@@ -2044,14 +2044,6 @@ impl LightWalletIndexer for StateServiceSubscriber {
         &self,
         request: TransparentAddressBlockFilter,
     ) -> Result<RawTransactionStream, Self::Error> {
-        todo!()
-    }
-
-    /// Return the txids corresponding to the given t-address within the given block range
-    async fn get_taddress_txids(
-        &self,
-        request: TransparentAddressBlockFilter,
-    ) -> Result<RawTransactionStream, Self::Error> {
         let txids = self.get_taddress_txids_helper(request).await?;
         let chain_height = self.chain_height().await?;
         let (transmitter, receiver) = mpsc::channel(self.config.service.channel_size as usize);
@@ -2090,6 +2082,15 @@ impl LightWalletIndexer for StateServiceSubscriber {
             }
         });
         Ok(RawTransactionStream::new(receiver))
+    }
+
+    /// Return the txids corresponding to the given t-address within the given block range
+    /// This function is deprecated. Use `get_taddress_transactions`.
+    async fn get_taddress_txids(
+        &self,
+        request: TransparentAddressBlockFilter,
+    ) -> Result<RawTransactionStream, Self::Error> {
+        self.get_taddress_transactions(request).await
     }
 
     /// Returns the total balance for a list of taddrs
