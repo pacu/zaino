@@ -11,7 +11,10 @@ use crate::{
     indexer::{
         handle_raw_transaction, IndexerSubscriber, LightWalletIndexer, ZcashIndexer, ZcashService,
     },
-    local_cache::{compact_block_to_nullifiers, BlockCache, BlockCacheSubscriber},
+    local_cache::{
+        compact_block_to_nullifiers, compact_block_with_pool_types, BlockCache,
+        BlockCacheSubscriber,
+    },
     status::{AtomicStatus, StatusType},
     stream::{
         AddressStream, CompactBlockStream, CompactTransactionStream, RawTransactionStream,
@@ -42,8 +45,8 @@ use zaino_proto::proto::{
     compact_formats::CompactBlock,
     service::{
         AddressList, Balance, BlockId, BlockRange, Exclude, GetAddressUtxosArg,
-        GetAddressUtxosReply, GetAddressUtxosReplyList, LightdInfo, PingResponse, RawTransaction,
-        SendResponse, TransparentAddressBlockFilter, TreeState, TxFilter,
+        GetAddressUtxosReply, GetAddressUtxosReplyList, LightdInfo, PingResponse, PoolType,
+        RawTransaction, SendResponse, TransparentAddressBlockFilter, TreeState, TxFilter,
     },
 };
 
@@ -594,6 +597,36 @@ impl StateServiceSubscriber {
         let fetch_service_clone = self.clone();
         let service_timeout = self.config.service.timeout;
         let (channel_tx, channel_rx) = mpsc::channel(self.config.service.channel_size as usize);
+
+        // TODO: make helper function for this
+        let pool_types = if request.pool_types.is_empty() {
+            vec![PoolType::Sapling, PoolType::Orchard]
+        } else {
+            let mut pool_types: Vec<PoolType> = vec![];
+
+            for pool in request.pool_types.iter() {
+                match PoolType::try_from(*pool) {
+                    Ok(pool_type) => {
+                        if pool_type == PoolType::Invalid {
+                            return Err(StateServiceError::Custom(format!(
+                                "Invalid PoolType {}. See proto::PoolType for valid pool types",
+                                pool_type.as_str_name()
+                            )));
+                        } else {
+                            pool_types.push(pool_type);
+                        }
+                    }
+                    Err(_) => {
+                        return Err(StateServiceError::Custom(format!(
+                            "Invalid PoolType. See proto::PoolType for valid pool types"
+                        )))
+                    }
+                };
+            }
+
+            pool_types.clone()
+        };
+
         tokio::spawn(async move {
             let timeout = timeout(
                 time::Duration::from_secs((service_timeout * 4) as u64),
@@ -643,6 +676,8 @@ impl StateServiceSubscriber {
                                 Ok(mut block) => {
                                     if trim_non_nullifier {
                                         block = compact_block_to_nullifiers(block);
+                                    } else {
+                                        block = compact_block_with_pool_types(block, pool_types.clone());
                                     }
                                     Ok(block)
                                 }
