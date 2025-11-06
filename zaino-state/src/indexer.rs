@@ -610,6 +610,8 @@ pub trait LightWalletIndexer: Send + Sync + Clone + ZcashIndexer + 'static {
     ) -> Result<RawTransactionStream, Self::Error>;
 
     /// Return the txids corresponding to the given t-address within the given block range
+    /// Note: This function is misnamed, it returns complete `RawTransaction` values, not TxIds.
+    /// Note: this method is deprecated, please use GetTaddressTransactions instead.
     async fn get_taddress_txids(
         &self,
         request: TransparentAddressBlockFilter,
