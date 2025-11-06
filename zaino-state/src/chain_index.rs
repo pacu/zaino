@@ -12,7 +12,8 @@
 //!   - NOTE: Full transaction and block data is served from the backend finalizer.
 
 use crate::chain_index::non_finalised_state::BestTip;
-use crate::chain_index::types::{BestChainLocation, MempoolInfo, NonBestChainLocation};
+use crate::chain_index::types::db::metadata::MempoolInfo;
+use crate::chain_index::types::{BestChainLocation, NonBestChainLocation};
 use crate::error::{ChainIndexError, ChainIndexErrorKind, FinalisedStateError};
 use crate::{AtomicStatus, StatusType, SyncError};
 use crate::{IndexedBlock, TransactionHash};

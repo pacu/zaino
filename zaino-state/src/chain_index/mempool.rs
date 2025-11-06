@@ -5,8 +5,7 @@ use std::{collections::HashSet, sync::Arc};
 use crate::{
     broadcast::{Broadcast, BroadcastSubscriber},
     chain_index::{
-        source::{BlockchainSource, BlockchainSourceError},
-        types::MempoolInfo,
+        source::{BlockchainSource, BlockchainSourceError}, types::db::metadata::MempoolInfo,
     },
     error::{MempoolError, StatusError},
     status::{AtomicStatus, StatusType},

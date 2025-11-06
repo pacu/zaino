@@ -16,7 +16,10 @@ use crate::chain_index::tests::init_tracing;
 use crate::chain_index::tests::vectors::{build_mockchain_source, load_test_vectors};
 use crate::chain_index::types::TransactionHash;
 use crate::error::FinalisedStateError;
-use crate::{AddrScript, BlockCacheConfig, ChainWork, Height, IndexedBlock, Outpoint};
+use crate::{
+    AddrScript, BlockCacheConfig, BlockMetadata, BlockWithMetadata, ChainWork, Height,
+    IndexedBlock, Outpoint,
+};
 
 pub(crate) async fn spawn_v1_zaino_db(
     source: MockchainSource,
@@ -34,9 +37,6 @@ pub(crate) async fn spawn_v1_zaino_db(
         },
         db_version: 1,
         network: Network::Regtest(ActivationHeights::default()),
-
-        no_sync: false,
-        no_db: false,
     };
 
     let zaino_db = ZainoDB::spawn(config, source).await.unwrap();
@@ -78,14 +78,13 @@ pub(crate) async fn load_vectors_and_spawn_and_sync_v1_zaino_db() -> (
         (_sapling_treestate, _orchard_treestate),
     ) in blocks.clone()
     {
-        let chain_block = IndexedBlock::try_from((
-            &zebra_block,
+        let metadata = BlockMetadata::new(
             sapling_root,
             sapling_root_size as u32,
             orchard_root,
             orchard_root_size as u32,
-            &parent_chain_work,
-            &zebra_chain::parameters::Network::new_regtest(
+            parent_chain_work,
+            zebra_chain::parameters::Network::new_regtest(
                 zebra_chain::parameters::testnet::ConfiguredActivationHeights {
                     before_overwinter: Some(1),
                     overwinter: Some(1),
@@ -100,8 +99,10 @@ pub(crate) async fn load_vectors_and_spawn_and_sync_v1_zaino_db() -> (
                     nu7: None,
                 },
             ),
-        ))
-        .unwrap();
+        );
+
+        let block_with_metadata = BlockWithMetadata::new(&zebra_block, metadata);
+        let chain_block = IndexedBlock::try_from(block_with_metadata).unwrap();
 
         parent_chain_work = *chain_block.index().chainwork();
 
@@ -145,7 +146,7 @@ pub(crate) async fn load_vectors_v1db_and_reader() -> (
 
 // *** ZainoDB Tests ***
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test(flavor = "multi_thread")]
 async fn sync_to_height() {
     init_tracing();
 
@@ -164,7 +165,7 @@ async fn sync_to_height() {
     assert_eq!(built_db_height, Height(200));
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test(flavor = "multi_thread")]
 async fn add_blocks_to_db_and_verify() {
     init_tracing();
 
@@ -175,7 +176,7 @@ async fn add_blocks_to_db_and_verify() {
     dbg!(zaino_db.db_height().await.unwrap());
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test(flavor = "multi_thread")]
 async fn delete_blocks_from_db() {
     init_tracing();
 
@@ -195,7 +196,7 @@ async fn delete_blocks_from_db() {
     dbg!(zaino_db.db_height().await.unwrap());
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test(flavor = "multi_thread")]
 async fn save_db_to_file_and_reload() {
     init_tracing();
 
@@ -213,9 +214,6 @@ async fn save_db_to_file_and_reload() {
         },
         db_version: 1,
         network: Network::Regtest(ActivationHeights::default()),
-
-        no_sync: false,
-        no_db: false,
     };
 
     let source = build_mockchain_source(blocks.clone());
@@ -237,14 +235,13 @@ async fn save_db_to_file_and_reload() {
                 (_sapling_treestate, _orchard_treestate),
             ) in blocks_clone
             {
-                let chain_block = IndexedBlock::try_from((
-                    &zebra_block,
+                let metadata = BlockMetadata::new(
                     sapling_root,
                     sapling_root_size as u32,
                     orchard_root,
                     orchard_root_size as u32,
-                    &parent_chain_work,
-                    &zebra_chain::parameters::Network::new_regtest(
+                    parent_chain_work,
+                    zebra_chain::parameters::Network::new_regtest(
                         zebra_chain::parameters::testnet::ConfiguredActivationHeights {
                             before_overwinter: Some(1),
                             overwinter: Some(1),
@@ -259,8 +256,10 @@ async fn save_db_to_file_and_reload() {
                             nu7: None,
                         },
                     ),
-                ))
-                .unwrap();
+                );
+
+                let block_with_metadata = BlockWithMetadata::new(&zebra_block, metadata);
+                let chain_block = IndexedBlock::try_from(block_with_metadata).unwrap();
 
                 parent_chain_work = *chain_block.index().chainwork();
 
@@ -304,7 +303,7 @@ async fn save_db_to_file_and_reload() {
     .unwrap();
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test(flavor = "multi_thread")]
 async fn load_db_backend_from_file() {
     init_tracing();
 
@@ -324,9 +323,6 @@ async fn load_db_backend_from_file() {
         },
         db_version: 1,
         network: Network::Regtest(ActivationHeights::default()),
-
-        no_sync: false,
-        no_db: false,
     };
     let finalized_state_backend = DbBackend::spawn_v1(&config).await.unwrap();
 
@@ -351,7 +347,7 @@ async fn load_db_backend_from_file() {
     std::fs::remove_file(db_path.join("regtest").join("v1").join("lock.mdb")).unwrap()
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test(flavor = "multi_thread")]
 async fn try_write_invalid_block() {
     init_tracing();
 
@@ -371,16 +367,16 @@ async fn try_write_invalid_block() {
 
     // NOTE: Currently using default here.
     let parent_chain_work = ChainWork::from_u256(0.into());
-    let mut chain_block = IndexedBlock::try_from((
-        &zebra_block,
+    let metadata = BlockMetadata::new(
         sapling_root,
         sapling_root_size as u32,
         orchard_root,
         orchard_root_size as u32,
-        &parent_chain_work,
-        &zaino_common::Network::Regtest(ActivationHeights::default()).to_zebra_network(),
-    ))
-    .unwrap();
+        parent_chain_work,
+        zaino_common::Network::Regtest(ActivationHeights::default()).to_zebra_network(),
+    );
+    let mut chain_block =
+        IndexedBlock::try_from(BlockWithMetadata::new(&zebra_block, metadata)).unwrap();
 
     chain_block.index.height = Some(crate::Height(height + 1));
     dbg!(chain_block.index.height);
@@ -393,7 +389,7 @@ async fn try_write_invalid_block() {
     dbg!(zaino_db.db_height().await.unwrap());
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test(flavor = "multi_thread")]
 async fn try_delete_block_with_invalid_height() {
     init_tracing();
 
@@ -420,7 +416,7 @@ async fn try_delete_block_with_invalid_height() {
     dbg!(zaino_db.db_height().await.unwrap());
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test(flavor = "multi_thread")]
 async fn create_db_reader() {
     let (blocks, _faucet, _recipient, _db_dir, zaino_db, db_reader) =
         load_vectors_v1db_and_reader().await;
@@ -435,7 +431,7 @@ async fn create_db_reader() {
 
 // *** DbReader Tests ***
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test(flavor = "multi_thread")]
 async fn get_chain_blocks() {
     init_tracing();
 
@@ -451,14 +447,13 @@ async fn get_chain_blocks() {
         (_sapling_treestate, _orchard_treestate),
     ) in blocks.iter()
     {
-        let chain_block = IndexedBlock::try_from((
-            zebra_block,
+        let metadata = BlockMetadata::new(
             *sapling_root,
             *sapling_root_size as u32,
             *orchard_root,
             *orchard_root_size as u32,
-            &parent_chain_work,
-            &zebra_chain::parameters::Network::new_regtest(
+            parent_chain_work,
+            zebra_chain::parameters::Network::new_regtest(
                 zebra_chain::parameters::testnet::ConfiguredActivationHeights {
                     before_overwinter: Some(1),
                     overwinter: Some(1),
@@ -473,8 +468,10 @@ async fn get_chain_blocks() {
                     nu7: None,
                 },
             ),
-        ))
-        .unwrap();
+        );
+
+        let block_with_metadata = BlockWithMetadata::new(zebra_block, metadata);
+        let chain_block = IndexedBlock::try_from(block_with_metadata).unwrap();
 
         parent_chain_work = *chain_block.index().chainwork();
 
@@ -484,7 +481,7 @@ async fn get_chain_blocks() {
     }
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test(flavor = "multi_thread")]
 async fn get_compact_blocks() {
     init_tracing();
 
@@ -500,14 +497,13 @@ async fn get_compact_blocks() {
         (_sapling_treestate, _orchard_treestate),
     ) in blocks.iter()
     {
-        let chain_block = IndexedBlock::try_from((
-            zebra_block,
+        let metadata = BlockMetadata::new(
             *sapling_root,
             *sapling_root_size as u32,
             *orchard_root,
             *orchard_root_size as u32,
-            &parent_chain_work,
-            &zebra_chain::parameters::Network::new_regtest(
+            parent_chain_work,
+            zebra_chain::parameters::Network::new_regtest(
                 zebra_chain::parameters::testnet::ConfiguredActivationHeights {
                     before_overwinter: Some(1),
                     overwinter: Some(1),
@@ -522,8 +518,10 @@ async fn get_compact_blocks() {
                     nu7: None,
                 },
             ),
-        ))
-        .unwrap();
+        );
+
+        let block_with_metadata = BlockWithMetadata::new(zebra_block, metadata);
+        let chain_block = IndexedBlock::try_from(block_with_metadata).unwrap();
         let compact_block = chain_block.to_compact_block();
 
         parent_chain_work = *chain_block.index().chainwork();
@@ -534,7 +532,7 @@ async fn get_compact_blocks() {
     }
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test(flavor = "multi_thread")]
 async fn get_faucet_txids() {
     init_tracing();
 
@@ -560,14 +558,13 @@ async fn get_faucet_txids() {
         (_sapling_treestate, _orchard_treestate),
     ) in blocks.iter()
     {
-        let chain_block = IndexedBlock::try_from((
-            zebra_block,
+        let metadata = BlockMetadata::new(
             *sapling_root,
             *sapling_root_size as u32,
             *orchard_root,
             *orchard_root_size as u32,
-            &parent_chain_work,
-            &zebra_chain::parameters::Network::new_regtest(
+            parent_chain_work,
+            zebra_chain::parameters::Network::new_regtest(
                 zebra_chain::parameters::testnet::ConfiguredActivationHeights {
                     before_overwinter: Some(1),
                     overwinter: Some(1),
@@ -582,8 +579,10 @@ async fn get_faucet_txids() {
                     nu7: None,
                 },
             ),
-        ))
-        .unwrap();
+        );
+
+        let block_with_metadata = BlockWithMetadata::new(zebra_block, metadata);
+        let chain_block = IndexedBlock::try_from(block_with_metadata).unwrap();
 
         parent_chain_work = *chain_block.index().chainwork();
 
@@ -632,7 +631,7 @@ async fn get_faucet_txids() {
     assert_eq!(faucet_txids, reader_faucet_txids);
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test(flavor = "multi_thread")]
 async fn get_recipient_txids() {
     init_tracing();
 
@@ -657,14 +656,13 @@ async fn get_recipient_txids() {
         (_sapling_treestate, _orchard_treestate),
     ) in blocks.iter()
     {
-        let chain_block = IndexedBlock::try_from((
-            zebra_block,
+        let metadata = BlockMetadata::new(
             *sapling_root,
             *sapling_root_size as u32,
             *orchard_root,
             *orchard_root_size as u32,
-            &parent_chain_work,
-            &zebra_chain::parameters::Network::new_regtest(
+            parent_chain_work,
+            zebra_chain::parameters::Network::new_regtest(
                 zebra_chain::parameters::testnet::ConfiguredActivationHeights {
                     before_overwinter: Some(1),
                     overwinter: Some(1),
@@ -679,8 +677,10 @@ async fn get_recipient_txids() {
                     nu7: None,
                 },
             ),
-        ))
-        .unwrap();
+        );
+
+        let block_with_metadata = BlockWithMetadata::new(zebra_block, metadata);
+        let chain_block = IndexedBlock::try_from(block_with_metadata).unwrap();
 
         parent_chain_work = *chain_block.index().chainwork();
 
@@ -735,7 +735,7 @@ async fn get_recipient_txids() {
     assert_eq!(recipient_txids, reader_recipient_txids);
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test(flavor = "multi_thread")]
 async fn get_faucet_utxos() {
     init_tracing();
 
@@ -775,7 +775,7 @@ async fn get_faucet_utxos() {
     assert_eq!(cleaned_utxos, reader_faucet_utxos);
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test(flavor = "multi_thread")]
 async fn get_recipient_utxos() {
     init_tracing();
 
@@ -815,7 +815,7 @@ async fn get_recipient_utxos() {
     assert_eq!(cleaned_utxos, reader_recipient_utxos);
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test(flavor = "multi_thread")]
 async fn get_balance() {
     init_tracing();
 
@@ -856,7 +856,7 @@ async fn get_balance() {
     assert_eq!(recipient_balance, reader_recipient_balance);
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test(flavor = "multi_thread")]
 async fn check_faucet_spent_map() {
     init_tracing();
 
@@ -882,14 +882,13 @@ async fn check_faucet_spent_map() {
         (_sapling_treestate, _orchard_treestate),
     ) in blocks.iter()
     {
-        let chain_block = IndexedBlock::try_from((
-            zebra_block,
+        let metadata = BlockMetadata::new(
             *sapling_root,
             *sapling_root_size as u32,
             *orchard_root,
             *orchard_root_size as u32,
-            &parent_chain_work,
-            &zebra_chain::parameters::Network::new_regtest(
+            parent_chain_work,
+            zebra_chain::parameters::Network::new_regtest(
                 zebra_chain::parameters::testnet::ConfiguredActivationHeights {
                     before_overwinter: Some(1),
                     overwinter: Some(1),
@@ -904,8 +903,10 @@ async fn check_faucet_spent_map() {
                     nu7: None,
                 },
             ),
-        ))
-        .unwrap();
+        );
+
+        let block_with_metadata = BlockWithMetadata::new(zebra_block, metadata);
+        let chain_block = IndexedBlock::try_from(block_with_metadata).unwrap();
 
         parent_chain_work = *chain_block.index().chainwork();
 
@@ -959,17 +960,18 @@ async fn check_faucet_spent_map() {
                     )| {
                         // NOTE: Currently using default here.
                         let parent_chain_work = ChainWork::from_u256(0.into());
-                        let chain_block = IndexedBlock::try_from((
-                            zebra_block,
+                        let metadata = BlockMetadata::new(
                             *sapling_root,
                             *sapling_root_size as u32,
                             *orchard_root,
                             *orchard_root_size as u32,
-                            &parent_chain_work,
-                            &zaino_common::Network::Regtest(ActivationHeights::default())
+                            parent_chain_work,
+                            zaino_common::Network::Regtest(ActivationHeights::default())
                                 .to_zebra_network(),
-                        ))
-                        .unwrap();
+                        );
+                        let chain_block =
+                            IndexedBlock::try_from(BlockWithMetadata::new(zebra_block, metadata))
+                                .unwrap();
 
                         chain_block
                             .transactions()
@@ -1013,7 +1015,7 @@ async fn check_faucet_spent_map() {
     }
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test(flavor = "multi_thread")]
 async fn check_recipient_spent_map() {
     init_tracing();
 
@@ -1039,14 +1041,13 @@ async fn check_recipient_spent_map() {
         (_sapling_treestate, _orchard_treestate),
     ) in blocks.iter()
     {
-        let chain_block = IndexedBlock::try_from((
-            zebra_block,
+        let metadata = BlockMetadata::new(
             *sapling_root,
             *sapling_root_size as u32,
             *orchard_root,
             *orchard_root_size as u32,
-            &parent_chain_work,
-            &zebra_chain::parameters::Network::new_regtest(
+            parent_chain_work,
+            zebra_chain::parameters::Network::new_regtest(
                 zebra_chain::parameters::testnet::ConfiguredActivationHeights {
                     before_overwinter: Some(1),
                     overwinter: Some(1),
@@ -1061,8 +1062,10 @@ async fn check_recipient_spent_map() {
                     nu7: None,
                 },
             ),
-        ))
-        .unwrap();
+        );
+
+        let block_with_metadata = BlockWithMetadata::new(zebra_block, metadata);
+        let chain_block = IndexedBlock::try_from(block_with_metadata).unwrap();
 
         parent_chain_work = *chain_block.index().chainwork();
 
@@ -1116,17 +1119,18 @@ async fn check_recipient_spent_map() {
                     )| {
                         // NOTE: Currently using default here.
                         let parent_chain_work = ChainWork::from_u256(0.into());
-                        let chain_block = IndexedBlock::try_from((
-                            zebra_block,
+                        let metadata = BlockMetadata::new(
                             *sapling_root,
                             *sapling_root_size as u32,
                             *orchard_root,
                             *orchard_root_size as u32,
-                            &parent_chain_work,
-                            &zaino_common::Network::Regtest(ActivationHeights::default())
+                            parent_chain_work,
+                            zaino_common::Network::Regtest(ActivationHeights::default())
                                 .to_zebra_network(),
-                        ))
-                        .unwrap();
+                        );
+                        let chain_block =
+                            IndexedBlock::try_from(BlockWithMetadata::new(zebra_block, metadata))
+                                .unwrap();
 
                         chain_block
                             .transactions()
