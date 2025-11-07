@@ -1612,19 +1612,31 @@ async fn fetch_service_get_mempool_tx(validator: &ValidatorKind) {
     let mut sorted_fetch_mempool_tx = fetch_mempool_tx.clone();
     sorted_fetch_mempool_tx.sort_by_key(|tx| tx.hash.clone());
 
-    let mut tx1_bytes = *tx_1.first().as_ref();
-    tx1_bytes.reverse();
-    let mut tx2_bytes = *tx_2.first().as_ref();
-    tx2_bytes.reverse();
+    // Transaction IDs from quick_send are already in internal byte order,
+    // which matches what the mempool returns, so no reversal needed
+    let tx1_bytes = *tx_1.first().as_ref();
+    let tx2_bytes = *tx_2.first().as_ref();
 
     let mut sorted_txids = [tx1_bytes, tx2_bytes];
     sorted_txids.sort_by_key(|hash| *hash);
 
+    // Verify we have exactly 2 transactions in the mempool
+    assert_eq!(
+        sorted_fetch_mempool_tx.len(),
+        2,
+        "Expected exactly 2 transactions in mempool, but found {}",
+        sorted_fetch_mempool_tx.len()
+    );
+
     assert_eq!(sorted_fetch_mempool_tx[0].hash, sorted_txids[0]);
     assert_eq!(sorted_fetch_mempool_tx[1].hash, sorted_txids[1]);
 
+    // For the exclude list, we need to provide the transaction ID in RPC format (reversed),
+    // because the backend will reverse it again and the mempool stores keys in RPC format
+    let mut exclude_txid_bytes = sorted_txids[0];
+    exclude_txid_bytes.reverse();
     let exclude_list = Exclude {
-        txid: vec![sorted_txids[0][..8].to_vec()],
+        txid: vec![exclude_txid_bytes[..8].to_vec()],
     };
 
     let exclude_fetch_service_stream = fetch_service_subscriber
