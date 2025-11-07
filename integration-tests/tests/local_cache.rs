@@ -150,12 +150,12 @@ mod zcashd {
         launch_local_cache(&ValidatorKind::Zcashd).await;
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn process_100_blocks() {
         launch_local_cache_process_n_block_batches(&ValidatorKind::Zcashd, 1).await;
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn process_200_blocks() {
         launch_local_cache_process_n_block_batches(&ValidatorKind::Zcashd, 2).await;
     }
@@ -171,12 +171,12 @@ mod zebrad {
         launch_local_cache(&ValidatorKind::Zebrad).await;
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn process_100_blocks() {
         launch_local_cache_process_n_block_batches(&ValidatorKind::Zebrad, 1).await;
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn process_200_blocks() {
         launch_local_cache_process_n_block_batches(&ValidatorKind::Zebrad, 2).await;
     }
