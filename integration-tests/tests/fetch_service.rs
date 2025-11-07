@@ -2289,7 +2289,7 @@ mod zcashd {
             fetch_service_get_lightd_info(&ValidatorKind::Zcashd).await;
         }
 
-        #[tokio::test]
+        #[tokio::test(flavor = "multi_thread")]
         pub(crate) async fn get_network_sol_ps() {
             assert_fetch_service_getnetworksols_matches_rpc(&ValidatorKind::Zcashd).await;
         }
@@ -2509,7 +2509,7 @@ mod zebrad {
             fetch_service_get_lightd_info(&ValidatorKind::Zebrad).await;
         }
 
-        #[tokio::test]
+        #[tokio::test(flavor = "multi_thread")]
         pub(crate) async fn get_network_sol_ps() {
             assert_fetch_service_getnetworksols_matches_rpc(&ValidatorKind::Zebrad).await;
         }
