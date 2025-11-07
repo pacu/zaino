@@ -45,7 +45,6 @@ use zaino_proto::proto::{
     },
 };
 
-use crate::{utils::compact_block_to_nullifiers, ChainIndex, NodeBackedChainIndex, NodeBackedChainIndexSubscriber};
 #[allow(deprecated)]
 use crate::{
     chain_index::{source::ValidatorConnector, types},
@@ -61,6 +60,10 @@ use crate::{
     },
     utils::{blockid_to_hashorheight, get_build_info, ServiceMetadata},
     BackendType,
+};
+use crate::{
+    utils::compact_block_to_nullifiers, ChainIndex, NodeBackedChainIndex,
+    NodeBackedChainIndexSubscriber,
 };
 
 /// Chain fetch service backed by Zcashd's JsonRPC engine.
@@ -478,9 +481,9 @@ impl ZcashIndexer for FetchServiceSubscriber {
         Ok(self
             .indexer
             .get_mempool_txids()
-            .await
-            .into_iter()
-            .map(|mempool_txids| mempool_txids.iter().map(|txid| txid.to_string()).collect())
+            .await?
+            .iter()
+            .map(|txid| txid.to_string())
             .collect())
     }
 
