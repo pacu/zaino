@@ -1768,7 +1768,7 @@ mod zebra {
             state_service_get_address_deltas_testnet().await;
         }
 
-        #[tokio::test]
+        #[tokio::test(flavor = "multi_thread")]
         async fn address_deltas() {
             address_deltas::main().await;
         }
