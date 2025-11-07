@@ -1558,7 +1558,7 @@ mod zebra {
             test_manager.close().await;
         }
 
-        #[tokio::test]
+        #[tokio::test(flavor = "multi_thread")]
         async fn block_subsidy_fails_before_first_halving() {
             let (
                 test_manager,
