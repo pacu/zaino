@@ -1,6 +1,7 @@
 //! These tests compare the output of `FetchService` with the output of `JsonRpcConnector`.
 
 use futures::StreamExt as _;
+use hex::ToHex as _;
 use zaino_fetch::jsonrpsee::connector::{test_node_and_return_url, JsonRpSeeConnector};
 use zaino_proto::proto::service::{
     AddressList, BlockId, BlockRange, Exclude, GetAddressUtxosArg, GetSubtreeRootsArg,
@@ -359,7 +360,7 @@ pub async fn test_get_mempool_info(validator: &ValidatorKind) {
     let expected_bytes: u64 = values.iter().map(|entry| entry.len() as u64).sum();
 
     // Key heap bytes: sum of txid String capacities
-    let expected_key_heap_bytes: u64 = keys.iter().map(|key| key.0.len() as u64).sum();
+    let expected_key_heap_bytes: u64 = keys.iter().map(|key| key.encode_hex::<String>().capacity() as u64).sum();
 
     let expected_usage = expected_bytes.saturating_add(expected_key_heap_bytes);
 

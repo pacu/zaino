@@ -2957,6 +2957,7 @@ dependencies = [
  "anyhow",
  "core2 0.4.0",
  "futures",
+ "hex",
  "prost",
  "serde_json",
  "tempfile",
