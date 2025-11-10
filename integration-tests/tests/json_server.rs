@@ -834,7 +834,13 @@ mod zcashd {
 
                 assert_eq!(zcashd_mining_info, zaino_mining_info);
 
-                test_manager.local_net.generate_blocks(1).await.unwrap();
+                generate_blocks_and_poll_all_chain_indexes(
+                    1,
+                    &test_manager,
+                    zaino_subscriber.clone(),
+                    zcashd_subscriber.clone(),
+                )
+                .await;
             }
 
             test_manager.close().await;
@@ -915,8 +921,13 @@ mod zcashd {
             const BLOCK_LIMIT: u32 = 10;
 
             for i in 0..BLOCK_LIMIT {
-                test_manager.local_net.generate_blocks(1).await.unwrap();
-                tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+                generate_blocks_and_poll_all_chain_indexes(
+                    1,
+                    &test_manager,
+                    zaino_subscriber.clone(),
+                    zcashd_subscriber.clone(),
+                )
+                .await;
 
                 let block = zcashd_subscriber
                     .z_get_block(i.to_string(), Some(1))

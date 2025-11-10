@@ -1510,8 +1510,13 @@ mod zebra {
             )
             .await;
 
-            test_manager.local_net.generate_blocks(2).await.unwrap();
-            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            generate_blocks_and_poll_all_chain_indexes(
+                2,
+                &test_manager,
+                fetch_service_subscriber.clone(),
+                state_service_subscriber.clone(),
+            )
+            .await;
 
             let initial_fetch_service_get_network_sol_ps = fetch_service_subscriber
                 .get_network_sol_ps(None, None)
@@ -1548,8 +1553,13 @@ mod zebra {
             )
             .await;
 
-            test_manager.local_net.generate_blocks(2).await.unwrap();
-            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            generate_blocks_and_poll_all_chain_indexes(
+                2,
+                &test_manager,
+                fetch_service_subscriber.clone(),
+                state_service_subscriber.clone(),
+            )
+            .await;
 
             let fetch_service_peer_info = fetch_service_subscriber.get_peer_info().await.unwrap();
             let state_service_peer_info = state_service_subscriber.get_peer_info().await.unwrap();
@@ -1887,8 +1897,13 @@ mod zebra {
             const BLOCK_LIMIT: u32 = 10;
 
             for i in 0..BLOCK_LIMIT {
-                test_manager.local_net.generate_blocks(1).await.unwrap();
-                tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+                generate_blocks_and_poll_all_chain_indexes(
+                    1,
+                    &test_manager,
+                    fetch_service_subscriber.clone(),
+                    state_service_subscriber.clone(),
+                )
+                .await;
 
                 let block = fetch_service_subscriber
                     .z_get_block(i.to_string(), Some(1))
