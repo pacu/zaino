@@ -1504,7 +1504,7 @@ mod zebra {
             ) = create_test_manager_and_services(
                 &ValidatorKind::Zebrad,
                 None,
-                false,
+                true,
                 false,
                 Some(NetworkKind::Regtest),
             )
@@ -1547,7 +1547,7 @@ mod zebra {
             ) = create_test_manager_and_services(
                 &ValidatorKind::Zebrad,
                 None,
-                false,
+                true,
                 false,
                 Some(NetworkKind::Regtest),
             )
@@ -1888,7 +1888,7 @@ mod zebra {
             ) = create_test_manager_and_services(
                 &ValidatorKind::Zebrad,
                 None,
-                false,
+                true,
                 false,
                 Some(NetworkKind::Regtest),
             )
