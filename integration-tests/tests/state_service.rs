@@ -3,7 +3,7 @@ use zaino_common::network::ActivationHeights;
 use zaino_common::{DatabaseConfig, ServiceConfig, StorageConfig};
 use zaino_fetch::jsonrpsee::response::address_deltas::GetAddressDeltasParams;
 use zaino_proto::proto::service::{BlockId, BlockRange, PoolType, TransparentAddressBlockFilter};
-use zaino_state::{LightWalletService, ZcashService, BackendType};
+use zaino_state::{LightWalletService, ZcashService};
 
 #[allow(deprecated)]
 use zaino_state::{
@@ -1031,7 +1031,7 @@ async fn state_service_get_address_transactions_regtest<V: ValidatorExt>(validat
 
     test_manager.close().await;
 }
-async fn state_service_get_address_tx_ids(validator: &ValidatorKind) {
+async fn state_service_get_address_tx_ids<V: ValidatorExt>(validator: &ValidatorKind) {
     let (
         mut test_manager,
         _fetch_service,
@@ -1435,7 +1435,7 @@ mod zebra {
 
         #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
         async fn taddress_transactions_regtest() {
-            state_service_get_address_transactions_regtest(&ValidatorKind::Zebrad).await;
+            state_service_get_address_transactions_regtest::<Zebrad>(&ValidatorKind::Zebrad).await;
         }
 
         #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
