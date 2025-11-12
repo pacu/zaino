@@ -1183,7 +1183,7 @@ impl FullTransaction {
             .raw_transaction
             .transparent_inputs
             .iter()
-            .map(|t_in| {
+            .filter_map(|t_in| {
                 if t_in.is_null() {
                     None
                 } else {
@@ -1193,7 +1193,6 @@ impl FullTransaction {
                     })
                 }
             })
-            .filter_map(|t_in| t_in)
             .collect();
 
         Ok(CompactTx {

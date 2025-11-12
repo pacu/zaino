@@ -23,7 +23,6 @@ use crate::{
     utils::{blockid_to_hashorheight, get_build_info, ServiceMetadata},
     BackendType, MempoolKey,
 };
-
 use nonempty::NonEmpty;
 use tokio_stream::StreamExt as _;
 use zaino_fetch::{
@@ -598,34 +597,21 @@ impl StateServiceSubscriber {
         let service_timeout = self.config.service.timeout;
         let (channel_tx, channel_rx) = mpsc::channel(self.config.service.channel_size as usize);
 
-        // TODO: make helper function for this
-        let pool_types = if request.pool_types.is_empty() {
-            vec![PoolType::Sapling, PoolType::Orchard]
-        } else {
-            let mut pool_types: Vec<PoolType> = vec![];
-
-            for pool in request.pool_types.iter() {
-                match PoolType::try_from(*pool) {
-                    Ok(pool_type) => {
-                        if pool_type == PoolType::Invalid {
-                            return Err(StateServiceError::Custom(format!(
-                                "Invalid PoolType {}. See proto::PoolType for valid pool types",
-                                pool_type.as_str_name()
-                            )));
-                        } else {
-                            pool_types.push(pool_type);
-                        }
+        let pool_types = match pool_types_from_vector(&request.pool_types) {
+            Ok(p) => Ok(p),
+            Err(e) => {
+                Err(
+                    match e {
+                        PoolTypeError::InvalidPoolType => StateServiceError::UnhandledRpcError(
+                            "PoolType::Invalid specified as argument in `BlockRange`.".to_string()
+                        ),
+                        PoolTypeError::UnknownPoolType(t) => StateServiceError::UnhandledRpcError(
+                            format!("Unknown value specified in `BlockRange`. Value '{}' is not a known PoolType.", t)
+                        )
                     }
-                    Err(_) => {
-                        return Err(StateServiceError::Custom(format!(
-                            "Invalid PoolType. See proto::PoolType for valid pool types"
-                        )))
-                    }
-                };
+                )
             }
-
-            pool_types.clone()
-        };
+        }?;
 
         tokio::spawn(async move {
             let timeout = timeout(
@@ -1051,6 +1037,42 @@ impl StateServiceSubscriber {
         times.sort_unstable();
         Ok(times[times.len() / 2])
     }
+}
+
+/// Errors that can arise when mapping `PoolType` from an `i32` value.
+enum PoolTypeError {
+    /// Pool Type value was map to the enum `PoolType::Invalid`.
+    InvalidPoolType,
+    /// Pool Type value was mapped to value that can't be mapped to a known pool type.
+    UnknownPoolType(i32),
+}
+
+// Converts a vector of pool_types (i32) into its rich-type representation
+// Returns `None` when invalid `pool_types` are found
+fn pool_types_from_vector(pool_types: &[i32]) -> Result<Vec<PoolType>, PoolTypeError> {
+    let pools = if pool_types.is_empty() {
+        vec![PoolType::Sapling, PoolType::Orchard]
+    } else {
+        let mut pools: Vec<PoolType> = vec![];
+
+        for pool in pool_types.iter() {
+            match PoolType::try_from(*pool) {
+                Ok(pool_type) => {
+                    if pool_type == PoolType::Invalid {
+                        return Err(PoolTypeError::InvalidPoolType);
+                    } else {
+                        pools.push(pool_type);
+                    }
+                }
+                Err(_) => {
+                    return Err(PoolTypeError::UnknownPoolType(*pool));
+                }
+            };
+        }
+
+        pools.clone()
+    };
+    Ok(pools)
 }
 
 #[async_trait]
