@@ -1485,7 +1485,7 @@ impl CompactTxData {
             .transparent
             .vin
             .iter()
-            .map(|t_in| {
+            .filter_map(|t_in| {
                 if t_in.is_null_prevout() {
                     None
                 } else {
@@ -1495,7 +1495,6 @@ impl CompactTxData {
                     })
                 }
             })
-            .filter_map(|t_in| t_in)
             .collect();
 
         zaino_proto::proto::compact_formats::CompactTx {

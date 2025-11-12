@@ -33,7 +33,7 @@ use crate::{
                 TransparentHistExt,
             },
             entry::{StoredEntryFixed, StoredEntryVar},
-        }, source::BlockchainSourceError, types::{AddrEventBytes, TransactionHash, GENESIS_HEIGHT}
+        }, types::{AddrEventBytes, TransactionHash, GENESIS_HEIGHT}
     },
     config::BlockCacheConfig,
     error::FinalisedStateError,
