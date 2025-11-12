@@ -1434,8 +1434,8 @@ async fn fetch_service_get_mempool_tx<V: ValidatorExt>(validator: &ValidatorKind
     let mut sorted_txids = [tx1_bytes, tx2_bytes];
     sorted_txids.sort_by_key(|hash| *hash);
 
-    assert_eq!(sorted_fetch_mempool_tx[0].hash, sorted_txids[0]);
-    assert_eq!(sorted_fetch_mempool_tx[1].hash, sorted_txids[1]);
+    assert_eq!(sorted_fetch_mempool_tx[0].txid, sorted_txids[0]);
+    assert_eq!(sorted_fetch_mempool_tx[1].txid, sorted_txids[1]);
     assert_eq!(sorted_fetch_mempool_tx.len(), 2);
 
     let exclude_list = Exclude {
@@ -1456,7 +1456,7 @@ async fn fetch_service_get_mempool_tx<V: ValidatorExt>(validator: &ValidatorKind
     let mut sorted_exclude_fetch_mempool_tx = exclude_fetch_mempool_tx.clone();
     sorted_exclude_fetch_mempool_tx.sort_by_key(|tx| tx.txid.clone());
 
-    assert_eq!(sorted_exclude_fetch_mempool_tx[0].hash, sorted_txids[1]);
+    assert_eq!(sorted_exclude_fetch_mempool_tx[0].txid, sorted_txids[1]);
     assert_eq!(sorted_exclude_fetch_mempool_tx.len(), 1);
 
     test_manager.close().await;

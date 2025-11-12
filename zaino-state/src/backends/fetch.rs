@@ -1046,16 +1046,7 @@ impl LightWalletIndexer for FetchServiceSubscriber {
         &self,
         request: TransparentAddressBlockFilter,
     ) -> Result<RawTransactionStream, Self::Error> {
-        todo!("Implement this method")
-    }
-
-    /// Return the txids corresponding to the given t-address within the given block range
-    #[allow(deprecated)]
-    async fn get_taddress_txids(
-        &self,
-        request: TransparentAddressBlockFilter,
-    ) -> Result<RawTransactionStream, Self::Error> {
-        let chain_height = self.chain_height().await?;
+         let chain_height = self.chain_height().await?;
         let txids = self.get_taddress_txids_helper(request).await?;
         let fetch_service_clone = self.clone();
         let service_timeout = self.config.service.timeout;
@@ -1098,6 +1089,7 @@ impl LightWalletIndexer for FetchServiceSubscriber {
 
     /// Return the txids corresponding to the given t-address within the given block range
     /// this function is deprecated: use `get_taddress_transactions`
+    #[allow(deprecated)]
     async fn get_taddress_txids(
         &self,
         request: TransparentAddressBlockFilter,
