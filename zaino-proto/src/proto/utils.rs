@@ -64,10 +64,52 @@ pub struct ValidatedBlockRangeRequest {
 
 impl ValidatedBlockRangeRequest {
     /// validates a BlockRange in terms of the `GetBlockRange` RPC
-    pub fn validate_get_block_range_request(
+    pub fn new_from_block_range(
         request: &BlockRange,
     ) -> Result<ValidatedBlockRangeRequest, GetBlockRangeError> {
-        Err(GetBlockRangeError::StartHeightOutOfRange)
+        let start: u32 = match &request.start {
+            Some(block_id) => match block_id.height.try_into() {
+                Ok(height) => height,
+                Err(_) => {
+                    return Err(GetBlockRangeError::StartHeightOutOfRange);
+                }
+            },
+            None => {
+                return Err(GetBlockRangeError::NoStartHeightProvided);
+            }
+        };
+        let end: u32 = match &request.end {
+            Some(block_id) => match block_id.height.try_into() {
+                Ok(height) => height,
+                Err(_) => {
+                    return Err(GetBlockRangeError::EndHeightOutOfRange);
+                }
+            },
+            None => {
+                return Err(GetBlockRangeError::NoEndHeightProvided);
+            }
+        };
+
+        let pool_types = pool_types_from_vector(&request.pool_types)
+            .map_err(|e| GetBlockRangeError::PoolTypArgumentError(e))?;
+
+        Ok(ValidatedBlockRangeRequest {
+            start: start,
+            end: end,
+            pool_types: pool_types,
+        })
+    }
+
+    pub fn start(&self) -> u32 {
+        self.start
+    }
+
+    pub fn end(&self) -> u32 {
+        self.end
+    }
+
+    pub fn pool_types(&self) -> Vec<PoolType> {
+        self.pool_types.clone()
     }
 
     /// checks whether this request is specified in reversed order
@@ -77,5 +119,10 @@ impl ValidatedBlockRangeRequest {
         } else {
             false
         }
+    }
+
+    /// Reverses the order of this request
+    pub fn reverse(&mut self) {
+        (self.start, self.end) = (self.end, self.start);
     }
 }
