@@ -8,6 +8,7 @@ use crate::BlockHash;
 use std::{any::type_name, fmt::Display};
 
 use zaino_fetch::jsonrpsee::connector::RpcRequestError;
+use zaino_proto::proto::utils::GetBlockRangeError;
 
 impl<T: ToString> From<RpcRequestError<T>> for StateServiceError {
     fn from(value: RpcRequestError<T>) -> Self {
@@ -197,6 +198,34 @@ pub enum FetchServiceError {
     /// Serialization error.
     #[error("Serialization error: {0}")]
     SerializationError(#[from] zebra_chain::serialization::SerializationError),
+}
+
+impl FetchServiceError {
+    pub(crate) fn from_get_block_change_error(error: GetBlockRangeError) -> Self {
+        match error {
+            GetBlockRangeError::StartHeightOutOfRange => {
+                FetchServiceError::TonicStatusError(tonic::Status::invalid_argument(
+                    "Error: Start height out of range. Failed to convert to u32.",
+                ))
+            }
+            GetBlockRangeError::NoStartHeightProvided => {
+                FetchServiceError::TonicStatusError(tonic::Status::invalid_argument(
+                    "Error: Start height out of range. Failed to convert to u32.",
+                ))
+            }
+            GetBlockRangeError::EndHeightOutOfRange => {
+                FetchServiceError::TonicStatusError(tonic::Status::invalid_argument(
+                    "Error: End height out of range. Failed to convert to u32.",
+                ))
+            }
+            GetBlockRangeError::NoEndHeightProvided => FetchServiceError::TonicStatusError(
+                tonic::Status::invalid_argument("Error: No start height given."),
+            ),
+            GetBlockRangeError::PoolTypArgumentError(e) => FetchServiceError::TonicStatusError(
+                tonic::Status::invalid_argument("Error: No start height given."),
+            ),
+        }
+    }
 }
 
 #[allow(deprecated)]
