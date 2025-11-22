@@ -43,7 +43,7 @@ use zaino_proto::proto::{
         AddressList, Balance, BlockId, BlockRange, Duration, Exclude, GetAddressUtxosArg,
         GetAddressUtxosReply, GetAddressUtxosReplyList, LightdInfo, PingResponse, RawTransaction,
         SendResponse, TransparentAddressBlockFilter, TreeState, TxFilter,
-    },
+    }, utils::{GetBlockRangeError, ValidatedBlockRangeRequest},
 };
 
 use crate::TransactionHash;
@@ -808,46 +808,46 @@ impl LightWalletIndexer for FetchServiceSubscriber {
         &self,
         request: BlockRange,
     ) -> Result<CompactBlockStream, Self::Error> {
-        let mut start: u32 = match request.start {
-            Some(block_id) => match block_id.height.try_into() {
-                Ok(height) => height,
-                Err(_) => {
-                    return Err(FetchServiceError::TonicStatusError(
+        let mut validated_request = ValidatedBlockRangeRequest::new_from_block_range(&request)
+            .map_err(|e| {
+                match e {
+                    GetBlockRangeError::StartHeightOutOfRange =>  FetchServiceError::TonicStatusError(
                         tonic::Status::invalid_argument(
                             "Error: Start height out of range. Failed to convert to u32.",
                         ),
-                    ));
-                }
-            },
-            None => {
-                return Err(FetchServiceError::TonicStatusError(
-                    tonic::Status::invalid_argument("Error: No start height given."),
-                ));
-            }
-        };
-        let mut end: u32 = match request.end {
-            Some(block_id) => match block_id.height.try_into() {
-                Ok(height) => height,
-                Err(_) => {
-                    return Err(FetchServiceError::TonicStatusError(
+                    ),
+                    GetBlockRangeError::NoStartHeightProvided =>  FetchServiceError::TonicStatusError(
+                        tonic::Status::invalid_argument(
+                            "Error: Start height out of range. Failed to convert to u32.",
+                        ),
+                    ),
+                    GetBlockRangeError::EndHeightOutOfRange =>  FetchServiceError::TonicStatusError(
                         tonic::Status::invalid_argument(
                             "Error: End height out of range. Failed to convert to u32.",
                         ),
-                    ));
-                }
-            },
-            None => {
-                return Err(FetchServiceError::TonicStatusError(
+                    ),
+                    GetBlockRangeError::NoEndHeightProvided =>  FetchServiceError::TonicStatusError(
                     tonic::Status::invalid_argument("Error: No start height given."),
-                ));
+                    ),
+                    GetBlockRangeError::PoolTypArgumentError(e) => FetchServiceError::TonicStatusError(
+                    tonic::Status::invalid_argument("Error: No start height given."),
+                    ),
+                    
             }
-        };
-        let rev_order = if start > end {
-            (start, end) = (end, start);
+            })?;
+
+
+        // FIXME: this should be changed but this logic is hard to understand and we lack tests.
+        // we will maintain the behaviour with less smelly code
+        let rev_order = if validated_request.is_reverse_ordered() {
+            validated_request.reverse();
             true
         } else {
             false
         };
+        let start = validated_request.start();
+        let end = validated_request.end();
+
         let chain_height = self.block_cache.get_chain_height().await?.0;
         let fetch_service_clone = self.clone();
         let service_timeout = self.config.service.timeout;
