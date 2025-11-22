@@ -1,4 +1,4 @@
-use crate::proto::service::PoolType;
+use crate::proto::service::{BlockRange, PoolType};
 
 /// Errors that can arise when mapping `PoolType` from an `i32` value.
 pub enum PoolTypeError {
@@ -54,4 +54,28 @@ pub enum GetBlockRangeError {
     EndHeightOutOfRange,
     /// An invalid pool type request was provided.
     PoolTypArgumentError(PoolTypeError),
+}
+
+pub struct ValidatedBlockRangeRequest {
+    start: u32,
+    end: u32,
+    pool_types: Vec<PoolType>,
+}
+
+impl ValidatedBlockRangeRequest {
+    /// validates a BlockRange in terms of the `GetBlockRange` RPC
+    pub fn validate_get_block_range_request(
+        request: &BlockRange,
+    ) -> Result<ValidatedBlockRangeRequest, GetBlockRangeError> {
+        Err(GetBlockRangeError::StartHeightOutOfRange)
+    }
+
+    /// checks whether this request is specified in reversed order
+    pub fn is_reverse_ordered(&self) -> bool {
+        if self.start > self.end {
+            true
+        } else {
+            false
+        }
+    }
 }
