@@ -40,3 +40,18 @@ pub fn pool_types_from_vector(pool_types: &[i32]) -> Result<Vec<PoolType>, PoolT
 pub fn pool_types_into_i32_vec(pool_types: Vec<PoolType>) -> Vec<i32> {
     pool_types.iter().map(|p| *p as i32).collect()
 }
+
+/// Errors that can be present in the request of the GetBlockRange RPC
+pub enum GetBlockRangeError {
+    /// Error: No start height given.    
+    NoStartHeightProvided,
+    /// Error: No end height given.    
+    NoEndHeightProvided,
+    /// Start height out of range. Failed to convert to u32.
+    StartHeightOutOfRange,
+
+    /// End height out of range. Failed to convert to u32.
+    EndHeightOutOfRange,
+    /// An invalid pool type request was provided.
+    PoolTypArgumentError(PoolTypeError),
+}
