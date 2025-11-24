@@ -44,12 +44,10 @@ use zaino_proto::proto::{
     compact_formats::CompactBlock,
     service::{
         AddressList, Balance, BlockId, BlockRange, Exclude, GetAddressUtxosArg,
-        GetAddressUtxosReply, GetAddressUtxosReplyList, LightdInfo, PingResponse, PoolType,
-        RawTransaction, SendResponse, TransparentAddressBlockFilter, TreeState, TxFilter,
+        GetAddressUtxosReply, GetAddressUtxosReplyList, LightdInfo, PingResponse, RawTransaction,
+        SendResponse, TransparentAddressBlockFilter, TreeState, TxFilter,
     },
-    utils::{
-        pool_types_from_vector, PoolTypeError
-    }
+    utils::{pool_types_from_vector, PoolTypeError, ValidatedBlockRangeRequest},
 };
 
 use zcash_protocol::consensus::NetworkType;
@@ -555,46 +553,20 @@ impl StateServiceSubscriber {
         request: BlockRange,
         trim_non_nullifier: bool,
     ) -> Result<CompactBlockStream, StateServiceError> {
-        let mut start: u32 = match request.start {
-            Some(block_id) => match block_id.height.try_into() {
-                Ok(height) => height,
-                Err(_) => {
-                    return Err(StateServiceError::TonicStatusError(
-                        tonic::Status::invalid_argument(
-                            "Error: Start height out of range. Failed to convert to u32.",
-                        ),
-                    ));
-                }
-            },
-            None => {
-                return Err(StateServiceError::TonicStatusError(
-                    tonic::Status::invalid_argument("Error: No start height given."),
-                ));
-            }
-        };
-        let mut end: u32 = match request.end {
-            Some(block_id) => match block_id.height.try_into() {
-                Ok(height) => height,
-                Err(_) => {
-                    return Err(StateServiceError::TonicStatusError(
-                        tonic::Status::invalid_argument(
-                            "Error: End height out of range. Failed to convert to u32.",
-                        ),
-                    ));
-                }
-            },
-            None => {
-                return Err(StateServiceError::TonicStatusError(
-                    tonic::Status::invalid_argument("Error: No start height given."),
-                ));
-            }
-        };
-        let lowest_to_highest = if start > end {
-            (start, end) = (end, start);
+        let mut validated_request = ValidatedBlockRangeRequest::new_from_block_range(&request)
+            .map_err(|_| StateServiceError::Custom("fixme".to_string()))?;
+
+        // FIXME: this should be changed but this logic is hard to understand and we lack tests.
+        // we will maintain the behaviour with less smelly code
+        let lowest_to_highest = if validated_request.is_reverse_ordered() {
+            validated_request.reverse();
             false
         } else {
             true
         };
+
+        let start = validated_request.start();
+        let end = validated_request.end();
         let chain_height = self.block_cache.get_chain_height().await?.0;
         let fetch_service_clone = self.clone();
         let service_timeout = self.config.service.timeout;

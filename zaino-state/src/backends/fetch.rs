@@ -43,7 +43,8 @@ use zaino_proto::proto::{
         AddressList, Balance, BlockId, BlockRange, Duration, Exclude, GetAddressUtxosArg,
         GetAddressUtxosReply, GetAddressUtxosReplyList, LightdInfo, PingResponse, RawTransaction,
         SendResponse, TransparentAddressBlockFilter, TreeState, TxFilter,
-    }, utils::{GetBlockRangeError, ValidatedBlockRangeRequest},
+    },
+    utils::{GetBlockRangeError, ValidatedBlockRangeRequest},
 };
 
 use crate::TransactionHash;
@@ -894,7 +895,7 @@ impl LightWalletIndexer for FetchServiceSubscriber {
     async fn get_block_range_nullifiers(
         &self,
         request: BlockRange,
-    ) -> Result<CompactBlockStream, Self::Error> {        
+    ) -> Result<CompactBlockStream, Self::Error> {
         let mut validated_request = ValidatedBlockRangeRequest::new_from_block_range(&request)
             .map_err(FetchServiceError::from_get_block_change_error)?;
 
@@ -906,7 +907,7 @@ impl LightWalletIndexer for FetchServiceSubscriber {
         } else {
             false
         };
-        
+
         let start = validated_request.start();
         let end = validated_request.end();
         let chain_height = self.block_cache.get_chain_height().await?.0;
