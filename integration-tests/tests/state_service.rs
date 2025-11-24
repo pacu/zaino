@@ -2218,7 +2218,7 @@ mod zebra {
                     .map(Result::unwrap)
                     .collect::<Vec<_>>()
                     .await;
-                let state_service_get_block_range = state_service_subscriber
+                let state_serviget_block_range = state_service_subscriber
                     .get_block_range_nullifiers(request)
                     .await
                     .unwrap()
