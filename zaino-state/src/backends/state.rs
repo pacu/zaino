@@ -1,5 +1,6 @@
 //! Zcash chain fetch and tx submission service backed by Zebras [`ReadStateService`].
 
+use crate::{NodeBackedChainIndex, NodeBackedChainIndexSubscriber, State};
 #[allow(deprecated)]
 use crate::{
     chain_index::{
@@ -111,6 +112,7 @@ macro_rules! expected_read_response {
 #[derive(Debug)]
 #[deprecated = "Will be eventually replaced by `BlockchainSource"]
 pub struct StateService {
+    #[deprecated =  "FIXME remove in cleanup"]
     /// `ReadeStateService` from Zebra-State.
     read_state_service: ReadStateService,
 
@@ -120,11 +122,16 @@ pub struct StateService {
     /// JsonRPC Client.
     rpc_client: JsonRpSeeConnector,
 
+    #[deprecated =  "FIXME remove in cleanup"]
     /// Local compact block cache.
     block_cache: BlockCache,
 
+    #[deprecated =  "FIXME remove in cleanup"]
     /// Internal mempool.
     mempool: Mempool<ValidatorConnector>,
+
+    /// Core indexer.
+    indexer: NodeBackedChainIndex,
 
     /// Service metadata.
     data: ServiceMetadata,
@@ -182,7 +189,7 @@ impl ZcashService for StateService {
     async fn spawn(config: StateServiceConfig) -> Result<Self, StateServiceError> {
         info!("Spawning State Service..");
 
-        let rpc_client = JsonRpSeeConnector::new_from_config_parts(
+        let json_rpc_connector = JsonRpSeeConnector::new_from_config_parts(
             config.validator_rpc_address,
             config.validator_rpc_user.clone(),
             config.validator_rpc_password.clone(),
@@ -190,7 +197,7 @@ impl ZcashService for StateService {
         )
         .await?;
 
-        let zebra_build_data = rpc_client.get_info().await?;
+        let zebra_build_data = json_rpc_connector.get_info().await?;
 
         // This const is optional, as the build script can only
         // generate it from hash-based dependencies.
@@ -240,7 +247,7 @@ impl ZcashService for StateService {
 
         // Wait for ReadStateService to catch up to primary database:
         loop {
-            let server_height = rpc_client.get_blockchain_info().await?.blocks;
+            let server_height = json_rpc_connector.get_blockchain_info().await?.blocks;
             info!("got blockchain info!");
 
             let syncer_response = read_state_service
@@ -265,7 +272,7 @@ impl ZcashService for StateService {
         }
 
         let block_cache = BlockCache::spawn(
-            &rpc_client,
+            &json_rpc_connector,
             Some(&read_state_service),
             config.clone().into(),
         )
@@ -273,19 +280,31 @@ impl ZcashService for StateService {
 
         let mempool_source = ValidatorConnector::State(crate::chain_index::source::State {
             read_state_service: read_state_service.clone(),
-            mempool_fetcher: rpc_client.clone(),
+            mempool_fetcher: json_rpc_connector.clone(),
             network: config.network,
         });
 
         let mempool = Mempool::spawn(mempool_source, None).await?;
 
+        let chain_index = NodeBackedChainIndex::new(
+            ValidatorConnector::State(State {
+                read_state_service: read_state_service.clone(),
+                mempool_fetcher: json_rpc_connector.clone(),
+                network: config.network,
+            }),
+            config.clone().into(),
+        )
+        .await
+        .unwrap();
+
         let state_service = Self {
             chain_tip_change,
             read_state_service,
             sync_task_handle: Some(Arc::new(sync_task_handle)),
-            rpc_client: rpc_client.clone(),
+            rpc_client: json_rpc_connector.clone(),
             block_cache,
             mempool,
+            indexer: chain_index,
             data,
             config,
             status: AtomicStatus::new(StatusType::Spawning),
@@ -302,6 +321,7 @@ impl ZcashService for StateService {
             rpc_client: self.rpc_client.clone(),
             block_cache: self.block_cache.subscriber(),
             mempool: self.mempool.subscriber(),
+            indexer: self.indexer.subscriber(),
             data: self.data.clone(),
             config: self.config.clone(),
             chain_tip_change: self.chain_tip_change.clone(),
@@ -344,17 +364,23 @@ impl Drop for StateService {
 #[derive(Debug, Clone)]
 #[deprecated]
 pub struct StateServiceSubscriber {
+    #[deprecated =  "FIXME remove in cleanup"]
     /// Remote wrappper functionality for zebra's [`ReadStateService`].
     pub read_state_service: ReadStateService,
 
     /// JsonRPC Client.
     pub rpc_client: JsonRpSeeConnector,
 
+    #[deprecated =  "FIXME remove in cleanup"]
     /// Local compact block cache.
     pub block_cache: BlockCacheSubscriber,
 
+    #[deprecated =  "FIXME remove in cleanup"]
     /// Internal mempool.
     pub mempool: MempoolSubscriber,
+
+    /// Core indexer.
+    pub indexer: NodeBackedChainIndexSubscriber,
 
     /// Service metadata.
     pub data: ServiceMetadata,
