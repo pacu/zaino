@@ -45,7 +45,7 @@ use zaino_proto::proto::{
         PingResponse, RawTransaction, SendResponse, TransparentAddressBlockFilter, TreeState,
         TxFilter,
     },
-    utils::{GetBlockRangeError, ValidatedBlockRangeRequest},
+    utils::ValidatedBlockRangeRequest,
 };
 
 use crate::TransactionHash;

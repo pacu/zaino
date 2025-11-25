@@ -2,6 +2,7 @@
 
 use futures::StreamExt as _;
 use zaino_fetch::jsonrpsee::connector::{test_node_and_return_url, JsonRpSeeConnector};
+use zaino_proto::proto::compact_formats::CompactBlock;
 use zaino_proto::proto::service::{
     AddressList, BlockId, BlockRange, GetMempoolTxRequest, GetAddressUtxosArg, GetSubtreeRootsArg, PoolType,
     TransparentAddressBlockFilter, TxFilter,
@@ -1064,6 +1065,59 @@ async fn fetch_service_get_block_range<V: ValidatorExt>(validator: &ValidatorKin
 }
 
 #[allow(deprecated)]
+async fn fetch_service_get_block_range_no_pools_returs_sapling_orchard<V: ValidatorExt>(validator: &ValidatorKind) {
+    let mut test_manager =
+        TestManager::<V, FetchService>::launch(validator, None, None, None, true, false, false)
+            .await
+            .unwrap();
+
+    let fetch_service_subscriber = test_manager.service_subscriber.take().unwrap();
+
+    test_manager
+        .generate_blocks_and_poll_indexer(10, &fetch_service_subscriber)
+        .await;
+
+    let block_range = BlockRange {
+        start: Some(BlockId {
+            height: 1,
+            hash: Vec::new(),
+        }),
+        end: Some(BlockId {
+            height: 10,
+            hash: Vec::new(),
+        }),
+        pool_types: vec![],
+    };
+
+    let fetch_service_stream = fetch_service_subscriber
+        .get_block_range(block_range.clone())
+        .await
+        .unwrap();
+    let fetch_service_compact_blocks: Vec<_> = fetch_service_stream.collect().await;
+
+    let fetch_blocks: Vec<_> = fetch_service_compact_blocks
+        .into_iter()
+        .filter_map(|result| result.ok())
+        .collect();
+
+    // no transparent data on outputs
+    for compact_block in fetch_blocks {
+        
+        let first_transaction = compact_block.vtx.first().unwrap();
+
+        // no transparent data for coinbase transaction
+        assert!(first_transaction.vin.is_empty());
+        
+        for transaction in &compact_block.vtx[1..] {
+            assert!(transaction.vin.is_empty(), "vin should be empty if transparent pool type not requested");
+            assert!(transaction.vout.is_empty(), "vout should be empty if transparent pool type not requested");
+        }
+    }
+    
+    test_manager.close().await;
+}
+
+#[allow(deprecated)]
 async fn fetch_service_get_block_range_nullifiers<V: ValidatorExt>(validator: &ValidatorKind) {
     let mut test_manager =
         TestManager::<V, FetchService>::launch(validator, None, None, None, true, false, false)
@@ -1098,7 +1152,7 @@ async fn fetch_service_get_block_range_nullifiers<V: ValidatorExt>(validator: &V
         .unwrap();
     let fetch_service_compact_blocks: Vec<_> = fetch_service_stream.collect().await;
 
-    let fetch_nullifiers: Vec<_> = fetch_service_compact_blocks
+    let fetch_nullifiers: Vec<CompactBlock> = fetch_service_compact_blocks
         .into_iter()
         .filter_map(|result| result.ok())
         .collect();
@@ -1980,6 +2034,11 @@ mod zcashd {
         }
 
         #[tokio::test(flavor = "multi_thread")]
+        pub(crate) async fn block_range_no_pool_type_returns_sapling_orchard() {
+           fetch_service_get_block_range_no_pools_returs_sapling_orchard::<Zcashd>(&ValidatorKind::Zcashd).await;
+        }
+
+        #[tokio::test(flavor = "multi_thread")]
         pub(crate) async fn block_range_nullifiers() {
             fetch_service_get_block_range_nullifiers::<Zcashd>(&ValidatorKind::Zcashd).await;
         }
@@ -2153,6 +2212,11 @@ mod zebrad {
         #[tokio::test(flavor = "multi_thread")]
         pub(crate) async fn block() {
             fetch_service_get_block::<Zebrad>(&ValidatorKind::Zebrad).await;
+        }
+        
+        #[tokio::test(flavor = "multi_thread")]
+        pub(crate) async fn block_range_no_pool_type_returns_sapling_orchard() {
+           fetch_service_get_block_range_no_pools_returs_sapling_orchard::<Zebrad>(&ValidatorKind::Zebrad).await;
         }
 
         #[tokio::test(flavor = "multi_thread")]
