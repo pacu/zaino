@@ -636,6 +636,90 @@ async fn state_service_get_raw_mempool_testnet() {
     test_manager.close().await;
 }
 
+async fn state_service_get_block_range_returns_default_pools<V:ValidatorExt>(validator: &ValidatorKind) {
+    let (
+        mut test_manager,
+        _fetch_service,
+        fetch_service_subscriber,
+        _state_service,
+        state_service_subscriber,
+    ) = create_test_manager_and_services::<V>(validator, None, true, true, None).await;
+
+    let mut clients = test_manager
+        .clients
+        .take()
+        .expect("Clients are not initialized");
+    clients.faucet.sync_and_await().await.unwrap();
+
+    if matches!(validator, ValidatorKind::Zebrad) {
+        generate_blocks_and_poll_all_chain_indexes(
+            100,
+            &test_manager,
+            fetch_service_subscriber.clone(),
+            state_service_subscriber.clone(),
+        )
+        .await;
+        clients.faucet.sync_and_await().await.unwrap();
+        clients.faucet.quick_shield(AccountId::ZERO).await.unwrap();
+        generate_blocks_and_poll_all_chain_indexes(
+            1,
+            &test_manager,
+            fetch_service_subscriber.clone(),
+            state_service_subscriber.clone(),
+        )
+        .await;
+        clients.faucet.sync_and_await().await.unwrap();
+    };
+
+    let recipient_ua = clients.get_recipient_address("unified").await;
+    from_inputs::quick_send(&mut clients.faucet, vec![(&recipient_ua, 250_000, None)])
+        .await
+        .unwrap();
+
+    generate_blocks_and_poll_all_chain_indexes(
+        1,
+        &test_manager,
+        fetch_service_subscriber.clone(),
+        state_service_subscriber.clone(),
+    )
+    .await;
+
+    let fetch_service_get_block_range = fetch_service_subscriber
+        .get_block_range(BlockRange { start: Some(BlockId { height: 101, hash: vec![]}), end: Some(BlockId { height: 102, hash: vec![]}), pool_types: vec![]})
+        .await
+        .unwrap()
+        .map(Result::unwrap)
+        .collect::<Vec<_>>()
+        .await;
+    
+
+    let state_service_get_block_range = state_service_subscriber
+        .get_block_range(BlockRange { start: Some(BlockId { height: 101, hash: vec![]}), end: Some(BlockId { height: 102, hash: vec![]}), pool_types: vec![]})
+        .await
+        .unwrap()
+        .map(Result::unwrap)
+        .collect::<Vec<_>>()
+        .await;
+
+    // check that the block range is the same
+    assert_eq!(fetch_service_get_block_range, state_service_get_block_range);
+
+    let compact_block = state_service_get_block_range.first().unwrap();
+
+    assert_eq!(compact_block.height, 101);
+
+    // the compact block has 2 transactions: coinbase and the quick_shield one
+    assert_eq!(compact_block.vtx.len(), 2);
+    
+    let coinbase_tx = compact_block.vtx.first().unwrap();
+    assert_eq!(coinbase_tx.index, 0);
+    // tranparent data should not be present when no pool types are requested
+    assert_eq!(coinbase_tx.vin, vec![], "transparent data should not be present when no pool types are specified in the request.");
+    assert_eq!(coinbase_tx.vout, vec![], "transparent data should not be present when no pool types are specified in the request.");
+    test_manager.close().await;
+}
+
+
 async fn state_service_z_get_treestate<V: ValidatorExt>(validator: &ValidatorKind) {
     let (
         mut test_manager,
@@ -1720,6 +1804,11 @@ mod zebra {
             use super::*;
 
             #[tokio::test(flavor = "multi_thread")]
+            pub(crate) async fn get_block_range_default_request_returns_no_t_data_regtest() {
+                state_service_get_block_range_returns_default_pools::<Zebrad>(&ValidatorKind::Zebrad).await;
+            }
+            
+            #[tokio::test(flavor = "multi_thread")]
             pub(crate) async fn subtrees_by_index_regtest() {
                 state_service_z_get_subtrees_by_index::<Zebrad>(&ValidatorKind::Zebrad).await;
             }
@@ -2218,7 +2307,7 @@ mod zebra {
                     .map(Result::unwrap)
                     .collect::<Vec<_>>()
                     .await;
-                let state_serviget_block_range = state_service_subscriber
+                let state_service_get_block_range = state_service_subscriber
                     .get_block_range_nullifiers(request)
                     .await
                     .unwrap()
@@ -2244,6 +2333,9 @@ mod zebra {
                 assert_eq!(fetch_service_get_block_range, state_service_get_block_range);
             }
         }
+
+
+        
 
         #[tokio::test(flavor = "multi_thread")]
         async fn get_block_range_full() {

@@ -221,8 +221,8 @@ impl FetchServiceError {
             GetBlockRangeError::NoEndHeightProvided => FetchServiceError::TonicStatusError(
                 tonic::Status::invalid_argument("Error: No start height given."),
             ),
-            GetBlockRangeError::PoolTypArgumentError(e) => FetchServiceError::TonicStatusError(
-                tonic::Status::invalid_argument("Error: No start height given."),
+            GetBlockRangeError::PoolTypeArgumentError(_) => FetchServiceError::TonicStatusError(
+                tonic::Status::invalid_argument("Error: invalid pool type"),
             ),
         }
     }
