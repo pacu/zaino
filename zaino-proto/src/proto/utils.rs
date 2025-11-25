@@ -1,5 +1,6 @@
 use crate::proto::service::{BlockRange, PoolType};
 
+#[derive(Debug)]
 /// Errors that can arise when mapping `PoolType` from an `i32` value.
 pub enum PoolTypeError {
     /// Pool Type value was map to the enum `PoolType::Invalid`.
@@ -53,7 +54,7 @@ pub enum GetBlockRangeError {
     /// End height out of range. Failed to convert to u32.
     EndHeightOutOfRange,
     /// An invalid pool type request was provided.
-    PoolTypArgumentError(PoolTypeError),
+    PoolTypeArgumentError(PoolTypeError),
 }
 
 /// `BlockRange` request that has been validated in terms of the semantics
@@ -93,7 +94,7 @@ impl ValidatedBlockRangeRequest {
         };
 
         let pool_types = pool_types_from_vector(&request.pool_types)
-            .map_err(|e| GetBlockRangeError::PoolTypArgumentError(e))?;
+            .map_err(|e| GetBlockRangeError::PoolTypeArgumentError(e))?;
 
         Ok(ValidatedBlockRangeRequest {
             start: start,
