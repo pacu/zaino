@@ -386,27 +386,25 @@ pub(crate) fn compact_block_with_pool_types(
     if pool_types.is_empty() {
         for compact_tx in &mut block.vtx {
             // strip out transparent inputs if not Requested
+            compact_tx.vin.clear();
+            compact_tx.vout.clear();
+        }
+    } else {
+        for compact_tx in &mut block.vtx {
+            // strip out transparent inputs if not Requested
             if !pool_types.contains(&PoolType::Transparent) {
-                compact_tx.vin = Vec::new();
-                compact_tx.vout = Vec::new();
+                compact_tx.vin.clear();
+                compact_tx.vout.clear();
             }
-        }
-    }
-
-    for compact_tx in &mut block.vtx {
-        // strip out transparent inputs if not Requested
-        if !pool_types.contains(&PoolType::Transparent) {
-            compact_tx.vin = Vec::new();
-            compact_tx.vout = Vec::new();
-        }
-        // strip out sapling if not requested
-        if !pool_types.contains(&PoolType::Sapling) {
-            compact_tx.spends = Vec::new();
-            compact_tx.outputs = Vec::new();
-        }
-        // strip out orchard if not requested
-        if !pool_types.contains(&PoolType::Orchard) {
-            compact_tx.actions = Vec::new();
+            // strip out sapling if not requested
+            if !pool_types.contains(&PoolType::Sapling) {
+                compact_tx.spends.clear();
+                compact_tx.outputs.clear();
+            }
+            // strip out orchard if not requested
+            if !pool_types.contains(&PoolType::Orchard) {
+                compact_tx.actions.clear();
+            }
         }
     }
 
