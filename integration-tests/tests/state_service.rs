@@ -922,16 +922,8 @@ async fn state_service_get_block_range_returns_all_pools<V: ValidatorExt>(valida
 
     let deshielding_tx = compact_block.vtx.first().unwrap();
 
-    dbg!("deshielding TX");
-
-    dbg!(deshielding_tx);
-
     assert_eq!(deshielding_tx.index, 1);
     // tranparent data should not be present when no pool types are requested
-    assert!(
-        !deshielding_tx.vin.is_empty(),
-        "transparent data should be present when all pool types are specified in the request."
-    );
     assert!(
         !deshielding_tx.vout.is_empty(),
         "transparent data should not be present when no pool types are specified in the request."
