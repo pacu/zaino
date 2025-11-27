@@ -71,23 +71,13 @@ impl ValidatedBlockRangeRequest {
         request: &BlockRange,
     ) -> Result<ValidatedBlockRangeRequest, GetBlockRangeError> {
         let start = match &request.start {
-            Some(block_id) => match block_id.height.try_into() {
-                Ok(height) => height,
-                Err(_) => {
-                    return Err(GetBlockRangeError::StartHeightOutOfRange);
-                }
-            },
+            Some(block_id) => block_id.height,
             None => {
                 return Err(GetBlockRangeError::NoStartHeightProvided);
             }
         };
         let end = match &request.end {
-            Some(block_id) => match block_id.height.try_into() {
-                Ok(height) => height,
-                Err(_) => {
-                    return Err(GetBlockRangeError::EndHeightOutOfRange);
-                }
-            },
+            Some(block_id) => block_id.height,
             None => {
                 return Err(GetBlockRangeError::NoEndHeightProvided);
             }

@@ -60,7 +60,7 @@ use crate::{
     indexer::{
         handle_raw_transaction, IndexerSubscriber, LightWalletIndexer, ZcashIndexer, ZcashService,
     },
-    local_cache::{BlockCache, BlockCacheSubscriber},
+    local_cache::{compact_block_with_pool_types, BlockCache, BlockCacheSubscriber},
     status::StatusType,
     stream::{
         AddressStream, CompactBlockStream, CompactTransactionStream, RawTransactionStream,
@@ -824,7 +824,7 @@ impl LightWalletIndexer for FetchServiceSubscriber {
         let start = validated_request.start();
         let end = validated_request.end();
 
-        let chain_height = self.block_cache.get_chain_height().await?.0;
+        let chain_height = self.block_cache.get_chain_height().await?.0 as u64;
         let fetch_service_clone = self.clone();
         let service_timeout = self.config.service.timeout;
         let (channel_tx, channel_rx) = mpsc::channel(self.config.service.channel_size as usize);
@@ -839,7 +839,8 @@ impl LightWalletIndexer for FetchServiceSubscriber {
                         match fetch_service_clone.block_cache.get_compact_block(
                             height.to_string(),
                         ).await {
-                            Ok(block) => {
+                            Ok(mut block) => {
+                                block = compact_block_with_pool_types(block, validated_request.pool_types());
                                 if channel_tx.send(Ok(block)).await.is_err() {
                                     break;
                                 }
@@ -911,7 +912,7 @@ impl LightWalletIndexer for FetchServiceSubscriber {
 
         let start = validated_request.start();
         let end = validated_request.end();
-        let chain_height = self.block_cache.get_chain_height().await?.0;
+        let chain_height = self.block_cache.get_chain_height().await?.0 as u64;
         let fetch_service_clone = self.clone();
         let service_timeout = self.config.service.timeout;
         let (channel_tx, channel_rx) = mpsc::channel(self.config.service.channel_size as usize);
