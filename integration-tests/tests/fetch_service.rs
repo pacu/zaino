@@ -1102,18 +1102,23 @@ async fn fetch_service_get_block_range_no_pools_returs_sapling_orchard<V: Valida
 
     // no transparent data on outputs
     for compact_block in fetch_blocks {
-        
         let first_transaction = compact_block.vtx.first().unwrap();
 
         // no transparent data for coinbase transaction
         assert!(first_transaction.vin.is_empty());
-        
+
         for transaction in &compact_block.vtx[1..] {
-            assert!(transaction.vin.is_empty(), "vin should be empty if transparent pool type not requested");
-            assert!(transaction.vout.is_empty(), "vout should be empty if transparent pool type not requested");
+            assert!(
+                transaction.vin.is_empty(),
+                "vin should be empty if transparent pool type not requested"
+            );
+            assert!(
+                transaction.vout.is_empty(),
+                "vout should be empty if transparent pool type not requested"
+            );
         }
     }
-    
+
     test_manager.close().await;
 }
 
@@ -2212,7 +2217,7 @@ mod zebrad {
         pub(crate) async fn block() {
             fetch_service_get_block::<Zebrad>(&ValidatorKind::Zebrad).await;
         }
-        
+
         #[tokio::test(flavor = "multi_thread")]
         pub(crate) async fn block_range_no_pool_type_returns_sapling_orchard() {
            fetch_service_get_block_range_no_pools_returs_sapling_orchard::<Zebrad>(&ValidatorKind::Zebrad).await;

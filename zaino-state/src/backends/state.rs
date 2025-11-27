@@ -567,7 +567,7 @@ impl StateServiceSubscriber {
 
         let start = validated_request.start();
         let end = validated_request.end();
-        let chain_height = self.block_cache.get_chain_height().await?.0;
+        let chain_height: u64 = self.block_cache.get_chain_height().await?.0 as u64;
         let fetch_service_clone = self.clone();
         let service_timeout = self.config.service.timeout;
         let (channel_tx, channel_rx) = mpsc::channel(self.config.service.channel_size as usize);
@@ -587,7 +587,7 @@ impl StateServiceSubscriber {
                 )
             }
         }?;
-
+        // FIX: find out why there's repeated code fetching the chain tip and then the rest
         tokio::spawn(async move {
             let timeout = timeout(
                 time::Duration::from_secs((service_timeout * 4) as u64),
@@ -599,10 +599,12 @@ impl StateServiceSubscriber {
                             .await
                         {
                             Ok(mut block) => {
-                                if trim_non_nullifier {
-                                    block = compact_block_to_nullifiers(block);
-                                }
-                                Ok(block)
+                                    if trim_non_nullifier {
+                                        block = compact_block_to_nullifiers(block);
+                                    } else {
+                                        block = compact_block_with_pool_types(block, pool_types.clone());
+                                    }
+                                    Ok(block)
                             }
                             Err(e) => {
                                 if end >= chain_height {

@@ -58,8 +58,8 @@ pub enum GetBlockRangeError {
 }
 
 pub struct ValidatedBlockRangeRequest {
-    start: u32,
-    end: u32,
+    start: u64,
+    end: u64,
     pool_types: Vec<PoolType>,
 }
 
@@ -68,24 +68,14 @@ impl ValidatedBlockRangeRequest {
     pub fn new_from_block_range(
         request: &BlockRange,
     ) -> Result<ValidatedBlockRangeRequest, GetBlockRangeError> {
-        let start: u32 = match &request.start {
-            Some(block_id) => match block_id.height.try_into() {
-                Ok(height) => height,
-                Err(_) => {
-                    return Err(GetBlockRangeError::StartHeightOutOfRange);
-                }
-            },
+        let start = match &request.start {
+            Some(block_id) => block_id.height,
             None => {
                 return Err(GetBlockRangeError::NoStartHeightProvided);
             }
         };
-        let end: u32 = match &request.end {
-            Some(block_id) => match block_id.height.try_into() {
-                Ok(height) => height,
-                Err(_) => {
-                    return Err(GetBlockRangeError::EndHeightOutOfRange);
-                }
-            },
+        let end = match &request.end {
+            Some(block_id) => block_id.height,
             None => {
                 return Err(GetBlockRangeError::NoEndHeightProvided);
             }
@@ -101,11 +91,11 @@ impl ValidatedBlockRangeRequest {
         })
     }
 
-    pub fn start(&self) -> u32 {
+    pub fn start(&self) -> u64 {
         self.start
     }
 
-    pub fn end(&self) -> u32 {
+    pub fn end(&self) -> u64 {
         self.end
     }
 
