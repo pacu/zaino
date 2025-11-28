@@ -10,7 +10,7 @@ use std::{any::type_name, fmt::Display};
 use zaino_fetch::jsonrpsee::connector::RpcRequestError;
 
 /// Errors related to the `StateService`.
-#[deprecated]
+// #[deprecated]
 #[derive(Debug, thiserror::Error)]
 pub enum StateServiceError {
     /// An rpc-specific error we haven't accounted for

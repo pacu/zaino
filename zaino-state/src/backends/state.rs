@@ -110,7 +110,7 @@ macro_rules! expected_read_response {
 ///       If we want the ability to clone Service all JoinHandle's should be
 /// converted to Arc\<JoinHandle\>.
 #[derive(Debug)]
-#[deprecated = "Will be eventually replaced by `BlockchainSource"]
+// #[deprecated = "Will be eventually replaced by `BlockchainSource"]
 pub struct StateService {
     #[deprecated = "FIXME: the new indexer field should replace the functionality this provided. Remove this file once #677 is done"]
     /// `ReadeStateService` from Zebra-State.
@@ -149,7 +149,7 @@ pub struct StateService {
     status: AtomicStatus,
 }
 
-#[allow(deprecated)]
+// #[allow(deprecated)]
 impl StateService {
     /// Uses poll_ready to update the status of the `ReadStateService`.
     async fn fetch_status_from_validator(&self) -> StatusType {
@@ -180,7 +180,7 @@ impl StateService {
 }
 
 #[async_trait]
-#[allow(deprecated)]
+// #[allow(deprecated)]
 impl ZcashService for StateService {
     const BACKEND_TYPE: BackendType = BackendType::State;
 
@@ -364,7 +364,7 @@ impl Drop for StateService {
 ///
 /// Subscribers should be
 #[derive(Debug, Clone)]
-#[deprecated]
+// #[deprecated]
 pub struct StateServiceSubscriber {
     #[deprecated = "FIXME: the new indexer field should replace the functionality this provided. Remove this file once #677 is done"]
     /// Remote wrappper functionality for zebra's [`ReadStateService`].
@@ -420,7 +420,7 @@ impl ChainTipSubscriber {
 ///
 /// These would be simple to add to the public interface if
 /// needed, there are currently no plans to do so.
-#[allow(deprecated)]
+// #[allow(deprecated)]
 impl StateServiceSubscriber {
     /// Gets a Subscriber to any updates to the latest chain tip
     pub fn chaintip_update_subscriber(&self) -> ChainTipSubscriber {
@@ -1047,7 +1047,7 @@ impl StateServiceSubscriber {
 }
 
 #[async_trait]
-#[allow(deprecated)]
+// #[allow(deprecated)]
 impl ZcashIndexer for StateServiceSubscriber {
     type Error = StateServiceError;
 
@@ -1951,7 +1951,7 @@ impl ZcashIndexer for StateServiceSubscriber {
 }
 
 #[async_trait]
-#[allow(deprecated)]
+// #[allow(deprecated)]
 impl LightWalletIndexer for StateServiceSubscriber {
     /// Return the height of the tip of the best chain
     async fn get_latest_block(&self) -> Result<BlockId, Self::Error> {
