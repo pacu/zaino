@@ -1,6 +1,5 @@
 //! Zcash chain fetch and tx submission service backed by Zebras [`ReadStateService`].
 
-use crate::{NodeBackedChainIndex, NodeBackedChainIndexSubscriber, State};
 #[allow(deprecated)]
 use crate::{
     chain_index::{
@@ -21,6 +20,7 @@ use crate::{
     utils::{blockid_to_hashorheight, get_build_info, ServiceMetadata},
     BackendType, MempoolKey,
 };
+use crate::{NodeBackedChainIndex, NodeBackedChainIndexSubscriber, State};
 
 use nonempty::NonEmpty;
 use tokio_stream::StreamExt as _;
@@ -112,7 +112,7 @@ macro_rules! expected_read_response {
 #[derive(Debug)]
 #[deprecated = "Will be eventually replaced by `BlockchainSource"]
 pub struct StateService {
-    #[deprecated =  "FIXME remove in cleanup"]
+    #[deprecated = "FIXME: the new indexer field should replace the functionality this provided. Remove this file once #677 is done"]
     /// `ReadeStateService` from Zebra-State.
     read_state_service: ReadStateService,
 
@@ -122,11 +122,11 @@ pub struct StateService {
     /// JsonRPC Client.
     rpc_client: JsonRpSeeConnector,
 
-    #[deprecated =  "FIXME remove in cleanup"]
+    #[deprecated = "FIXME: the new indexer field should replace the functionality this provided. Remove this file once #677 is done"]
     /// Local compact block cache.
     block_cache: BlockCache,
 
-    #[deprecated =  "FIXME remove in cleanup"]
+    #[deprecated = "FIXME: the new indexer field should replace the functionality this provided. Remove this file once #677 is done"]
     /// Internal mempool.
     mempool: Mempool<ValidatorConnector>,
 
@@ -136,6 +136,7 @@ pub struct StateService {
     /// Service metadata.
     data: ServiceMetadata,
 
+    #[deprecated = "FIXME: the new indexer field should replace the functionality this provided. Remove this file once #677 is done"]
     /// StateService config data.
     #[allow(deprecated)]
     config: StateServiceConfig,
@@ -143,6 +144,7 @@ pub struct StateService {
     /// Thread-safe status indicator.
     status: AtomicStatus,
 
+    #[deprecated = "FIXME: the new indexer field should replace the functionality this provided. Remove this file once #677 is done"]
     /// Listener for when the chain tip changes
     chain_tip_change: zebra_state::ChainTipChange,
 }
@@ -364,18 +366,18 @@ impl Drop for StateService {
 #[derive(Debug, Clone)]
 #[deprecated]
 pub struct StateServiceSubscriber {
-    #[deprecated =  "FIXME remove in cleanup"]
+    #[deprecated = "FIXME: the new indexer field should replace the functionality this provided. Remove this file once #677 is done"]
     /// Remote wrappper functionality for zebra's [`ReadStateService`].
     pub read_state_service: ReadStateService,
 
     /// JsonRPC Client.
     pub rpc_client: JsonRpSeeConnector,
 
-    #[deprecated =  "FIXME remove in cleanup"]
+    #[deprecated = "FIXME: the new indexer field should replace the functionality this provided. Remove this file once #677 is done"]
     /// Local compact block cache.
     pub block_cache: BlockCacheSubscriber,
 
-    #[deprecated =  "FIXME remove in cleanup"]
+    #[deprecated = "FIXME: the new indexer field should replace the functionality this provided. Remove this file once #677 is done"]
     /// Internal mempool.
     pub mempool: MempoolSubscriber,
 
@@ -385,10 +387,12 @@ pub struct StateServiceSubscriber {
     /// Service metadata.
     pub data: ServiceMetadata,
 
+    #[deprecated = "FIXME: the new indexer field should replace the functionality this provided. Remove this file once #677 is done"]
     /// StateService config data.
     #[allow(deprecated)]
     config: StateServiceConfig,
 
+    #[deprecated = "FIXME: the new indexer field should replace the functionality this provided. Remove this file once #677 is done"]
     /// Listener for when the chain tip changes
     chain_tip_change: zebra_state::ChainTipChange,
 }
