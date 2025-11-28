@@ -20,7 +20,7 @@ use crate::{
     utils::{blockid_to_hashorheight, get_build_info, ServiceMetadata},
     BackendType, MempoolKey,
 };
-use crate::{NodeBackedChainIndex, NodeBackedChainIndexSubscriber, State};
+use crate::{ChainIndex, NodeBackedChainIndex, NodeBackedChainIndexSubscriber, State};
 
 use nonempty::NonEmpty;
 use tokio_stream::StreamExt as _;
@@ -1593,7 +1593,9 @@ impl ZcashIndexer for StateServiceSubscriber {
     /// method: post
     /// tags: blockchain
     async fn get_block_count(&self) -> Result<Height, Self::Error> {
-        Ok(self.block_cache.get_chain_height().await?)
+        let nfs_snapshot = self.indexer.snapshot_nonfinalized_state();
+        let h = nfs_snapshot.best_tip.height;
+        Ok(h.into())
     }
 
     async fn validate_address(
