@@ -20,7 +20,7 @@ use crate::{
     utils::{blockid_to_hashorheight, get_build_info, ServiceMetadata},
     BackendType, MempoolKey,
 };
-use crate::{NodeBackedChainIndex, NodeBackedChainIndexSubscriber, State};
+use crate::{ChainIndex, NodeBackedChainIndex, NodeBackedChainIndexSubscriber, State};
 
 use nonempty::NonEmpty;
 use tokio_stream::StreamExt as _;
@@ -1292,7 +1292,7 @@ impl ZcashIndexer for StateServiceSubscriber {
     /// `usage` is the total memory usage for the mempool, in bytes.
     /// the [optional `fullyNotified` field](<https://github.com/zcash/zcash/blob/654a8be2274aa98144c80c1ac459400eaf0eacbe/src/rpc/blockchain.cpp#L1549>), is only utilized for zcashd regtests, is deprecated, and is not included.
     async fn get_mempool_info(&self) -> Result<GetMempoolInfoResponse, Self::Error> {
-        Ok(self.mempool.get_mempool_info().await.into())
+        Ok(self.indexer.get_mempool_info().await.into())
     }
 
     async fn get_peer_info(&self) -> Result<GetPeerInfo, Self::Error> {
