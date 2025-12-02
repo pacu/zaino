@@ -1041,11 +1041,7 @@ async fn fetch_service_get_block_range<V: ValidatorExt>(validator: &ValidatorKin
             height: 10,
             hash: Vec::new(),
         }),
-        pool_types: vec![
-            PoolType::Transparent as i32,
-            PoolType::Sapling as i32,
-            PoolType::Orchard as i32,
-        ],
+        pool_types: vec![],
     };
 
     let fetch_service_stream = fetch_service_subscriber
@@ -1060,6 +1056,150 @@ async fn fetch_service_get_block_range<V: ValidatorExt>(validator: &ValidatorKin
         .collect();
 
     dbg!(fetch_blocks);
+
+    test_manager.close().await;
+}
+
+#[allow(deprecated)]
+async fn fetch_service_get_block_range_returns_all_pools<V: ValidatorExt>(validator: &ValidatorKind) {
+    let mut test_manager =
+        TestManager::<V, FetchService>::launch(validator, None, None, None, true, false, false)
+            .await
+            .unwrap();
+
+    let mut clients = test_manager
+        .clients
+        .take()
+        .expect("Clients are not initialized");
+
+    clients.faucet.sync_and_await().await.unwrap();
+
+    let fetch_service_subscriber = test_manager.service_subscriber.take().unwrap();
+
+    if matches!(validator, ValidatorKind::Zebrad) {
+        test_manager
+            .generate_blocks_and_poll_indexer(100, &fetch_service_subscriber)
+            .await;
+        clients.faucet.sync_and_await().await.unwrap();
+        for _ in 1..4 {
+            clients.faucet.quick_shield(AccountId::ZERO).await.unwrap();
+
+            test_manager
+                .generate_blocks_and_poll_indexer(1, &fetch_service_subscriber)
+                .await;
+            clients.faucet.sync_and_await().await.unwrap();
+        }
+    } else {
+        // zcashd
+        test_manager
+            .generate_blocks_and_poll_indexer(11, &fetch_service_subscriber)
+            .await;
+
+        clients.faucet.sync_and_await().await.unwrap();
+        for _ in 1..4 {
+            clients.faucet.quick_shield(AccountId::ZERO).await.unwrap();
+            test_manager
+                .generate_blocks_and_poll_indexer(1, &fetch_service_subscriber)
+                .await;
+            clients.faucet.sync_and_await().await.unwrap();
+        }
+    }
+
+    let recipient_transparent = clients.get_recipient_address("transparent").await;
+    let deshielding_txid = zaino_testutils::from_inputs::quick_send(
+        &mut clients.faucet,
+        vec![(&recipient_transparent, 250_000, None)],
+    )
+    .await
+    .unwrap()
+    .head;
+
+    let recipient_sapling = clients.get_recipient_address("sapling").await;
+    let sapling_txid = zaino_testutils::from_inputs::quick_send(
+        &mut clients.faucet,
+        vec![(&recipient_sapling, 250_000, None)],
+    )
+    .await
+    .unwrap()
+    .head;
+
+    let recipient_ua = clients.get_recipient_address("unified").await;
+    let orchard_txid =
+        zaino_testutils::from_inputs::quick_send(&mut clients.faucet, vec![(&recipient_ua, 250_000, None)])
+            .await
+            .unwrap()
+            .head;
+
+    test_manager
+        .generate_blocks_and_poll_indexer(1, &fetch_service_subscriber)
+        .await;
+
+    let start_height: u64 = 100;
+    let end_height: u64 = 106;
+
+    let fetch_service_get_block_range = fetch_service_subscriber
+        .get_block_range(BlockRange {
+            start: Some(BlockId {
+                height: start_height,
+                hash: vec![],
+            }),
+            end: Some(BlockId {
+                height: end_height,
+                hash: vec![],
+            }),
+            pool_types: vec![
+                PoolType::Transparent as i32,
+                PoolType::Sapling as i32,
+                PoolType::Orchard as i32,
+            ],
+        })
+        .await
+        .unwrap()
+        .map(Result::unwrap)
+        .collect::<Vec<_>>()
+        .await;
+
+    let compact_block = fetch_service_get_block_range.last().unwrap();
+
+    assert_eq!(compact_block.height, end_height);
+
+    // the compact block has 3 transactions
+    assert_eq!(compact_block.vtx.len(), 3);
+
+    // transaction order is not guaranteed so it's necessary to look up for them by TXID
+    let deshielding_tx = compact_block
+        .vtx
+        .iter()
+        .find(|tx| tx.txid == deshielding_txid.as_ref().to_vec())
+        .unwrap();
+
+    assert!(
+        !deshielding_tx.vout.is_empty(),
+        "transparent data should be present when transaparent pool type is specified in the request."
+    );
+
+    // transaction order is not guaranteed so it's necessary to look up for them by TXID
+    let sapling_tx = compact_block
+        .vtx
+        .iter()
+        .find(|tx| tx.txid == sapling_txid.as_ref().to_vec())
+        .unwrap();
+
+    assert!(
+        !sapling_tx.outputs.is_empty(),
+        "sapling data should be present when all pool types are specified in the request."
+    );
+
+    let orchard_tx = compact_block
+        .vtx
+        .iter()
+        .find(|tx| tx.txid == orchard_txid.as_ref().to_vec())
+        .unwrap();
+
+    assert!(
+        !orchard_tx.actions.is_empty(),
+        "orchard data should be present when all pool types are specified in the request."
+    );
 
     test_manager.close().await;
 }
@@ -2043,6 +2183,11 @@ mod zcashd {
         }
 
         #[tokio::test(flavor = "multi_thread")]
+        pub(crate) async fn block_range_returns_all_blocks() {
+            fetch_service_get_block_range_returns_all_pools::<Zcashd>(&ValidatorKind::Zcashd).await;
+        }
+
+        #[tokio::test(flavor = "multi_thread")]
         pub(crate) async fn block_range_nullifiers() {
             fetch_service_get_block_range_nullifiers::<Zcashd>(&ValidatorKind::Zcashd).await;
         }
@@ -2264,8 +2409,13 @@ mod zebrad {
         }
 
         #[tokio::test(flavor = "multi_thread")]
-        pub(crate) async fn block_range() {
+        pub(crate) async fn block_range_returns_default_pools() {
             fetch_service_get_block_range::<Zebrad>(&ValidatorKind::Zebrad).await;
+        }
+
+        #[tokio::test(flavor = "multi_thread")]
+        pub(crate) async fn block_range_returns_all_pools_when_requested() {
+            fetch_service_get_block_range_returns_all_pools::<Zebrad>(&ValidatorKind::Zebrad).await;
         }
 
         #[tokio::test(flavor = "multi_thread")]
