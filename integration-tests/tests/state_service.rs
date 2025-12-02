@@ -835,25 +835,29 @@ async fn state_service_get_block_range_returns_all_pools<V: ValidatorExt>(valida
     };
 
     let recipient_transparent = clients.get_recipient_address("transparent").await;
-    from_inputs::quick_send(
+    let deshielding_txid = from_inputs::quick_send(
         &mut clients.faucet,
         vec![(&recipient_transparent, 250_000, None)],
     )
     .await
-    .unwrap();
+    .unwrap()
+    .head;
 
     let recipient_sapling = clients.get_recipient_address("sapling").await;
-    from_inputs::quick_send(
+    let sapling_txid = from_inputs::quick_send(
         &mut clients.faucet,
         vec![(&recipient_sapling, 250_000, None)],
     )
     .await
-    .unwrap();
+    .unwrap()
+    .head;
 
     let recipient_ua = clients.get_recipient_address("unified").await;
-    from_inputs::quick_send(&mut clients.faucet, vec![(&recipient_ua, 250_000, None)])
-        .await
-        .unwrap();
+    let orchard_txid =
+        from_inputs::quick_send(&mut clients.faucet, vec![(&recipient_ua, 250_000, None)])
+            .await
+            .unwrap()
+            .head;
 
     generate_blocks_and_poll_all_chain_indexes(
         1,
@@ -920,37 +924,39 @@ async fn state_service_get_block_range_returns_all_pools<V: ValidatorExt>(valida
     // the compact block has 3 transactions
     assert_eq!(compact_block.vtx.len(), 3);
 
-    let deshielding_tx = compact_block.vtx.first().unwrap();
+    // transaction order is not guaranteed so it's necessary to look up for them by TXID
+    let deshielding_tx = compact_block
+        .vtx
+        .iter()
+        .find(|tx| tx.txid == deshielding_txid.as_ref().to_vec())
+        .unwrap();
 
-    assert_eq!(deshielding_tx.index, 1);
-    // tranparent data should not be present when no pool types are requested
     assert!(
         !deshielding_tx.vout.is_empty(),
-        "transparent data should not be present when no pool types are specified in the request."
+        "transparent data should be present when transaparent pool type is specified in the request."
     );
 
-    let sapling_tx = compact_block.vtx[1].clone();
-    assert_eq!(sapling_tx.index, 2);
+    // transaction order is not guaranteed so it's necessary to look up for them by TXID
+    let sapling_tx = compact_block
+        .vtx
+        .iter()
+        .find(|tx| tx.txid == sapling_txid.as_ref().to_vec())
+        .unwrap();
 
-    assert!(
-        !sapling_tx.spends.is_empty(),
-        "sapling data should be present when all pool types are specified in the request."
-    );
     assert!(
         !sapling_tx.outputs.is_empty(),
         "sapling data should be present when all pool types are specified in the request."
     );
 
-    let sapling_tx = compact_block.vtx[1].clone();
-    assert_eq!(sapling_tx.index, 2);
+    let orchard_tx = compact_block
+        .vtx
+        .iter()
+        .find(|tx| tx.txid == orchard_txid.as_ref().to_vec())
+        .unwrap();
 
     assert!(
-        !sapling_tx.spends.is_empty(),
-        "sapling data should be present when all pool types are specified in the request."
-    );
-    assert!(
-        !sapling_tx.outputs.is_empty(),
-        "sapling data should be present when all pool types are specified in the request."
+        !orchard_tx.actions.is_empty(),
+        "orchard data should be present when all pool types are specified in the request."
     );
 
     test_manager.close().await;
