@@ -82,12 +82,12 @@ impl ValidatedBlockRangeRequest {
         };
 
         let pool_types = pool_types_from_vector(&request.pool_types)
-            .map_err(|e| GetBlockRangeError::PoolTypeArgumentError(e))?;
+            .map_err(GetBlockRangeError::PoolTypeArgumentError)?;
 
         Ok(ValidatedBlockRangeRequest {
-            start: start,
-            end: end,
-            pool_types: pool_types,
+            start,
+            end,
+            pool_types,
         })
     }
 
@@ -105,11 +105,7 @@ impl ValidatedBlockRangeRequest {
 
     /// checks whether this request is specified in reversed order
     pub fn is_reverse_ordered(&self) -> bool {
-        if self.start > self.end {
-            true
-        } else {
-            false
-        }
+        self.start > self.end
     }
 
     /// Reverses the order of this request
