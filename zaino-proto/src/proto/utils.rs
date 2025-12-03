@@ -57,6 +57,8 @@ pub enum GetBlockRangeError {
     PoolTypeArgumentError(PoolTypeError),
 }
 
+/// `BlockRange` request that has been validated in terms of the semantics
+/// of `GetBlockRange` RPC.
 pub struct ValidatedBlockRangeRequest {
     start: u64,
     end: u64,
@@ -91,14 +93,17 @@ impl ValidatedBlockRangeRequest {
         })
     }
 
+    /// Start Height of the BlockRange Request
     pub fn start(&self) -> u64 {
         self.start
     }
 
+    /// End Height of the BlockRange Request
     pub fn end(&self) -> u64 {
         self.end
     }
 
+    /// Pool Types of the BlockRange request
     pub fn pool_types(&self) -> Vec<PoolType> {
         self.pool_types.clone()
     }
