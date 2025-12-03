@@ -9,5 +9,7 @@ and this library adheres to Rust's notion of
 
 
 ### Added
+- `ValidatedBlockRangeRequest` type that encapsulates validations of the
+  `GetBlockRange` RPC request
 - utils submodule to handle `PoolType` conversions
 - `PoolTypeError` defines conversion errors between i32 and known `PoolType` variants
