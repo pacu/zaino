@@ -56,9 +56,11 @@ pub enum GetBlockRangeError {
     PoolTypArgumentError(PoolTypeError),
 }
 
+/// `BlockRange` request that has been validated in terms of the semantics
+/// of `GetBlockRange` RPC.
 pub struct ValidatedBlockRangeRequest {
-    start: u32,
-    end: u32,
+    start: u64,
+    end: u64,
     pool_types: Vec<PoolType>,
 }
 
@@ -67,7 +69,7 @@ impl ValidatedBlockRangeRequest {
     pub fn new_from_block_range(
         request: &BlockRange,
     ) -> Result<ValidatedBlockRangeRequest, GetBlockRangeError> {
-        let start: u32 = match &request.start {
+        let start = match &request.start {
             Some(block_id) => match block_id.height.try_into() {
                 Ok(height) => height,
                 Err(_) => {
@@ -78,7 +80,7 @@ impl ValidatedBlockRangeRequest {
                 return Err(GetBlockRangeError::NoStartHeightProvided);
             }
         };
-        let end: u32 = match &request.end {
+        let end = match &request.end {
             Some(block_id) => match block_id.height.try_into() {
                 Ok(height) => height,
                 Err(_) => {
@@ -100,14 +102,17 @@ impl ValidatedBlockRangeRequest {
         })
     }
 
-    pub fn start(&self) -> u32 {
+    /// Start Height of the BlockRange Request
+    pub fn start(&self) -> u64 {
         self.start
     }
 
-    pub fn end(&self) -> u32 {
+    /// End Height of the BlockRange Request
+    pub fn end(&self) -> u64 {
         self.end
     }
 
+    /// Pool Types of the BlockRange request
     pub fn pool_types(&self) -> Vec<PoolType> {
         self.pool_types.clone()
     }
