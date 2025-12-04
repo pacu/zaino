@@ -45,6 +45,7 @@ use zaino_proto::proto::{
     },
 };
 
+use crate::TransactionHash;
 #[allow(deprecated)]
 use crate::{
     chain_index::{source::ValidatorConnector, types},
@@ -1349,6 +1350,7 @@ impl LightWalletIndexer for FetchServiceSubscriber {
             .txid
             .iter()
             .map(|txid_bytes| {
+                // NOTE: the TransactionHash methods cannot be used for this hex encoding as exclusions could be truncated to less than 32 bytes
                 let reversed_txid_bytes: Vec<u8> = txid_bytes.iter().cloned().rev().collect();
                 hex::encode(&reversed_txid_bytes)
             })
