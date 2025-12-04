@@ -360,7 +360,10 @@ pub async fn test_get_mempool_info(validator: &ValidatorKind) {
     let expected_bytes: u64 = values.iter().map(|entry| entry.len() as u64).sum();
 
     // Key heap bytes: sum of txid String capacities
-    let expected_key_heap_bytes: u64 = keys.iter().map(|key| key.encode_hex::<String>().capacity() as u64).sum();
+    let expected_key_heap_bytes: u64 = keys
+        .iter()
+        .map(|key| key.encode_hex::<String>().capacity() as u64)
+        .sum();
 
     let expected_usage = expected_bytes.saturating_add(expected_key_heap_bytes);
 
@@ -1631,6 +1634,7 @@ async fn fetch_service_get_mempool_tx(validator: &ValidatorKind) {
 
     assert_eq!(sorted_fetch_mempool_tx[0].hash, sorted_txids[0]);
     assert_eq!(sorted_fetch_mempool_tx[1].hash, sorted_txids[1]);
+    assert_eq!(sorted_fetch_mempool_tx.len(), 2);
 
     // For the exclude list, we need to provide the transaction ID in RPC format (reversed),
     // because the backend will reverse it again and the mempool stores keys in RPC format
@@ -1655,6 +1659,7 @@ async fn fetch_service_get_mempool_tx(validator: &ValidatorKind) {
     sorted_exclude_fetch_mempool_tx.sort_by_key(|tx| tx.hash.clone());
 
     assert_eq!(sorted_exclude_fetch_mempool_tx[0].hash, sorted_txids[1]);
+    assert_eq!(sorted_exclude_fetch_mempool_tx.len(), 1);
 
     test_manager.close().await;
 }
