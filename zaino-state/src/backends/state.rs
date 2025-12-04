@@ -112,7 +112,6 @@ macro_rules! expected_read_response {
 #[derive(Debug)]
 // #[deprecated = "Will be eventually replaced by `BlockchainSource"]
 pub struct StateService {
-    #[deprecated = "FIXME: the new indexer field should replace the functionality this provided. Remove this file once #677 is done"]
     /// `ReadeStateService` from Zebra-State.
     read_state_service: ReadStateService,
 
@@ -124,12 +123,10 @@ pub struct StateService {
     /// Internal mempool.
     mempool: Mempool<ValidatorConnector>,
 
-    #[deprecated = "FIXME: the new indexer field should replace the functionality this provided. Remove this file once #677 is done"]
     /// StateService config data.
     #[allow(deprecated)]
     config: StateServiceConfig,
 
-    #[deprecated = "FIXME: the new indexer field should replace the functionality this provided. Remove this file once #677 is done"]
     /// Listener for when the chain tip changes
     chain_tip_change: zebra_state::ChainTipChange,
 
@@ -366,7 +363,6 @@ impl Drop for StateService {
 #[derive(Debug, Clone)]
 // #[deprecated]
 pub struct StateServiceSubscriber {
-    #[deprecated = "FIXME: the new indexer field should replace the functionality this provided. Remove this file once #677 is done"]
     /// Remote wrappper functionality for zebra's [`ReadStateService`].
     pub read_state_service: ReadStateService,
 
@@ -378,12 +374,10 @@ pub struct StateServiceSubscriber {
     /// Internal mempool.
     pub mempool: MempoolSubscriber,
 
-    #[deprecated = "FIXME: the new indexer field should replace the functionality this provided. Remove this file once #677 is done"]
     /// StateService config data.
     #[allow(deprecated)]
     config: StateServiceConfig,
 
-    #[deprecated = "FIXME: the new indexer field should replace the functionality this provided. Remove this file once #677 is done"]
     /// Listener for when the chain tip changes
     chain_tip_change: zebra_state::ChainTipChange,
 
