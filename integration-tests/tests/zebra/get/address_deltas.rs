@@ -53,7 +53,7 @@ const NON_EXISTENT_ADDRESS: &str = "tmVqEASZxBNKFTbmASZikGa5fPLkd68iJyx";
 #[allow(deprecated)]
 async fn setup_chain(test_manager: &mut TestManager<StateService>) -> (String, String) {
     let state_service_subscriber = test_manager.service_subscriber.clone().unwrap();
-    
+
     let mut clients = test_manager
         .clients
         .take()
@@ -64,10 +64,14 @@ async fn setup_chain(test_manager: &mut TestManager<StateService>) -> (String, S
     clients.faucet.sync_and_await().await.unwrap();
 
     // Generate blocks and perform transaction
-    test_manager.generate_blocks_and_poll_indexer(100, &state_service_subscriber).await;
+    test_manager
+        .generate_blocks_and_poll_indexer(100, &state_service_subscriber)
+        .await;
     clients.faucet.sync_and_await().await.unwrap();
     clients.faucet.quick_shield(AccountId::ZERO).await.unwrap();
-    test_manager.generate_blocks_and_poll_indexer(1, &state_service_subscriber).await;
+    test_manager
+        .generate_blocks_and_poll_indexer(1, &state_service_subscriber)
+        .await;
     clients.faucet.sync_and_await().await.unwrap();
 
     from_inputs::quick_send(
@@ -76,7 +80,9 @@ async fn setup_chain(test_manager: &mut TestManager<StateService>) -> (String, S
     )
     .await
     .unwrap();
-    test_manager.generate_blocks_and_poll_indexer(1, &state_service_subscriber).await;
+    test_manager
+        .generate_blocks_and_poll_indexer(1, &state_service_subscriber)
+        .await;
 
     clients.recipient.sync_and_await().await.unwrap();
 
