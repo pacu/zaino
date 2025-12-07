@@ -5,6 +5,7 @@ use crate::{
     chain_index::{
         mempool::{Mempool, MempoolSubscriber},
         source::ValidatorConnector,
+        types as chain_types, ChainIndex,
     },
     config::StateServiceConfig,
     error::{BlockCacheError, StateServiceError},
@@ -1969,16 +1970,31 @@ impl LightWalletIndexer for StateServiceSubscriber {
                 "Error: Invalid hash and/or height out of range. Failed to convert to u32.",
             )),
         )?;
-        match self
-            .block_cache
-            .get_compact_block(hash_or_height.to_string())
-            .await
-        {
-            Ok(block) => Ok(block),
-            Err(e) => {
-                self.error_get_block(BlockCacheError::Custom(e.to_string()), height as u32)
+
+        let snapshot = self.indexer.snapshot_nonfinalized_state();
+
+        // Convert HashOrHeight to chain_types::Height
+        let block_height = match hash_or_height {
+            HashOrHeight::Height(h) => chain_types::Height(h.0),
+            HashOrHeight::Hash(h) => self
+                .indexer
+                .get_block_height(&snapshot, chain_types::BlockHash(h.0))
+                .await
+                .map_err(|e| StateServiceError::ChainIndexError(e))?
+                .ok_or_else(|| {
+                    StateServiceError::TonicStatusError(tonic::Status::not_found(
+                        "Error: Block not found for given hash.",
+                    ))
+                })?,
+        };
+
+        match self.indexer.get_compact_block(&snapshot, block_height).await {
+            Ok(Some(block)) => Ok(block),
+            Ok(None) => {
+                self.error_get_block(BlockCacheError::Custom("Block not found".to_string()), height as u32)
                     .await
             }
+            Err(e) => Err(StateServiceError::ChainIndexError(e)),
         }
     }
 
