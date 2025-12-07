@@ -369,7 +369,6 @@ pub struct StateServiceSubscriber {
     /// Local compact block cache.
     pub block_cache: BlockCacheSubscriber,
 
-    #[deprecated = "FIXME: the new indexer field should replace the functionality this provided. Remove this file once #677 is done"]
     /// Internal mempool.
     pub mempool: MempoolSubscriber,
 
