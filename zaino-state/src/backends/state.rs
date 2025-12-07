@@ -1995,11 +1995,18 @@ impl LightWalletIndexer for StateServiceSubscriber {
         let snapshot = self.indexer.snapshot_nonfinalized_state();
         let block_height = chain_types::Height(height);
 
-        match self.indexer.get_compact_block(&snapshot, block_height).await {
+        match self
+            .indexer
+            .get_compact_block(&snapshot, block_height)
+            .await
+        {
             Ok(Some(block)) => Ok(compact_block_to_nullifiers(block)),
             Ok(None) => {
-                self.error_get_block(BlockCacheError::Custom("Block not found".to_string()), height)
-                    .await
+                self.error_get_block(
+                    BlockCacheError::Custom("Block not found".to_string()),
+                    height,
+                )
+                .await
             }
             Err(e) => Err(StateServiceError::ChainIndexError(e)),
         }
