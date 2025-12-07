@@ -1988,11 +1988,18 @@ impl LightWalletIndexer for StateServiceSubscriber {
                 })?,
         };
 
-        match self.indexer.get_compact_block(&snapshot, block_height).await {
+        match self
+            .indexer
+            .get_compact_block(&snapshot, block_height)
+            .await
+        {
             Ok(Some(block)) => Ok(block),
             Ok(None) => {
-                self.error_get_block(BlockCacheError::Custom("Block not found".to_string()), height as u32)
-                    .await
+                self.error_get_block(
+                    BlockCacheError::Custom("Block not found".to_string()),
+                    height as u32,
+                )
+                .await
             }
             Err(e) => Err(StateServiceError::ChainIndexError(e)),
         }
