@@ -119,7 +119,6 @@ pub struct StateService {
     /// Local compact block cache.
     block_cache: BlockCache,
 
-    #[deprecated = "FIXME: the new indexer field should replace the functionality this provided. Remove this file once #677 is done"]
     /// Internal mempool.
     mempool: Mempool<ValidatorConnector>,
 
