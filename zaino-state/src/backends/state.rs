@@ -5,7 +5,7 @@ use crate::{
     chain_index::{
         mempool::{Mempool, MempoolSubscriber},
         source::ValidatorConnector,
-        types as chain_types, ChainIndex,
+        types as chain_types, ChainIndex, NonFinalizedSnapshot,
     },
     config::StateServiceConfig,
     error::{BlockCacheError, StateServiceError},
@@ -714,7 +714,8 @@ impl StateServiceSubscriber {
         e: BlockCacheError,
         height: u32,
     ) -> Result<CompactBlock, StateServiceError> {
-        let chain_height = self.block_cache.get_chain_height().await?.0;
+        let snapshot = self.indexer.snapshot_nonfinalized_state();
+        let chain_height = snapshot.best_chaintip().height.0;
         Err(if height >= chain_height {
             StateServiceError::TonicStatusError(tonic::Status::out_of_range(format!(
                 "Error: Height out of range [{height}]. Height requested \
