@@ -3,7 +3,7 @@
 use futures::StreamExt as _;
 use zaino_fetch::jsonrpsee::connector::{test_node_and_return_url, JsonRpSeeConnector};
 use zaino_proto::proto::service::{
-    AddressList, BlockId, BlockRange, Exclude, GetAddressUtxosArg, GetSubtreeRootsArg, PoolType,
+    AddressList, BlockId, BlockRange, GetMempoolTxRequest, GetAddressUtxosArg, GetSubtreeRootsArg, PoolType,
     TransparentAddressBlockFilter, TxFilter,
 };
 use zaino_state::FetchServiceSubscriber;
@@ -1413,8 +1413,8 @@ async fn fetch_service_get_mempool_tx<V: ValidatorExt>(validator: &ValidatorKind
 
     tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
 
-    let exclude_list_empty = Exclude { txid: Vec::new() };
-
+    let exclude_list_empty = GetMempoolTxRequest { exclude_txid_suffixes: Vec::new(), pool_types: Vec::new() };
+    
     let fetch_service_stream = fetch_service_subscriber
         .get_mempool_tx(exclude_list_empty.clone())
         .await
@@ -1438,8 +1438,9 @@ async fn fetch_service_get_mempool_tx<V: ValidatorExt>(validator: &ValidatorKind
     assert_eq!(sorted_fetch_mempool_tx[1].txid, sorted_txids[1]);
     assert_eq!(sorted_fetch_mempool_tx.len(), 2);
 
-    let exclude_list = Exclude {
-        txid: vec![sorted_txids[0][8..].to_vec()],
+    let exclude_list = GetMempoolTxRequest {
+        exclude_txid_suffixes:  vec![sorted_txids[0][8..].to_vec()],
+        pool_types: vec![],
     };
 
     let exclude_fetch_service_stream = fetch_service_subscriber
