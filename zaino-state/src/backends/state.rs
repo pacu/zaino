@@ -16,7 +16,6 @@ use crate::{
     indexer::{
         handle_raw_transaction, IndexerSubscriber, LightWalletIndexer, ZcashIndexer, ZcashService,
     },
-    local_cache::{compact_block_to_nullifiers, BlockCache, BlockCacheSubscriber},
     status::{AtomicStatus, Status, StatusType},
     stream::{
         AddressStream, CompactBlockStream, CompactTransactionStream, RawTransactionStream,
@@ -119,10 +118,6 @@ macro_rules! expected_read_response {
 pub struct StateService {
     /// `ReadeStateService` from Zebra-State.
     read_state_service: ReadStateService,
-
-    #[deprecated = "FIXME: the new indexer field should replace the functionality this provided. Remove this file once #677 is done"]
-    /// Local compact block cache.
-    block_cache: BlockCache,
 
     /// Internal mempool.
     mempool: Mempool<ValidatorConnector>,
@@ -264,13 +259,6 @@ impl ZcashService for StateService {
             }
         }
 
-        let block_cache = BlockCache::spawn(
-            &json_rpc_connector,
-            Some(&read_state_service),
-            config.clone().into(),
-        )
-        .await?;
-
         let mempool_source = ValidatorConnector::State(crate::chain_index::source::State {
             read_state_service: read_state_service.clone(),
             mempool_fetcher: json_rpc_connector.clone(),
@@ -295,7 +283,6 @@ impl ZcashService for StateService {
             read_state_service,
             sync_task_handle: Some(Arc::new(sync_task_handle)),
             rpc_client: json_rpc_connector.clone(),
-            block_cache,
             mempool,
             indexer: chain_index,
             data,
@@ -312,7 +299,6 @@ impl ZcashService for StateService {
         IndexerSubscriber::new(StateServiceSubscriber {
             read_state_service: self.read_state_service.clone(),
             rpc_client: self.rpc_client.clone(),
-            block_cache: self.block_cache.subscriber(),
             mempool: self.mempool.subscriber(),
             indexer: self.indexer.subscriber(),
             data: self.data.clone(),
@@ -346,10 +332,6 @@ impl Drop for StateService {
 pub struct StateServiceSubscriber {
     /// Remote wrappper functionality for zebra's [`ReadStateService`].
     pub read_state_service: ReadStateService,
-
-    #[deprecated = "FIXME: the new indexer field should replace the functionality this provided. Remove this file once #677 is done"]
-    /// Local compact block cache.
-    pub block_cache: BlockCacheSubscriber,
 
     /// Internal mempool.
     pub mempool: MempoolSubscriber,
