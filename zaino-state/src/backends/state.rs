@@ -43,8 +43,8 @@ use zaino_fetch::{
 use zaino_proto::proto::{
     compact_formats::CompactBlock,
     service::{
-        AddressList, Balance, BlockId, BlockRange, GetMempoolTxRequest, GetAddressUtxosArg,
-        GetAddressUtxosReply, GetAddressUtxosReplyList, LightdInfo, PingResponse, RawTransaction,
+        AddressList, Balance, BlockId, BlockRange, GetAddressUtxosArg, GetAddressUtxosReply,
+        GetAddressUtxosReplyList, GetMempoolTxRequest, LightdInfo, PingResponse, RawTransaction,
         SendResponse, TransparentAddressBlockFilter, TreeState, TxFilter,
     },
     utils::{pool_types_from_vector, PoolTypeError, ValidatedBlockRangeRequest},
@@ -2223,12 +2223,15 @@ impl LightWalletIndexer for StateServiceSubscriber {
         request: GetMempoolTxRequest,
     ) -> Result<CompactTransactionStream, Self::Error> {
         let mut exclude_txids: Vec<String> = vec![];
-        
+
         for (i, excluded_id) in request.exclude_txid_suffixes.iter().enumerate() {
             if excluded_id.len() > 32 {
-                return Err(StateServiceError::TonicStatusError(tonic::Status::invalid_argument(
-                    format!("Error: excluded txid {} is larger than 32 bytes", i)
-                )))
+                return Err(StateServiceError::TonicStatusError(
+                    tonic::Status::invalid_argument(format!(
+                        "Error: excluded txid {} is larger than 32 bytes",
+                        i
+                    )),
+                ));
             }
 
             // NOTE: the TransactionHash methods cannot be used for this hex encoding as exclusions could be truncated to less than 32 bytes
@@ -2537,15 +2540,16 @@ impl LightWalletIndexer for StateServiceSubscriber {
         )
         .to_string();
 
-        let nu_info = blockchain_info.upgrades()
-                        .last()
-                        .expect("Expected validator to have a consenus activated.")
-                        .1
-                        .into_parts();
+        let nu_info = blockchain_info
+            .upgrades()
+            .last()
+            .expect("Expected validator to have a consenus activated.")
+            .1
+            .into_parts();
 
         let nu_name = nu_info.0;
         let nu_height = nu_info.1;
-                
+
         Ok(LightdInfo {
             version: self.data.build_info().version(),
             vendor: "ZingoLabs ZainoD".to_string(),
