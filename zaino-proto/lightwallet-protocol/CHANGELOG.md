@@ -36,7 +36,10 @@ and this library adheres to Rust's notion of
 - `service.CompactTxStreamer`:
     - The `GetBlockNullifiers` and `GetBlockRangeNullifiers` methods are
       deprecated.
-
+- `zaino_fetch::FullTransaction::to_compact` deprecated in favor of `to_compact_tx` which includes
+  an optional for index to explicitly specify that the transaction is in the mempool and has no
+  index and `Vec<PoolType>` to filter pool types according to the transparent data changes of
+  lightclient-protocol v0.4.0
 ## [v0.3.6] - 2025-05-20
 
 ### Added

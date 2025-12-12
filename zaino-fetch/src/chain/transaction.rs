@@ -5,9 +5,12 @@ use crate::chain::{
     utils::{read_bytes, read_i64, read_u32, read_u64, skip_bytes, CompactSize, ParseFromSlice},
 };
 use std::io::Cursor;
-use zaino_proto::proto::compact_formats::{
-    CompactOrchardAction, CompactSaplingOutput, CompactSaplingSpend, CompactTx, CompactTxIn,
-    TxOut as CompactTxOut,
+use zaino_proto::proto::{
+    compact_formats::{
+        CompactOrchardAction, CompactSaplingOutput, CompactSaplingSpend, CompactTx, CompactTxIn,
+        TxOut as CompactTxOut,
+    },
+    service::PoolType,
 };
 
 /// Txin format as described in <https://en.bitcoin.it/wiki/Transaction>
@@ -1129,7 +1132,20 @@ impl FullTransaction {
     }
 
     /// Converts a zcash full transaction into a compact transaction.
+    #[deprecated]
     pub fn to_compact(self, index: u64) -> Result<CompactTx, ParseError> {
+        self.to_compact_tx(Some(index), vec![])
+    }
+
+    /// Converts a Zcash Transaction into a `CompactTx` of the Light wallet protocol.
+    /// if the transaction you want to convert is a mempool transaction you can specify `None`.
+    /// specify the `PoolType`s that the transaction should include in the `pool_type` argument.
+    /// a `vec![]` will default to `[PoolType::Sapling, PoolType::Orchard]`.
+    pub fn to_compact_tx(
+        self,
+        index: Option<u64>,
+        pool_types: Vec<PoolType>,
+    ) -> Result<CompactTx, ParseError> {
         let hash = self.tx_id();
 
         // NOTE: LightWalletD currently does not return a fee and is not currently priority here.
@@ -1196,7 +1212,7 @@ impl FullTransaction {
             .collect();
 
         Ok(CompactTx {
-            index,
+            index: index.unwrap_or(0), // this assumes that mempool txs have a zeroed index
             txid: hash,
             fee,
             spends,
