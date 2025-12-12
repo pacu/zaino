@@ -7,7 +7,10 @@ use crate::rpc::GrpcClient;
 use zaino_proto::proto::{
     compact_formats::CompactBlock,
     service::{
-        compact_tx_streamer_server::CompactTxStreamer, Address, AddressList, Balance, BlockId, BlockRange, ChainSpec, Duration, Empty, GetAddressUtxosArg, GetAddressUtxosReplyList, GetMempoolTxRequest, GetSubtreeRootsArg, LightdInfo, PingResponse, RawTransaction, SendResponse, TransparentAddressBlockFilter, TreeState, TxFilter
+        compact_tx_streamer_server::CompactTxStreamer, Address, AddressList, Balance, BlockId,
+        BlockRange, ChainSpec, Duration, Empty, GetAddressUtxosArg, GetAddressUtxosReplyList,
+        GetMempoolTxRequest, GetSubtreeRootsArg, LightdInfo, PingResponse, RawTransaction,
+        SendResponse, TransparentAddressBlockFilter, TreeState, TxFilter,
     },
 };
 use zaino_state::{
