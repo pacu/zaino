@@ -16,10 +16,10 @@ use zaino_fetch::jsonrpsee::response::{
 use zaino_proto::proto::{
     compact_formats::CompactBlock,
     service::{
-        AddressList, Balance, BlockId, BlockRange, Duration, GetMempoolTxRequest, GetAddressUtxosArg,
-        GetAddressUtxosReplyList, GetSubtreeRootsArg, LightdInfo, PingResponse, RawTransaction,
-        SendResponse, ShieldedProtocol, SubtreeRoot, TransparentAddressBlockFilter, TreeState,
-        TxFilter,
+        AddressList, Balance, BlockId, BlockRange, Duration, GetAddressUtxosArg,
+        GetAddressUtxosReplyList, GetMempoolTxRequest, GetSubtreeRootsArg, LightdInfo,
+        PingResponse, RawTransaction, SendResponse, ShieldedProtocol, SubtreeRoot,
+        TransparentAddressBlockFilter, TreeState, TxFilter,
     },
 };
 use zebra_chain::{
