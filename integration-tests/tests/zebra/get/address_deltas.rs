@@ -50,10 +50,11 @@ const EXPECTED_CHAIN_TIP: u32 = 104;
 const HEIGHT_BEYOND_TIP: u32 = 200;
 const NON_EXISTENT_ADDRESS: &str = "tmVqEASZxBNKFTbmASZikGa5fPLkd68iJyx";
 
-#[allow(deprecated)]
-async fn setup_chain(test_manager: &mut TestManager<StateService>) -> (String, String) {
+#[allow(deprecated)] // StateService
+async fn setup_chain<V: ValidatorExt>(
+    test_manager: &mut TestManager<V, StateService>,
+) -> (String, String) {
     let state_service_subscriber = test_manager.service_subscriber.clone().unwrap();
-    
     let mut clients = test_manager
         .clients
         .take()
@@ -64,10 +65,14 @@ async fn setup_chain(test_manager: &mut TestManager<StateService>) -> (String, S
     clients.faucet.sync_and_await().await.unwrap();
 
     // Generate blocks and perform transaction
-    test_manager.generate_blocks_and_poll_indexer(100, &state_service_subscriber).await;
+    test_manager
+        .generate_blocks_and_poll_indexer(100, &state_service_subscriber)
+        .await;
     clients.faucet.sync_and_await().await.unwrap();
     clients.faucet.quick_shield(AccountId::ZERO).await.unwrap();
-    test_manager.generate_blocks_and_poll_indexer(1, &state_service_subscriber).await;
+    test_manager
+        .generate_blocks_and_poll_indexer(1, &state_service_subscriber)
+        .await;
     clients.faucet.sync_and_await().await.unwrap();
 
     from_inputs::quick_send(
@@ -76,7 +81,9 @@ async fn setup_chain(test_manager: &mut TestManager<StateService>) -> (String, S
     )
     .await
     .unwrap();
-    test_manager.generate_blocks_and_poll_indexer(1, &state_service_subscriber).await;
+    test_manager
+        .generate_blocks_and_poll_indexer(1, &state_service_subscriber)
+        .await;
 
     clients.recipient.sync_and_await().await.unwrap();
 
@@ -231,19 +238,20 @@ async fn test_non_existent_address(subscriber: &StateServiceSubscriber) {
 
 #[allow(deprecated)]
 pub(super) async fn main() {
-    let mut test_manager = TestManager::<StateService>::launch(
+    let (
+        mut test_manager,
+        _fetch_service,
+        _fetch_service_subscriber,
+        _state_service,
+        state_service_subscriber,
+    ) = super::create_test_manager_and_services::<Zebrad>(
         &ValidatorKind::Zebrad,
-        &BackendType::State,
-        None,
-        None,
         None,
         true,
-        false,
         true,
+        None,
     )
-    .await
-    .unwrap();
-    let state_service_subscriber = test_manager.service_subscriber.clone().unwrap();
+    .await;
 
     let (recipient_taddr, faucet_taddr) = setup_chain(&mut test_manager).await;
 
