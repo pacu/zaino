@@ -68,8 +68,8 @@ fn make_chain() {
 
 #[derive(Clone)]
 struct ProptestMockchain {
-    genesis_segment: SummaryDebug<Vec<Arc<zebra_chain::block::Block>>>,
-    branching_segments: Vec<SummaryDebug<Vec<Arc<zebra_chain::block::Block>>>>,
+    genesis_segment: ChainSegment,
+    branching_segments: Vec<ChainSegment>,
 }
 
 impl ProptestMockchain {
@@ -297,14 +297,12 @@ impl BlockchainSource for ProptestMockchain {
     }
 }
 
+type ChainSegment = SummaryDebug<Vec<Arc<zebra_chain::block::Block>>>;
 fn make_branching_chain(
     num_branches: usize,
     chain_size: usize,
     network_override: Network,
-) -> BoxedStrategy<(
-    SummaryDebug<Vec<Arc<zebra_chain::block::Block>>>,
-    Vec<SummaryDebug<Vec<Arc<zebra_chain::block::Block>>>>,
-)> {
+) -> BoxedStrategy<(ChainSegment, Vec<ChainSegment>)> {
     let network_override = Some(network_override.to_zebra_network());
     // these feel like they shouldn't be needed. The closure lifetimes are fighting me
     let n_o_clone = network_override.clone();
@@ -344,8 +342,6 @@ fn make_branching_chain(
         .boxed()
 }
 
-type ProptestChainSegment = SummaryDebug<Vec<Arc<zebra_chain::block::Block>>>;
-
 mod proptest_helpers {
 
     use proptest::prelude::{Arbitrary, BoxedStrategy, Strategy};
@@ -358,13 +354,13 @@ mod proptest_helpers {
         LedgerState,
     };
 
-    use super::ProptestChainSegment;
+    use super::ChainSegment;
 
     pub(super) fn add_segment(
-        previous_chain: ProptestChainSegment,
+        previous_chain: ChainSegment,
         network_override: Option<Network>,
         segment_length: usize,
-    ) -> BoxedStrategy<ProptestChainSegment> {
+    ) -> BoxedStrategy<ChainSegment> {
         LedgerState::arbitrary_with(LedgerStateOverride {
             height_override: Some(
                 previous_chain
