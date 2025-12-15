@@ -8483,6 +8483,7 @@ dependencies = [
  "primitive-types 0.13.1",
  "proptest",
  "prost 0.13.5",
+ "rand 0.8.5",
  "reqwest",
  "sapling-crypto",
  "serde",

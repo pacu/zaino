@@ -4,6 +4,7 @@ use proptest::{
     prelude::{Arbitrary as _, BoxedStrategy, Just},
     strategy::Strategy,
 };
+use rand::seq::SliceRandom as _;
 use tonic::async_trait;
 use zaino_common::{network::ActivationHeights, DatabaseConfig, Network, StorageConfig};
 use zebra_chain::{
@@ -25,11 +26,19 @@ use crate::{
 
 #[test]
 fn make_chain() {
-    init_tracing();
+    //    init_tracing();
     let network = Network::Regtest(ActivationHeights::default());
+    // The length of the initial segment, and of the branches
+    // TODO: it would be useful to allow branches of different lengths.
+    let segment_length = 12;
+
+    // The number of separate branches, after the branching point at the tip
+    // of the initial segment.
+    let branch_count = 2;
+
     // default is 256. As each case takes multiple seconds, this seems too many.
     // TODO: this should be higher than 1. Currently set to 1 for ease of iteration
-    proptest::proptest!(proptest::test_runner::Config::with_cases(1), |(segments in make_branching_chain(2, 12, network))| {
+    proptest::proptest!(proptest::test_runner::Config::with_cases(30), |(segments in make_branching_chain(2, segment_length, network))| {
         let runtime = tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_time().build().unwrap();
         runtime.block_on(async {
             let (genesis_segment, branching_segments) = segments;
@@ -59,9 +68,17 @@ fn make_chain() {
             tokio::time::sleep(Duration::from_secs(2)).await;
             let index_reader = indexer.subscriber().await;
             let snapshot = index_reader.snapshot_nonfinalized_state();
-            dbg!(snapshot.best_chaintip());
-            dbg!(snapshot.blocks.len());
-            dbg!(snapshot.heights_to_hashes.len());
+            let best_tip_hash = snapshot.best_chaintip().blockhash;
+            let best_tip_block = snapshot
+                .get_chainblock_by_hash(&best_tip_hash)
+                .unwrap();
+            for (hash, block) in &snapshot.blocks {
+                if hash != &best_tip_hash {
+                    assert!(block.chainwork().to_u256() <= best_tip_block.chainwork().to_u256());
+                }
+            }
+            assert_eq!(snapshot.heights_to_hashes.len(), segment_length * 2);
+            assert_eq!(snapshot.heights_to_hashes.len(), segment_length * (branch_count + 1));
         });
     });
 }
@@ -157,15 +174,20 @@ impl BlockchainSource for ProptestMockchain {
                     })
                     .cloned())
             }
+            // This implementation selects a block from a random branch instead
+            // of the best branch. This is intended to simulate reorgs
             HashOrHeight::Height(height) => Ok(self
                 .genesis_segment
                 .iter()
                 .find(|block| block.coinbase_height().unwrap() == height)
                 .cloned()
                 .or_else(|| {
-                    self.best_branch()
-                        .into_iter()
+                    self.branching_segments
+                        .choose(&mut rand::thread_rng())
+                        .unwrap()
+                        .iter()
                         .find(|block| block.coinbase_height().unwrap() == height)
+                        .cloned()
                 })),
         }
     }
