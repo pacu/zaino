@@ -1592,7 +1592,9 @@ impl ZcashIndexer for StateServiceSubscriber {
     /// method: post
     /// tags: blockchain
     async fn get_block_count(&self) -> Result<Height, Self::Error> {
-        Ok(self.block_cache.get_chain_height().await?)
+        let nfs_snapshot = self.indexer.snapshot_nonfinalized_state();
+        let h = nfs_snapshot.best_tip.height;
+        Ok(h.into())
     }
 
     async fn validate_address(
