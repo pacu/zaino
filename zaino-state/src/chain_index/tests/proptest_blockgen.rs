@@ -229,14 +229,14 @@ impl BlockchainSource for ProptestMockchain {
                                     .as_u128()
                             })
                             .sum::<u128>()
-                            >= chainwork
+                            > chainwork
                     })
                     .collect();
                 println!("prev best chainwork: {chainwork}");
-                *self.best_block.lock().unwrap() = better_blocks
-                    .choose(&mut rand::thread_rng())
-                    .unwrap()
-                    .hash();
+
+                if let Some(block) = better_blocks.choose(&mut rand::thread_rng()) {
+                    *self.best_block.lock().unwrap() = block.hash()
+                }
 
                 self.genesis_segment
                     .iter()

@@ -10,7 +10,7 @@ use primitive_types::U256;
 use std::{collections::HashMap, mem, sync::Arc};
 use tokio::sync::mpsc;
 use tracing::{info, warn};
-use zebra_chain::parameters::Network;
+use zebra_chain::{parameters::Network, serialization::BytesInDisplayOrder};
 use zebra_state::HashOrHeight;
 
 /// Holds the block cache
@@ -44,7 +44,7 @@ pub struct BestTip {
     pub blockhash: BlockHash,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 /// A snapshot of the nonfinalized state as it existed when this was created.
 pub struct NonfinalizedBlockCacheSnapshot {
     /// the set of all known blocks < 100 blocks old
@@ -176,6 +176,16 @@ impl NonfinalizedBlockCacheSnapshot {
             best_tip,
         })
     }
+
+    fn add_block_at_tip(&mut self, block: IndexedBlock) {
+        self.best_tip = BestTip {
+            height: self.best_tip.height + 1,
+            blockhash: *block.hash(),
+        };
+        self.heights_to_hashes
+            .insert(block.height().expect("block to have height"), *block.hash());
+        self.blocks.insert(*block.hash(), block);
+    }
 }
 
 impl<Source: BlockchainSource> NonFinalizedState<Source> {
@@ -287,16 +297,11 @@ impl<Source: BlockchainSource> NonFinalizedState<Source> {
 
     /// sync to the top of the chain, trimming to the finalised tip.
     pub(super) async fn sync(&self, finalized_db: Arc<ZainoDB>) -> Result<(), SyncError> {
-        let initial_state = self.get_snapshot();
+        let mut working_snapshot = self.get_snapshot().as_ref().clone();
         let mut nonbest_blocks = HashMap::new();
 
         // Fetch main chain blocks and handle reorgs
-        let new_blocks = self
-            .fetch_main_chain_blocks(&initial_state, &mut nonbest_blocks)
-            .await?;
-
-        // Stage and update new blocks
-        self.stage_new_blocks(new_blocks, &finalized_db).await?;
+        let new_blocks = self.fetch_main_chain_blocks(&mut working_snapshot).await?;
 
         // Handle non-finalized change listener
         self.handle_nfs_change_listener(&mut nonbest_blocks).await?;
@@ -314,11 +319,9 @@ impl<Source: BlockchainSource> NonFinalizedState<Source> {
     /// Fetch main chain blocks and handle reorgs
     async fn fetch_main_chain_blocks(
         &self,
-        initial_state: &NonfinalizedBlockCacheSnapshot,
-        nonbest_blocks: &mut HashMap<zebra_chain::block::Hash, Arc<zebra_chain::block::Block>>,
-    ) -> Result<Vec<IndexedBlock>, SyncError> {
-        let mut new_blocks = Vec::new();
-        let mut best_tip = initial_state.best_tip;
+        working_snapshot: &mut NonfinalizedBlockCacheSnapshot,
+    ) -> Result<(), SyncError> {
+        let mut best_tip = working_snapshot.best_tip;
 
         // currently this only gets main-chain blocks
         // once readstateservice supports serving sidechain data, this
@@ -342,43 +345,42 @@ impl<Source: BlockchainSource> NonFinalizedState<Source> {
             let parent_hash = BlockHash::from(block.header.previous_block_hash);
             if parent_hash == best_tip.blockhash {
                 // Normal chain progression
-                let prev_block = match new_blocks.last() {
-                    Some(block) => block,
-                    None => initial_state
-                        .blocks
-                        .get(&best_tip.blockhash)
-                        .ok_or_else(|| {
-                            SyncError::ReorgFailure(format!(
-                                "found blocks {:?}, expected block {:?}",
-                                initial_state
-                                    .blocks
-                                    .values()
-                                    .map(|block| (block.index().hash(), block.index().height()))
-                                    .collect::<Vec<_>>(),
-                                best_tip
-                            ))
-                        })?,
-                };
+                let prev_block = working_snapshot
+                    .blocks
+                    .get(&best_tip.blockhash)
+                    .ok_or_else(|| {
+                        SyncError::ReorgFailure(format!(
+                            "found blocks {:?}, expected block {:?}",
+                            working_snapshot
+                                .blocks
+                                .values()
+                                .map(|block| (block.index().hash(), block.index().height()))
+                                .collect::<Vec<_>>(),
+                            best_tip
+                        ))
+                    })?;
                 let chainblock = self.block_to_chainblock(prev_block, &block).await?;
                 info!(
                     "syncing block {} at height {}",
                     &chainblock.index().hash(),
                     best_tip.height + 1
                 );
-                best_tip = BestTip {
-                    height: best_tip.height + 1,
-                    blockhash: *chainblock.hash(),
-                };
-                new_blocks.push(chainblock.clone());
+                working_snapshot.add_block_at_tip(chainblock);
             } else {
-                // Handle reorg
-                info!("Reorg detected at height {}", best_tip.height + 1);
-                best_tip = self.handle_reorg(initial_state, best_tip)?;
-                nonbest_blocks.insert(block.hash(), block);
+                match working_snapshot.blocks.values().find(|b| {
+                    b.hash().bytes_in_display_order()
+                        == block.header.previous_block_hash.bytes_in_display_order()
+                }) {
+                    Some(mut prev_block) => loop {},
+                    None => todo!(
+                        "Keep fetching parent blocks from source \
+                            until we know the parent block"
+                    ),
+                }
             }
         }
 
-        Ok(new_blocks)
+        Ok(())
     }
 
     /// Handle a blockchain reorg by finding the common ancestor
