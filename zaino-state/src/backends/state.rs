@@ -25,6 +25,7 @@ use crate::{
     utils::{blockid_to_hashorheight, get_build_info, ServiceMetadata},
     BackendType, MempoolKey,
 };
+use crate::{error::ChainIndexError, ChainIndex, NodeBackedChainIndex, NodeBackedChainIndexSubscriber, State};
 
 use nonempty::NonEmpty;
 use tokio_stream::StreamExt as _;
@@ -1492,11 +1493,11 @@ impl ZcashIndexer for StateServiceSubscriber {
 
     async fn get_raw_mempool(&self) -> Result<Vec<String>, Self::Error> {
         Ok(self
-            .mempool
-            .get_mempool()
-            .await
+            .indexer
+            .get_mempool_txids()
+            .await?
             .into_iter()
-            .map(|(key, _)| key.txid)
+            .map(|txid| txid.to_string())
             .collect())
     }
 
@@ -1592,7 +1593,9 @@ impl ZcashIndexer for StateServiceSubscriber {
     /// method: post
     /// tags: blockchain
     async fn get_block_count(&self) -> Result<Height, Self::Error> {
-        Ok(self.block_cache.get_chain_height().await?)
+        let nfs_snapshot = self.indexer.snapshot_nonfinalized_state();
+        let h = nfs_snapshot.best_tip.height;
+        Ok(h.into())
     }
 
     async fn validate_address(
