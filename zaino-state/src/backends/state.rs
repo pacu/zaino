@@ -1,10 +1,15 @@
 //! Zcash chain fetch and tx submission service backed by Zebras [`ReadStateService`].
 
+use crate::{
+    chain_index::NonFinalizedSnapshot, error::ChainIndexError, ChainIndex as _,
+    NodeBackedChainIndex, NodeBackedChainIndexSubscriber, State,
+};
 #[allow(deprecated)]
 use crate::{
     chain_index::{
         mempool::{Mempool, MempoolSubscriber},
         source::ValidatorConnector,
+        types as chain_types,
     },
     config::StateServiceConfig,
     error::{BlockCacheError, StateServiceError},
@@ -22,6 +27,7 @@ use crate::{
 };
 use crate::{error::ChainIndexError, ChainIndex, NodeBackedChainIndex, NodeBackedChainIndexSubscriber, State};
 
+use nonempty::NonEmpty;
 use tokio_stream::StreamExt as _;
 use zaino_fetch::{
     chain::{transaction::FullTransaction, utils::ParseFromSlice},
@@ -2336,7 +2342,8 @@ impl LightWalletIndexer for StateServiceSubscriber {
         let mut mempool = self.mempool.clone();
         let service_timeout = self.config.service.timeout;
         let (channel_tx, channel_rx) = mpsc::channel(self.config.service.channel_size as usize);
-        let mempool_height = self.block_cache.get_chain_height().await?.0;
+        let snapshot = self.indexer.snapshot_nonfinalized_state();
+        let mempool_height = snapshot.best_chaintip().height.0;
         tokio::spawn(async move {
             let timeout = timeout(
                 time::Duration::from_secs((service_timeout * 6) as u64),
