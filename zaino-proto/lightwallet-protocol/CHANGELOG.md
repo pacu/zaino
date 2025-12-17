@@ -40,6 +40,13 @@ and this library adheres to Rust's notion of
   an optional for index to explicitly specify that the transaction is in the mempool and has no
   index and `Vec<PoolType>` to filter pool types according to the transparent data changes of
   lightclient-protocol v0.4.0
+- `zaino_fetch::chain::Block::to_compact` deprecated in favor of `to_compact_block` allowing callers
+  to specify `PoolTypeFilter` to filter pools that are included into the compact block according to
+  lightclient-protocol v0.4.0
+- `zaino_fetch::chain::Transaction::to_compact` deprecated in favor of `to_compact_tx` allowing callers
+  to specify `PoolTypFilter` to filter pools that are included into the compact transaction according
+  to lightclient-protocol v0.4.0.
+
 ## [v0.3.6] - 2025-05-20
 
 ### Added

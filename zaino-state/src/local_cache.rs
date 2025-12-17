@@ -23,7 +23,7 @@ use zaino_fetch::{
 };
 use zaino_proto::proto::{
     compact_formats::{ChainMetadata, CompactBlock, CompactOrchardAction},
-    service::PoolType,
+    service::PoolType, utils::PoolTypeFilter,
 };
 use zebra_chain::{
     block::{Hash, Height},
@@ -334,7 +334,7 @@ async fn try_fetcher_path(
                         type_name::<GetBlockError>(),
                     ))
                 })?
-                .into_compact(
+                .into_compact_block(
                     u32::try_from(trees.sapling()).map_err(|e| {
                         RpcRequestError::Transport(TransportError::BadNodeData(
                             Box::new(e),
@@ -347,6 +347,7 @@ async fn try_fetcher_path(
                             type_name::<GetBlockError>(),
                         ))
                     })?,
+                    PoolTypeFilter::default(),
                 )
                 .map_err(|e| {
                     RpcRequestError::Transport(TransportError::BadNodeData(
