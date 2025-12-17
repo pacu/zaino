@@ -347,16 +347,10 @@ impl<Source: BlockchainSource> NonFinalizedState<Source> {
                 );
                 working_snapshot.add_block_at_tip(chainblock);
             } else {
-                match working_snapshot.blocks.values().find(|b| {
-                    b.hash().bytes_in_display_order()
-                        == block.header.previous_block_hash.bytes_in_display_order()
-                }) {
-                    Some(mut prev_block) => loop {},
-                    None => todo!(
-                        "Keep fetching parent blocks from source \
-                            until we know the parent block"
-                    ),
-                }
+                self.handle_reorg(&mut working_snapshot, block.as_ref())?
+                // There's been a reorg. The fresh block is the new chaintip
+                // we need to work backwards from it and update heights_to_hashes
+                // with it and all its parents.
             }
             if initial_state.best_tip.height + 100 < working_snapshot.best_tip.height {
                 self.update(finalized_db.clone(), initial_state, working_snapshot)
@@ -375,34 +369,33 @@ impl<Source: BlockchainSource> NonFinalizedState<Source> {
     /// Handle a blockchain reorg by finding the common ancestor
     fn handle_reorg(
         &self,
-        initial_state: &NonfinalizedBlockCacheSnapshot,
-        current_tip: BestTip,
-    ) -> Result<BestTip, SyncError> {
-        let mut next_height_down = current_tip.height - 1;
-
-        let prev_hash = loop {
-            if next_height_down == Height(0) {
-                return Err(SyncError::ReorgFailure(
-                    "attempted to reorg below chain genesis".to_string(),
-                ));
+        working_snapshot: &mut NonfinalizedBlockCacheSnapshot,
+        block: &impl Block,
+    ) -> Result<(), SyncError> {
+        match working_snapshot
+            .blocks
+            .values()
+            .find(|b| b.hash_bytes_serialized_order() == block.prev_hash_bytes_serialized_order())
+            .cloned()
+        {
+            Some(prev_block) => {
+                if working_snapshot
+                    .heights_to_hashes
+                    .values()
+                    .find(|hash| *hash == prev_block.hash())
+                    .is_some()
+                // The parent hash is in the best chain. We've hit the bottom
+                {
+                    todo!()
+                } else {
+                    self.handle_reorg(working_snapshot, &prev_block)
+                }
             }
-            match initial_state
-                .blocks
-                .values()
-                .find(|block| block.height() == Some(next_height_down))
-                .map(IndexedBlock::hash)
-            {
-                Some(hash) => break hash,
-                // There is a hole in our database.
-                // TODO: An error return may be more appropriate here
-                None => next_height_down = next_height_down - 1,
-            }
-        };
-
-        Ok(BestTip {
-            height: next_height_down,
-            blockhash: *prev_hash,
-        })
+            None => todo!(
+                "Keep fetching parent blocks from source \
+                            until we know the parent block"
+            ),
+        }
     }
 
     /// Handle non-finalized change listener events
@@ -587,4 +580,28 @@ pub enum UpdateError {
     /// Something has gone unrecoverably wrong in the finalized
     /// state. A full rebuild is likely needed
     FinalizedStateCorruption,
+}
+
+trait Block {
+    fn hash_bytes_serialized_order(&self) -> [u8; 32];
+    fn prev_hash_bytes_serialized_order(&self) -> [u8; 32];
+}
+
+impl Block for IndexedBlock {
+    fn hash_bytes_serialized_order(&self) -> [u8; 32] {
+        self.hash().0
+    }
+
+    fn prev_hash_bytes_serialized_order(&self) -> [u8; 32] {
+        self.index.parent_hash.0
+    }
+}
+impl Block for zebra_chain::block::Block {
+    fn hash_bytes_serialized_order(&self) -> [u8; 32] {
+        self.hash().bytes_in_serialized_order()
+    }
+
+    fn prev_hash_bytes_serialized_order(&self) -> [u8; 32] {
+        self.header.previous_block_hash.bytes_in_serialized_order()
+    }
 }
