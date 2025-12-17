@@ -7,7 +7,7 @@ use crate::{
 use arc_swap::ArcSwap;
 use futures::lock::Mutex;
 use primitive_types::U256;
-use std::{collections::HashMap, mem, sync::Arc};
+use std::{collections::HashMap, sync::Arc};
 use tokio::sync::mpsc;
 use tracing::{info, warn};
 use zebra_chain::{parameters::Network, serialization::BytesInDisplayOrder};
@@ -18,8 +18,6 @@ pub struct NonFinalizedState<Source: BlockchainSource> {
     /// We need access to the validator's best block hash, as well
     /// as a source of blocks
     pub(super) source: Source,
-    staged: Mutex<mpsc::Receiver<IndexedBlock>>,
-    staging_sender: mpsc::Sender<IndexedBlock>,
     /// This lock should not be exposed to consumers. Rather,
     /// clone the Arc and offer that. This means we can overwrite the arc
     /// without interfering with readers, who will hold a stale copy
@@ -130,23 +128,6 @@ pub enum InitError {
     InitalBlockMissingHeight,
 }
 
-/// Staging infrastructure for block processing
-struct StagingChannel {
-    receiver: Mutex<mpsc::Receiver<IndexedBlock>>,
-    sender: mpsc::Sender<IndexedBlock>,
-}
-
-impl StagingChannel {
-    /// Create new staging channel with the given buffer size
-    fn new(buffer_size: usize) -> Self {
-        let (sender, receiver) = mpsc::channel(buffer_size);
-        Self {
-            receiver: Mutex::new(receiver),
-            sender,
-        }
-    }
-}
-
 /// This is the core of the concurrent block cache.
 impl BestTip {
     /// Create a BestTip from an IndexedBlock
@@ -186,6 +167,10 @@ impl NonfinalizedBlockCacheSnapshot {
             .insert(block.height().expect("block to have height"), *block.hash());
         self.blocks.insert(*block.hash(), block);
     }
+
+    fn remove_finalized_blocks(&self, finalized_height: Height) {
+        todo!()
+    }
 }
 
 impl<Source: BlockchainSource> NonFinalizedState<Source> {
@@ -201,9 +186,6 @@ impl<Source: BlockchainSource> NonFinalizedState<Source> {
     ) -> Result<Self, InitError> {
         info!("Initialising non-finalised state.");
 
-        // Set up staging channel for block processing
-        let staging_channel = StagingChannel::new(100);
-
         // Resolve the initial block (provided or genesis)
         let initial_block = Self::resolve_initial_block(&source, &network, start_block).await?;
 
@@ -215,8 +197,6 @@ impl<Source: BlockchainSource> NonFinalizedState<Source> {
 
         Ok(Self {
             source,
-            staged: staging_channel.receiver,
-            staging_sender: staging_channel.sender,
             current: ArcSwap::new(Arc::new(snapshot)),
             network,
             nfs_change_listener,
@@ -297,21 +277,21 @@ impl<Source: BlockchainSource> NonFinalizedState<Source> {
 
     /// sync to the top of the chain, trimming to the finalised tip.
     pub(super) async fn sync(&self, finalized_db: Arc<ZainoDB>) -> Result<(), SyncError> {
-        let mut working_snapshot = self.get_snapshot().as_ref().clone();
+        let initial_state = self.get_snapshot();
+        let working_snapshot = initial_state.as_ref().clone();
         let mut nonbest_blocks = HashMap::new();
 
         // Fetch main chain blocks and handle reorgs
-        let new_blocks = self.fetch_main_chain_blocks(&mut working_snapshot).await?;
+        let new_blocks = self
+            .fetch_main_chain_blocks(
+                finalized_db.clone(),
+                initial_state.clone(),
+                working_snapshot,
+            )
+            .await?;
 
         // Handle non-finalized change listener
         self.handle_nfs_change_listener(&mut nonbest_blocks).await?;
-
-        // Update finalized state
-        self.update(finalized_db.clone()).await?;
-
-        // Process non-best chain blocks
-        self.process_nonbest_blocks(nonbest_blocks, &finalized_db)
-            .await?;
 
         Ok(())
     }
@@ -319,10 +299,10 @@ impl<Source: BlockchainSource> NonFinalizedState<Source> {
     /// Fetch main chain blocks and handle reorgs
     async fn fetch_main_chain_blocks(
         &self,
-        working_snapshot: &mut NonfinalizedBlockCacheSnapshot,
+        finalized_db: Arc<ZainoDB>,
+        mut initial_state: Arc<NonfinalizedBlockCacheSnapshot>,
+        mut working_snapshot: NonfinalizedBlockCacheSnapshot,
     ) -> Result<(), SyncError> {
-        let mut best_tip = working_snapshot.best_tip;
-
         // currently this only gets main-chain blocks
         // once readstateservice supports serving sidechain data, this
         // must be rewritten to match
@@ -332,7 +312,7 @@ impl<Source: BlockchainSource> NonFinalizedState<Source> {
         while let Some(block) = self
             .source
             .get_block(HashOrHeight::Height(zebra_chain::block::Height(
-                u32::from(best_tip.height) + 1,
+                u32::from(working_snapshot.best_tip.height) + 1,
             )))
             .await
             .map_err(|e| {
@@ -343,11 +323,11 @@ impl<Source: BlockchainSource> NonFinalizedState<Source> {
             })?
         {
             let parent_hash = BlockHash::from(block.header.previous_block_hash);
-            if parent_hash == best_tip.blockhash {
+            if parent_hash == working_snapshot.best_tip.blockhash {
                 // Normal chain progression
                 let prev_block = working_snapshot
                     .blocks
-                    .get(&best_tip.blockhash)
+                    .get(&working_snapshot.best_tip.blockhash)
                     .ok_or_else(|| {
                         SyncError::ReorgFailure(format!(
                             "found blocks {:?}, expected block {:?}",
@@ -356,14 +336,14 @@ impl<Source: BlockchainSource> NonFinalizedState<Source> {
                                 .values()
                                 .map(|block| (block.index().hash(), block.index().height()))
                                 .collect::<Vec<_>>(),
-                            best_tip
+                            working_snapshot.best_tip
                         ))
                     })?;
                 let chainblock = self.block_to_chainblock(prev_block, &block).await?;
                 info!(
                     "syncing block {} at height {}",
                     &chainblock.index().hash(),
-                    best_tip.height + 1
+                    working_snapshot.best_tip.height + 1
                 );
                 working_snapshot.add_block_at_tip(chainblock);
             } else {
@@ -378,7 +358,16 @@ impl<Source: BlockchainSource> NonFinalizedState<Source> {
                     ),
                 }
             }
+            if initial_state.best_tip.height + 100 < working_snapshot.best_tip.height {
+                self.update(finalized_db.clone(), initial_state, working_snapshot)
+                    .await?;
+                initial_state = self.current.load_full();
+                working_snapshot = initial_state.as_ref().clone();
+            }
         }
+
+        self.update(finalized_db.clone(), initial_state, working_snapshot)
+            .await?;
 
         Ok(())
     }
@@ -414,23 +403,6 @@ impl<Source: BlockchainSource> NonFinalizedState<Source> {
             height: next_height_down,
             blockhash: *prev_hash,
         })
-    }
-
-    /// Stage new blocks and update the cache
-    async fn stage_new_blocks(
-        &self,
-        new_blocks: Vec<IndexedBlock>,
-        finalized_db: &Arc<ZainoDB>,
-    ) -> Result<(), SyncError> {
-        for block in new_blocks {
-            if let Err(e) = self
-                .sync_stage_update_loop(block, finalized_db.clone())
-                .await
-            {
-                return Err(e.into());
-            }
-        }
-        Ok(())
     }
 
     /// Handle non-finalized change listener events
@@ -470,119 +442,13 @@ impl<Source: BlockchainSource> NonFinalizedState<Source> {
         Ok(())
     }
 
-    /// Process non-best chain blocks iteratively
-    async fn process_nonbest_blocks(
-        &self,
-        mut nonbest_blocks: HashMap<zebra_chain::block::Hash, Arc<zebra_chain::block::Block>>,
-        finalized_db: &Arc<ZainoDB>,
-    ) -> Result<(), SyncError> {
-        let mut nonbest_chainblocks = HashMap::new();
-
-        loop {
-            let (next_up, later): (Vec<_>, Vec<_>) = nonbest_blocks
-                .into_iter()
-                .map(|(hash, block)| {
-                    let prev_hash =
-                        crate::chain_index::types::BlockHash(block.header.previous_block_hash.0);
-                    (
-                        hash,
-                        block,
-                        self.current
-                            .load()
-                            .blocks
-                            .get(&prev_hash)
-                            .or_else(|| nonbest_chainblocks.get(&prev_hash))
-                            .cloned(),
-                    )
-                })
-                .partition(|(_hash, _block, prev_block)| prev_block.is_some());
-
-            if next_up.is_empty() {
-                // Only store non-best chain blocks
-                // if we have a path from them
-                // to the chain
-                break;
-            }
-
-            for (_hash, block, parent_block) in next_up {
-                let chainblock = self
-                    .block_to_chainblock(
-                        &parent_block.expect("partitioned, known to be some"),
-                        &block,
-                    )
-                    .await?;
-                nonbest_chainblocks.insert(*chainblock.hash(), chainblock);
-            }
-            nonbest_blocks = later
-                .into_iter()
-                .map(|(hash, block, _parent_block)| (hash, block))
-                .collect();
-        }
-
-        for block in nonbest_chainblocks.into_values() {
-            if let Err(e) = self
-                .sync_stage_update_loop(block, finalized_db.clone())
-                .await
-            {
-                return Err(e.into());
-            }
-        }
-        Ok(())
-    }
-
-    async fn sync_stage_update_loop(
-        &self,
-        block: IndexedBlock,
-        finalized_db: Arc<ZainoDB>,
-    ) -> Result<(), UpdateError> {
-        if let Err(e) = self.stage(block.clone()) {
-            match *e {
-                mpsc::error::TrySendError::Full(_) => {
-                    self.update(finalized_db.clone()).await?;
-                    Box::pin(self.sync_stage_update_loop(block, finalized_db)).await?;
-                }
-                mpsc::error::TrySendError::Closed(_block) => {
-                    return Err(UpdateError::ReceiverDisconnected)
-                }
-            }
-        }
-        Ok(())
-    }
-
-    /// Stage a block
-    fn stage(
-        &self,
-        block: IndexedBlock,
-    ) -> Result<(), Box<mpsc::error::TrySendError<IndexedBlock>>> {
-        self.staging_sender.try_send(block).map_err(Box::new)
-    }
-
     /// Add all blocks from the staging area, and save a new cache snapshot, trimming block below the finalised tip.
-    async fn update(&self, finalized_db: Arc<ZainoDB>) -> Result<(), UpdateError> {
-        let mut new = HashMap::<BlockHash, IndexedBlock>::new();
-        let mut staged = self.staged.lock().await;
-        loop {
-            match staged.try_recv() {
-                Ok(chain_block) => {
-                    new.insert(*chain_block.index().hash(), chain_block);
-                }
-                Err(mpsc::error::TryRecvError::Empty) => break,
-                Err(mpsc::error::TryRecvError::Disconnected) => {
-                    return Err(UpdateError::ReceiverDisconnected)
-                }
-            }
-        }
-        // at this point, we've collected everything in the staging area
-        // we can drop the stage lock, and more blocks can be staged while we finish setting current
-        mem::drop(staged);
-        let snapshot = self.get_snapshot();
-        new.extend(
-            snapshot
-                .blocks
-                .iter()
-                .map(|(hash, block)| (*hash, block.clone())),
-        );
-
+    async fn update(
+        &self,
+        finalized_db: Arc<ZainoDB>,
+        initial_state: Arc<NonfinalizedBlockCacheSnapshot>,
+        new_snapshot: NonfinalizedBlockCacheSnapshot,
+    ) -> Result<(), UpdateError> {
         let finalized_height = finalized_db
             .to_reader()
             .db_height()
@@ -590,43 +456,16 @@ impl<Source: BlockchainSource> NonFinalizedState<Source> {
             .map_err(|_e| UpdateError::FinalizedStateCorruption)?
             .unwrap_or(Height(0));
 
-        let (_finalized_blocks, blocks): (HashMap<_, _>, HashMap<BlockHash, _>) = new
-            .into_iter()
-            .partition(|(_hash, block)| match block.index().height() {
-                Some(height) => height < finalized_height,
-                None => false,
-            });
-
-        let best_tip = blocks.iter().fold(snapshot.best_tip, |acc, (hash, block)| {
-            match block.index().height() {
-                Some(working_height) if working_height > acc.height => BestTip {
-                    height: working_height,
-                    blockhash: *hash,
-                },
-                _ => acc,
-            }
-        });
-
-        let heights_to_hashes = blocks
-            .iter()
-            .filter_map(|(hash, chainblock)| {
-                chainblock.index().height().map(|height| (height, *hash))
-            })
-            .collect();
+        new_snapshot.remove_finalized_blocks(finalized_height);
 
         // Need to get best hash at some point in this process
-        let stored = self.current.compare_and_swap(
-            &snapshot,
-            Arc::new(NonfinalizedBlockCacheSnapshot {
-                blocks,
-                heights_to_hashes,
-                best_tip,
-            }),
-        );
+        let stored = self
+            .current
+            .compare_and_swap(&initial_state, Arc::new(new_snapshot));
 
-        if Arc::ptr_eq(&stored, &snapshot) {
-            let stale_best_tip = snapshot.best_tip;
-            let new_best_tip = best_tip;
+        if Arc::ptr_eq(&stored, &initial_state) {
+            let stale_best_tip = initial_state.best_tip;
+            let new_best_tip = stored.best_tip;
 
             // Log chain tip change
             if new_best_tip != stale_best_tip {
