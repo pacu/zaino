@@ -7,7 +7,6 @@ use crate::{
 use arc_swap::ArcSwap;
 use futures::lock::Mutex;
 use primitive_types::U256;
-use serde::Serializer;
 use std::{collections::HashMap, sync::Arc};
 use tokio::sync::mpsc;
 use tracing::{info, warn};
@@ -173,9 +172,7 @@ impl NonfinalizedBlockCacheSnapshot {
             height: block.height().expect("all blocks have height"),
             blockhash: *block.hash(),
         };
-        self.heights_to_hashes
-            .insert(block.height().expect("block to have height"), *block.hash());
-        self.blocks.insert(*block.hash(), block);
+        self.add_block(block)
     }
 
     fn get_block_by_hash_bytes_in_serialized_order(&self, hash: [u8; 32]) -> Option<&IndexedBlock> {
@@ -184,8 +181,19 @@ impl NonfinalizedBlockCacheSnapshot {
             .find(|block| block.hash_bytes_serialized_order() == hash)
     }
 
-    fn remove_finalized_blocks(&self, finalized_height: Height) {
-        todo!()
+    fn remove_finalized_blocks(&mut self, finalized_height: Height) {
+        // Keep the last finalized block. This means we don't have to check
+        // the finalized state when the entire non-finalized state is reorged away.
+        self.blocks
+            .retain(|_hash, block| block.height().unwrap() >= finalized_height);
+        self.heights_to_hashes
+            .retain(|height, _hash| height >= &finalized_height);
+    }
+
+    fn add_block(&mut self, block: IndexedBlock) {
+        self.heights_to_hashes
+            .insert(block.height().expect("block to have height"), *block.hash());
+        self.blocks.insert(*block.hash(), block);
     }
 }
 
@@ -293,32 +301,9 @@ impl<Source: BlockchainSource> NonFinalizedState<Source> {
 
     /// sync to the top of the chain, trimming to the finalised tip.
     pub(super) async fn sync(&self, finalized_db: Arc<ZainoDB>) -> Result<(), SyncError> {
-        let initial_state = self.get_snapshot();
-        let working_snapshot = initial_state.as_ref().clone();
-        let mut nonbest_blocks = HashMap::new();
+        let mut initial_state = self.get_snapshot();
+        let mut working_snapshot = initial_state.as_ref().clone();
 
-        // Fetch main chain blocks and handle reorgs
-        let new_blocks = self
-            .fetch_main_chain_blocks(
-                finalized_db.clone(),
-                initial_state.clone(),
-                working_snapshot,
-            )
-            .await?;
-
-        // Handle non-finalized change listener
-        self.handle_nfs_change_listener(&mut nonbest_blocks).await?;
-
-        Ok(())
-    }
-
-    /// Fetch main chain blocks and handle reorgs
-    async fn fetch_main_chain_blocks(
-        &self,
-        finalized_db: Arc<ZainoDB>,
-        mut initial_state: Arc<NonfinalizedBlockCacheSnapshot>,
-        mut working_snapshot: NonfinalizedBlockCacheSnapshot,
-    ) -> Result<(), SyncError> {
         // currently this only gets main-chain blocks
         // once readstateservice supports serving sidechain data, this
         // must be rewritten to match
@@ -376,6 +361,9 @@ impl<Source: BlockchainSource> NonFinalizedState<Source> {
                 working_snapshot = initial_state.as_ref().clone();
             }
         }
+        // Handle non-finalized change listener
+        self.handle_nfs_change_listener(&mut working_snapshot)
+            .await?;
 
         self.update(finalized_db.clone(), initial_state, working_snapshot)
             .await?;
@@ -435,7 +423,7 @@ impl<Source: BlockchainSource> NonFinalizedState<Source> {
     /// Handle non-finalized change listener events
     async fn handle_nfs_change_listener(
         &self,
-        nonbest_blocks: &mut HashMap<zebra_chain::block::Hash, Arc<zebra_chain::block::Block>>,
+        working_snapshot: &mut NonfinalizedBlockCacheSnapshot,
     ) -> Result<(), SyncError> {
         let Some(ref listener) = self.nfs_change_listener else {
             return Ok(());
@@ -455,7 +443,7 @@ impl<Source: BlockchainSource> NonFinalizedState<Source> {
                         .blocks
                         .contains_key(&types::BlockHash(hash.0))
                     {
-                        nonbest_blocks.insert(block.hash(), block);
+                        self.add_nonbest_block(working_snapshot, &*block).await?;
                     }
                 }
                 Err(mpsc::error::TryRecvError::Empty) => break,
@@ -474,7 +462,7 @@ impl<Source: BlockchainSource> NonFinalizedState<Source> {
         &self,
         finalized_db: Arc<ZainoDB>,
         initial_state: Arc<NonfinalizedBlockCacheSnapshot>,
-        new_snapshot: NonfinalizedBlockCacheSnapshot,
+        mut new_snapshot: NonfinalizedBlockCacheSnapshot,
     ) -> Result<(), UpdateError> {
         let finalized_height = finalized_db
             .to_reader()
@@ -600,6 +588,43 @@ impl<Source: BlockchainSource> NonFinalizedState<Source> {
 
         let block_with_metadata = BlockWithMetadata::new(block, metadata);
         IndexedBlock::try_from(block_with_metadata)
+    }
+
+    async fn add_nonbest_block(
+        &self,
+        working_snapshot: &mut NonfinalizedBlockCacheSnapshot,
+        block: &impl Block,
+    ) -> Result<IndexedBlock, SyncError> {
+        let prev_block = match working_snapshot
+            .get_block_by_hash_bytes_in_serialized_order(block.prev_hash_bytes_serialized_order())
+            .cloned()
+        {
+            Some(block) => block,
+            None => {
+                let prev_block = self
+                    .source
+                    .get_block(HashOrHeight::Hash(
+                        zebra_chain::block::Hash::from_bytes_in_serialized_order(
+                            block.prev_hash_bytes_serialized_order(),
+                        ),
+                    ))
+                    .await
+                    .map_err(|e| {
+                        SyncError::ZebradConnectionError(NodeConnectionError::UnrecoverableError(
+                            Box::new(e),
+                        ))
+                    })?
+                    .ok_or(SyncError::ZebradConnectionError(
+                        NodeConnectionError::UnrecoverableError(Box::new(MissingBlockError(
+                            "zebrad missing block".to_string(),
+                        ))),
+                    ))?;
+                Box::pin(self.add_nonbest_block(working_snapshot, &*prev_block)).await?
+            }
+        };
+        let indexed_block = block.to_indexed_block(&prev_block, self).await?;
+        working_snapshot.add_block(indexed_block.clone());
+        Ok(indexed_block)
     }
 }
 
