@@ -7,6 +7,7 @@ use crate::{
 use arc_swap::ArcSwap;
 use futures::lock::Mutex;
 use primitive_types::U256;
+use serde::Serializer;
 use std::{collections::HashMap, sync::Arc};
 use tokio::sync::mpsc;
 use tracing::{info, warn};
@@ -73,6 +74,17 @@ pub enum NodeConnectionError {
 }
 
 #[derive(Debug)]
+struct MissingBlockError(String);
+
+impl std::fmt::Display for MissingBlockError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "missing block: {}", self.0)
+    }
+}
+
+impl std::error::Error for MissingBlockError {}
+
+#[derive(Debug)]
 /// An error occurred during sync of the NonFinalized State.
 pub enum SyncError {
     /// The backing validator node returned corrupt, invalid, or incomplete data
@@ -85,9 +97,7 @@ pub enum SyncError {
     /// Sync has been called multiple times in parallel, or another process has
     /// written to the block snapshot.
     CompetingSyncProcess,
-    /// Sync attempted a reorg, and something went wrong. Currently, this
-    /// only happens when we attempt to reorg below the start of the chain,
-    /// indicating an entirely separate regtest/testnet chain to what we expected
+    /// Sync attempted a reorg, and something went wrong.
     ReorgFailure(String),
     /// UnrecoverableFinalizedStateError
     CannotReadFinalizedState,
@@ -158,14 +168,20 @@ impl NonfinalizedBlockCacheSnapshot {
         })
     }
 
-    fn add_block_at_tip(&mut self, block: IndexedBlock) {
+    fn add_block_new_chaintip(&mut self, block: IndexedBlock) {
         self.best_tip = BestTip {
-            height: self.best_tip.height + 1,
+            height: block.height().expect("all blocks have height"),
             blockhash: *block.hash(),
         };
         self.heights_to_hashes
             .insert(block.height().expect("block to have height"), *block.hash());
         self.blocks.insert(*block.hash(), block);
+    }
+
+    fn get_block_by_hash_bytes_in_serialized_order(&self, hash: [u8; 32]) -> Option<&IndexedBlock> {
+        self.blocks
+            .values()
+            .find(|block| block.hash_bytes_serialized_order() == hash)
     }
 
     fn remove_finalized_blocks(&self, finalized_height: Height) {
@@ -345,9 +361,10 @@ impl<Source: BlockchainSource> NonFinalizedState<Source> {
                     &chainblock.index().hash(),
                     working_snapshot.best_tip.height + 1
                 );
-                working_snapshot.add_block_at_tip(chainblock);
+                working_snapshot.add_block_new_chaintip(chainblock);
             } else {
-                self.handle_reorg(&mut working_snapshot, block.as_ref())?
+                self.handle_reorg(&mut working_snapshot, block.as_ref())
+                    .await?;
                 // There's been a reorg. The fresh block is the new chaintip
                 // we need to work backwards from it and update heights_to_hashes
                 // with it and all its parents.
@@ -367,15 +384,13 @@ impl<Source: BlockchainSource> NonFinalizedState<Source> {
     }
 
     /// Handle a blockchain reorg by finding the common ancestor
-    fn handle_reorg(
+    async fn handle_reorg(
         &self,
         working_snapshot: &mut NonfinalizedBlockCacheSnapshot,
         block: &impl Block,
-    ) -> Result<(), SyncError> {
-        match working_snapshot
-            .blocks
-            .values()
-            .find(|b| b.hash_bytes_serialized_order() == block.prev_hash_bytes_serialized_order())
+    ) -> Result<IndexedBlock, SyncError> {
+        let prev_block = match working_snapshot
+            .get_block_by_hash_bytes_in_serialized_order(block.prev_hash_bytes_serialized_order())
             .cloned()
         {
             Some(prev_block) => {
@@ -383,19 +398,38 @@ impl<Source: BlockchainSource> NonFinalizedState<Source> {
                     .heights_to_hashes
                     .values()
                     .find(|hash| *hash == prev_block.hash())
-                    .is_some()
-                // The parent hash is in the best chain. We've hit the bottom
+                    .is_none()
                 {
-                    todo!()
+                    Box::pin(self.handle_reorg(working_snapshot, &prev_block)).await?
                 } else {
-                    self.handle_reorg(working_snapshot, &prev_block)
+                    prev_block
                 }
             }
-            None => todo!(
-                "Keep fetching parent blocks from source \
-                            until we know the parent block"
-            ),
-        }
+            None => {
+                let prev_block = self
+                    .source
+                    .get_block(HashOrHeight::Hash(
+                        zebra_chain::block::Hash::from_bytes_in_serialized_order(
+                            block.prev_hash_bytes_serialized_order(),
+                        ),
+                    ))
+                    .await
+                    .map_err(|e| {
+                        SyncError::ZebradConnectionError(NodeConnectionError::UnrecoverableError(
+                            Box::new(e),
+                        ))
+                    })?
+                    .ok_or(SyncError::ZebradConnectionError(
+                        NodeConnectionError::UnrecoverableError(Box::new(MissingBlockError(
+                            "zebrad missing block in best chain".to_string(),
+                        ))),
+                    ))?;
+                Box::pin(self.handle_reorg(working_snapshot, &*prev_block)).await?
+            }
+        };
+        let indexed_block = block.to_indexed_block(&prev_block, self).await?;
+        working_snapshot.add_block_new_chaintip(indexed_block.clone());
+        Ok(indexed_block)
     }
 
     /// Handle non-finalized change listener events
@@ -585,6 +619,11 @@ pub enum UpdateError {
 trait Block {
     fn hash_bytes_serialized_order(&self) -> [u8; 32];
     fn prev_hash_bytes_serialized_order(&self) -> [u8; 32];
+    async fn to_indexed_block<Source: BlockchainSource>(
+        &self,
+        prev_block: &IndexedBlock,
+        nfs: &NonFinalizedState<Source>,
+    ) -> Result<IndexedBlock, SyncError>;
 }
 
 impl Block for IndexedBlock {
@@ -595,6 +634,14 @@ impl Block for IndexedBlock {
     fn prev_hash_bytes_serialized_order(&self) -> [u8; 32] {
         self.index.parent_hash.0
     }
+
+    async fn to_indexed_block<Source: BlockchainSource>(
+        &self,
+        _prev_block: &IndexedBlock,
+        _nfs: &NonFinalizedState<Source>,
+    ) -> Result<IndexedBlock, SyncError> {
+        Ok(self.clone())
+    }
 }
 impl Block for zebra_chain::block::Block {
     fn hash_bytes_serialized_order(&self) -> [u8; 32] {
@@ -603,5 +650,13 @@ impl Block for zebra_chain::block::Block {
 
     fn prev_hash_bytes_serialized_order(&self) -> [u8; 32] {
         self.header.previous_block_hash.bytes_in_serialized_order()
+    }
+
+    async fn to_indexed_block<Source: BlockchainSource>(
+        &self,
+        prev_block: &IndexedBlock,
+        nfs: &NonFinalizedState<Source>,
+    ) -> Result<IndexedBlock, SyncError> {
+        nfs.block_to_chainblock(prev_block, self).await
     }
 }
