@@ -384,11 +384,9 @@ impl<Source: BlockchainSource> NonFinalizedState<Source> {
             .cloned()
         {
             Some(prev_block) => {
-                if working_snapshot
+                if !working_snapshot
                     .heights_to_hashes
-                    .values()
-                    .find(|hash| *hash == prev_block.hash())
-                    .is_none()
+                    .values().any(|hash| hash == prev_block.hash())
                 {
                     Box::pin(self.handle_reorg(working_snapshot, &prev_block)).await?
                 } else {
