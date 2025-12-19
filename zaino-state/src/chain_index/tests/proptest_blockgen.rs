@@ -80,6 +80,11 @@ fn make_chain() {
             for (hash, block) in &snapshot.blocks {
                 if hash != &best_tip_hash {
                     assert!(block.chainwork().to_u256() <= best_tip_block.chainwork().to_u256());
+                    if snapshot.heights_to_hashes.values().find(|h| block.hash() == *h).is_some() {
+                        assert_eq!(index_reader.find_fork_point(&snapshot, hash).unwrap().unwrap().0, *hash);
+                    } else {
+                        assert_ne!(index_reader.find_fork_point(&snapshot, hash).unwrap().unwrap().0, *hash);
+                    }
                 }
             }
             assert_eq!(snapshot.heights_to_hashes.len(), segment_length * 2);
