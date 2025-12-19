@@ -187,7 +187,7 @@ async fn fetch_service_get_raw_mempool<V: ValidatorExt>(validator: &ValidatorKin
 
     let json_service = JsonRpSeeConnector::new_with_basic_auth(
         test_node_and_return_url(
-            test_manager.full_node_rpc_listen_address,
+            &test_manager.full_node_rpc_listen_address.to_string(),
             None,
             Some("xxxxxx".to_string()),
             Some("xxxxxx".to_string()),
@@ -618,7 +618,7 @@ async fn fetch_service_get_latest_block<V: ValidatorExt>(validator: &ValidatorKi
 
     let json_service = JsonRpSeeConnector::new_with_basic_auth(
         test_node_and_return_url(
-            test_manager.full_node_rpc_listen_address,
+            &test_manager.full_node_rpc_listen_address.to_string(),
             None,
             Some("xxxxxx".to_string()),
             Some("xxxxxx".to_string()),
@@ -662,7 +662,7 @@ async fn assert_fetch_service_difficulty_matches_rpc<V: ValidatorExt>(validator:
 
     let jsonrpc_client = JsonRpSeeConnector::new_with_basic_auth(
         test_node_and_return_url(
-            test_manager.full_node_rpc_listen_address,
+            &test_manager.full_node_rpc_listen_address.to_string(),
             None,
             Some("xxxxxx".to_string()),
             Some("xxxxxx".to_string()),
@@ -691,7 +691,7 @@ async fn assert_fetch_service_mininginfo_matches_rpc<V: ValidatorExt>(validator:
 
     let jsonrpc_client = JsonRpSeeConnector::new_with_basic_auth(
         test_node_and_return_url(
-            test_manager.full_node_rpc_listen_address,
+            &test_manager.full_node_rpc_listen_address.to_string(),
             None,
             Some("xxxxxx".to_string()),
             Some("xxxxxx".to_string()),
@@ -720,7 +720,7 @@ async fn assert_fetch_service_peerinfo_matches_rpc<V: ValidatorExt>(validator: &
 
     let jsonrpc_client = JsonRpSeeConnector::new_with_basic_auth(
         test_node_and_return_url(
-            test_manager.full_node_rpc_listen_address,
+            &test_manager.full_node_rpc_listen_address.to_string(),
             None,
             Some("xxxxxx".to_string()),
             Some("xxxxxx".to_string()),
@@ -774,7 +774,7 @@ async fn fetch_service_get_block_subsidy<V: ValidatorExt>(validator: &ValidatorK
 
         let jsonrpc_client = JsonRpSeeConnector::new_with_basic_auth(
             test_node_and_return_url(
-                test_manager.full_node_rpc_listen_address,
+                &test_manager.full_node_rpc_listen_address.to_string(),
                 None,
                 Some("xxxxxx".to_string()),
                 Some("xxxxxx".to_string()),
@@ -857,7 +857,7 @@ async fn fetch_service_get_block_header<V: ValidatorExt>(validator: &ValidatorKi
 
         let jsonrpc_client = JsonRpSeeConnector::new_with_basic_auth(
             test_node_and_return_url(
-                test_manager.full_node_rpc_listen_address,
+                &test_manager.full_node_rpc_listen_address.to_string(),
                 None,
                 Some("xxxxxx".to_string()),
                 Some("xxxxxx".to_string()),
@@ -1746,7 +1746,7 @@ async fn assert_fetch_service_getnetworksols_matches_rpc<V: ValidatorExt>(
 
     let jsonrpc_client = JsonRpSeeConnector::new_with_basic_auth(
         test_node_and_return_url(
-            test_manager.full_node_rpc_listen_address,
+            &test_manager.full_node_rpc_listen_address.to_string(),
             None,
             Some("xxxxxx".to_string()),
             Some("xxxxxx".to_string()),
@@ -1908,7 +1908,7 @@ mod zcashd {
 
             let jsonrpc_client = JsonRpSeeConnector::new_with_basic_auth(
                 test_node_and_return_url(
-                    test_manager.full_node_rpc_listen_address,
+                    &test_manager.full_node_rpc_listen_address.to_string(),
                     None,
                     Some("xxxxxx".to_string()),
                     Some("xxxxxx".to_string()),
