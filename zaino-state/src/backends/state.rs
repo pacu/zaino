@@ -25,7 +25,6 @@ use crate::{
     utils::{blockid_to_hashorheight, get_build_info, ServiceMetadata},
     BackendType, MempoolKey,
 };
-use crate::{error::ChainIndexError, ChainIndex, NodeBackedChainIndex, NodeBackedChainIndexSubscriber, State};
 
 use nonempty::NonEmpty;
 use tokio_stream::StreamExt as _;
