@@ -634,8 +634,8 @@ pub struct BlockIndex {
     pub parent_hash: BlockHash,
     /// The cumulative proof-of-work of the blockchain up to this block, used for chain selection.
     pub chainwork: ChainWork,
-    /// The height of this block if it's in the current best chain. None if it's part of a fork.
-    pub height: Option<Height>,
+    /// The height of this block.
+    pub height: Height,
 }
 
 impl BlockIndex {
@@ -644,7 +644,7 @@ impl BlockIndex {
         hash: BlockHash,
         parent_hash: BlockHash,
         chainwork: ChainWork,
-        height: Option<Height>,
+        height: Height,
     ) -> Self {
         Self {
             hash,
@@ -670,7 +670,7 @@ impl BlockIndex {
     }
 
     /// Returns the height of this block if it’s part of the best chain.
-    pub fn height(&self) -> Option<Height> {
+    pub fn height(&self) -> Height {
         self.height
     }
 }
@@ -685,7 +685,7 @@ impl ZainoVersionedSerde for BlockIndex {
         self.parent_hash.serialize(&mut w)?;
         self.chainwork.serialize(&mut w)?;
 
-        write_option(&mut w, &self.height, |w, h| h.serialize(w))
+        write_option(&mut w, &Some(self.height), |w, h| h.serialize(w))
     }
 
     fn decode_latest<R: Read>(r: &mut R) -> io::Result<Self> {
@@ -699,7 +699,12 @@ impl ZainoVersionedSerde for BlockIndex {
         let chainwork = ChainWork::deserialize(&mut r)?;
         let height = read_option(&mut r, |r| Height::deserialize(r))?;
 
-        Ok(BlockIndex::new(hash, parent_hash, chainwork, height))
+        Ok(BlockIndex::new(
+            hash,
+            parent_hash,
+            chainwork,
+            height.expect("blocks always have height"),
+        ))
     }
 }
 
@@ -1132,7 +1137,7 @@ impl IndexedBlock {
     }
 
     /// Returns the block height if available.
-    pub fn height(&self) -> Option<Height> {
+    pub fn height(&self) -> Height {
         self.index.height()
     }
 
@@ -1149,7 +1154,7 @@ impl IndexedBlock {
     /// Converts this `IndexedBlock` into a CompactBlock protobuf message using proto v4 format.
     pub fn to_compact_block(&self) -> zaino_proto::proto::compact_formats::CompactBlock {
         // NOTE: Returns u64::MAX if the block is not in the best chain.
-        let height: u64 = self.height().map(|h| h.0.into()).unwrap_or(u64::MAX);
+        let height: u64 = self.height().0.into();
 
         let hash = self.hash().0.to_vec();
         let prev_hash = self.index().parent_hash().0.to_vec();
@@ -1344,7 +1349,7 @@ impl
             BlockHash::from(hash),
             BlockHash::from(parent_hash),
             chainwork,
-            Some(height),
+            height,
         );
 
         Ok(IndexedBlock::new(

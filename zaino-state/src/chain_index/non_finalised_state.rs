@@ -108,6 +108,9 @@ impl From<UpdateError> for SyncError {
             UpdateError::ReceiverDisconnected => SyncError::StagingChannelClosed,
             UpdateError::StaleSnapshot => SyncError::CompetingSyncProcess,
             UpdateError::FinalizedStateCorruption => SyncError::CannotReadFinalizedState,
+            UpdateError::DatabaseHole => {
+                SyncError::ReorgFailure(String::from("could not determine best chain"))
+            }
         }
     }
 }
@@ -141,7 +144,7 @@ pub enum InitError {
 impl BestTip {
     /// Create a BestTip from an IndexedBlock
     fn from_block(block: &IndexedBlock) -> Result<Self, InitError> {
-        let height = block.height().ok_or(InitError::InitalBlockMissingHeight)?;
+        let height = block.height();
         let blockhash = *block.hash();
         Ok(Self { height, blockhash })
     }
@@ -169,7 +172,7 @@ impl NonfinalizedBlockCacheSnapshot {
 
     fn add_block_new_chaintip(&mut self, block: IndexedBlock) {
         self.best_tip = BestTip {
-            height: block.height().expect("all blocks have height"),
+            height: block.height(),
             blockhash: *block.hash(),
         };
         self.add_block(block)
@@ -185,14 +188,13 @@ impl NonfinalizedBlockCacheSnapshot {
         // Keep the last finalized block. This means we don't have to check
         // the finalized state when the entire non-finalized state is reorged away.
         self.blocks
-            .retain(|_hash, block| block.height().unwrap() >= finalized_height);
+            .retain(|_hash, block| block.height() >= finalized_height);
         self.heights_to_hashes
             .retain(|height, _hash| height >= &finalized_height);
     }
 
     fn add_block(&mut self, block: IndexedBlock) {
-        self.heights_to_hashes
-            .insert(block.height().expect("block to have height"), *block.hash());
+        self.heights_to_hashes.insert(block.height(), *block.hash());
         self.blocks.insert(*block.hash(), block);
     }
 }
@@ -472,6 +474,15 @@ impl<Source: BlockchainSource> NonFinalizedState<Source> {
             .unwrap_or(Height(0));
 
         new_snapshot.remove_finalized_blocks(finalized_height);
+        let best_block = &new_snapshot
+            .blocks
+            .values()
+            .max_by_key(|block| block.chainwork())
+            .cloned()
+            .expect("empty snapshot impossible");
+        self.handle_reorg(&mut new_snapshot, best_block)
+            .await
+            .map_err(|_e| UpdateError::DatabaseHole)?;
 
         // Need to get best hash at some point in this process
         let stored = self
@@ -639,6 +650,9 @@ pub enum UpdateError {
     /// Something has gone unrecoverably wrong in the finalized
     /// state. A full rebuild is likely needed
     FinalizedStateCorruption,
+
+    /// A block in the snapshot is missing
+    DatabaseHole,
 }
 
 trait Block {
