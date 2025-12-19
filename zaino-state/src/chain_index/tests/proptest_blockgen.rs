@@ -25,7 +25,6 @@ use crate::{
 };
 
 #[test]
-#[ignore = "Failing due to sync reorg bugs"]
 fn make_chain() {
     init_tracing();
     let network = Network::Regtest(ActivationHeights::default());
