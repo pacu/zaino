@@ -3,12 +3,11 @@ use std::{
     time::Duration,
 };
 
-use primitive_types::U256;
 use proptest::{
     prelude::{Arbitrary as _, BoxedStrategy, Just},
     strategy::Strategy,
 };
-use rand::{seq::SliceRandom, thread_rng};
+use rand::seq::SliceRandom;
 use tonic::async_trait;
 use zaino_common::{network::ActivationHeights, DatabaseConfig, Network, StorageConfig};
 use zebra_chain::{
@@ -81,7 +80,7 @@ fn make_chain() {
             for (hash, block) in &snapshot.blocks {
                 if hash != &best_tip_hash {
                     assert!(block.chainwork().to_u256() <= best_tip_block.chainwork().to_u256());
-                    if snapshot.heights_to_hashes.values().find(|h| block.hash() == *h).is_some() {
+                    if snapshot.heights_to_hashes.values().any(|h| block.hash() == h) {
                         assert_eq!(index_reader.find_fork_point(&snapshot, hash).unwrap().unwrap().0, *hash);
                     } else {
                         assert_ne!(index_reader.find_fork_point(&snapshot, hash).unwrap().unwrap().0, *hash);
@@ -254,8 +253,7 @@ impl BlockchainSource for ProptestMockchain {
                             .find(|branch| {
                                 branch
                                     .iter()
-                                    .find(|block| block.hash() == *self.best_block.lock().unwrap())
-                                    .is_some()
+                                    .any(|block| block.hash() == *self.best_block.lock().unwrap())
                             })
                             .unwrap()
                             .iter()
@@ -380,13 +378,13 @@ impl BlockchainSource for ProptestMockchain {
     > {
         let (sender, receiver) = tokio::sync::mpsc::channel(1_000);
         let self_clone = self.clone();
-        tokio::task::spawn((|| async move {
+        tokio::task::spawn(async move {
             for block in self_clone.all_blocks_arb_branch_order() {
                 sender.send((block.hash(), block.clone())).await.unwrap()
             }
             // don't drop the sender
             std::mem::forget(sender);
-        })())
+        })
         .await
         .unwrap();
         Ok(Some(receiver))
