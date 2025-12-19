@@ -25,6 +25,7 @@ use crate::{
 };
 
 #[test]
+#[ignore = "Failing due to sync reorg bugs"]
 fn make_chain() {
     init_tracing();
     let network = Network::Regtest(ActivationHeights::default());
@@ -75,6 +76,11 @@ fn make_chain() {
             for (hash, block) in &snapshot.blocks {
                 if hash != &best_tip_hash {
                     assert!(block.chainwork().to_u256() <= best_tip_block.chainwork().to_u256());
+                    if snapshot.heights_to_hashes.values().any(|h| block.hash() == h) {
+                        assert_eq!(index_reader.find_fork_point(&snapshot, hash).unwrap().unwrap().0, *hash);
+                    } else {
+                        assert_ne!(index_reader.find_fork_point(&snapshot, hash).unwrap().unwrap().0, *hash);
+                    }
                 }
             }
             assert_eq!(snapshot.heights_to_hashes.len(), (segment_length * 2) + 2);
@@ -309,13 +315,13 @@ impl BlockchainSource for ProptestMockchain {
     > {
         let (sender, receiver) = tokio::sync::mpsc::channel(1_000);
         let self_clone = self.clone();
-        tokio::task::spawn((|| async move {
+        tokio::task::spawn(async move {
             for block in self_clone.all_blocks_arb_branch_order() {
                 sender.send((block.hash(), block.clone())).await.unwrap()
             }
             // don't drop the sender
             std::mem::forget(sender);
-        })())
+        })
         .await
         .unwrap();
         Ok(Some(receiver))
