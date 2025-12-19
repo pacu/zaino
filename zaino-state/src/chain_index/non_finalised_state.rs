@@ -673,7 +673,6 @@ impl<Source: BlockchainSource> NonFinalizedState<Source> {
             .get_tree_roots_from_source(block.hash().into())
             .await
             .map_err(|e| {
-                dbg!(&e);
                 SyncError::ZebradConnectionError(NodeConnectionError::UnrecoverableError(Box::new(
                     InvalidData(format!("{}", e)),
                 )))
@@ -686,7 +685,6 @@ impl<Source: BlockchainSource> NonFinalizedState<Source> {
             self.network.clone(),
         )
         .map_err(|e| {
-            dbg!(&e);
             SyncError::ZebradConnectionError(NodeConnectionError::UnrecoverableError(Box::new(
                 InvalidData(e),
             )))
