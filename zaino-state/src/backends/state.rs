@@ -9,7 +9,7 @@ use crate::{
     chain_index::{
         mempool::{Mempool, MempoolSubscriber},
         source::ValidatorConnector,
-        types as chain_types,
+        types as chain_types, ChainIndex,
     },
     config::StateServiceConfig,
     error::{BlockCacheError, StateServiceError},
@@ -1966,26 +1966,29 @@ impl LightWalletIndexer for StateServiceSubscriber {
     /// Same as GetBlock except actions contain only nullifiers,
     /// and saling outputs are not returned (Sapling spends still are)
     async fn get_block_nullifiers(&self, request: BlockId) -> Result<CompactBlock, Self::Error> {
-        let height: u32 = match request.height.try_into() {
-            Ok(height) => height,
-            Err(_) => {
-                return Err(StateServiceError::TonicStatusError(
-                    tonic::Status::invalid_argument(
-                        "Error: Height out of range. Failed to convert to u32.",
-                    ),
-                ));
-            }
-        };
+        let height: u32 = request.height.try_into().map_err(|_| {
+            StateServiceError::TonicStatusError(tonic::Status::invalid_argument(
+                "Error: Height out of range. Failed to convert to u32.",
+            ))
+        })?;
+
+        let snapshot = self.indexer.snapshot_nonfinalized_state();
+        let block_height = chain_types::Height(height);
+
         match self
-            .block_cache
-            .get_compact_block_nullifiers(height.to_string())
+            .indexer
+            .get_compact_block(&snapshot, block_height)
             .await
         {
-            Ok(block) => Ok(block),
-            Err(e) => {
-                self.error_get_block(BlockCacheError::Custom(e.to_string()), height)
-                    .await
+            Ok(Some(block)) => Ok(compact_block_to_nullifiers(block)),
+            Ok(None) => {
+                self.error_get_block(
+                    BlockCacheError::Custom("Block not found".to_string()),
+                    height,
+                )
+                .await
             }
+            Err(e) => Err(StateServiceError::ChainIndexError(e)),
         }
     }
 
