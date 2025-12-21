@@ -17,7 +17,7 @@ use crate::{
         handle_raw_transaction, IndexerSubscriber, LightWalletIndexer, ZcashIndexer, ZcashService,
     },
     local_cache::{compact_block_to_nullifiers, BlockCache, BlockCacheSubscriber},
-    status::{AtomicStatus, StatusType},
+    status::{AtomicStatus, Status, StatusType},
     stream::{
         AddressStream, CompactBlockStream, CompactTransactionStream, RawTransactionStream,
         UtxoReplyStream,
@@ -86,7 +86,7 @@ use chrono::{DateTime, Utc};
 use futures::{TryFutureExt as _, TryStreamExt as _};
 use hex::{FromHex as _, ToHex};
 use indexmap::IndexMap;
-use std::{collections::HashSet, error::Error, fmt, future::poll_fn, str::FromStr, sync::Arc};
+use std::{collections::HashSet, error::Error, fmt, str::FromStr, sync::Arc};
 use tokio::{
     sync::mpsc,
     time::{self, timeout},
@@ -150,33 +150,22 @@ pub struct StateService {
     status: AtomicStatus,
 }
 
-// #[allow(deprecated)]
 impl StateService {
-    /// Uses poll_ready to update the status of the `ReadStateService`.
-    async fn fetch_status_from_validator(&self) -> StatusType {
-        let mut read_state_service = self.read_state_service.clone();
-        poll_fn(|cx| match read_state_service.poll_ready(cx) {
-            std::task::Poll::Ready(Ok(())) => {
-                self.status.store(StatusType::Ready);
-                std::task::Poll::Ready(StatusType::Ready)
-            }
-            std::task::Poll::Ready(Err(e)) => {
-                eprintln!("Service readiness error: {e:?}");
-                self.status.store(StatusType::CriticalError);
-                std::task::Poll::Ready(StatusType::CriticalError)
-            }
-            std::task::Poll::Pending => {
-                self.status.store(StatusType::Busy);
-                std::task::Poll::Pending
-            }
-        })
-        .await
-    }
-
     #[cfg(feature = "test_dependencies")]
     /// Helper for tests
     pub fn read_state_service(&self) -> &ReadStateService {
         &self.read_state_service
+    }
+}
+
+impl Status for StateService {
+    fn status(&self) -> StatusType {
+        let current_status = self.status.load();
+        if current_status == StatusType::Closing {
+            current_status
+        } else {
+            self.indexer.status()
+        }
     }
 }
 
@@ -332,19 +321,6 @@ impl ZcashService for StateService {
         })
     }
 
-    /// Returns the StateService's Status.
-    ///
-    /// We first check for `status = StatusType::Closing` as this signifies a shutdown order
-    /// from an external process.
-    async fn status(&self) -> StatusType {
-        let current_status = self.status.load();
-        if current_status == StatusType::Closing {
-            current_status
-        } else {
-            self.fetch_status_from_validator().await
-        }
-    }
-
     /// Shuts down the StateService.
     fn close(&mut self) {
         if self.sync_task_handle.is_some() {
@@ -393,6 +369,12 @@ pub struct StateServiceSubscriber {
 
     /// Service metadata.
     pub data: ServiceMetadata,
+}
+
+impl Status for StateServiceSubscriber {
+    fn status(&self) -> StatusType {
+        self.indexer.status()
+    }
 }
 
 /// A subscriber to any chaintip updates
@@ -1953,17 +1935,10 @@ impl ZcashIndexer for StateServiceSubscriber {
 impl LightWalletIndexer for StateServiceSubscriber {
     /// Return the height of the tip of the best chain
     async fn get_latest_block(&self) -> Result<BlockId, Self::Error> {
-        let mut state = self.read_state_service.clone();
-        let response = state
-            .ready()
-            .and_then(|service| service.call(ReadRequest::Tip))
-            .await?;
-        let (chain_height, chain_hash) = expected_read_response!(response, Tip).ok_or(
-            RpcError::new_from_legacycode(LegacyCode::Misc, "no blocks in chain"),
-        )?;
+        let tip = self.indexer.snapshot_nonfinalized_state().best_tip;
         Ok(BlockId {
-            height: chain_height.as_usize() as u64,
-            hash: chain_hash.0.to_vec(),
+            height: tip.height.0 as u64,
+            hash: tip.blockhash.0.to_vec(),
         })
     }
 

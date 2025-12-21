@@ -56,7 +56,7 @@ use crate::{
     indexer::{
         handle_raw_transaction, IndexerSubscriber, LightWalletIndexer, ZcashIndexer, ZcashService,
     },
-    status::StatusType,
+    status::{Status, StatusType},
     stream::{
         AddressStream, CompactBlockStream, CompactTransactionStream, RawTransactionStream,
         UtxoReplyStream,
@@ -90,6 +90,13 @@ pub struct FetchService {
     /// StateService config data.
     #[allow(deprecated)]
     config: FetchServiceConfig,
+}
+
+#[allow(deprecated)]
+impl Status for FetchService {
+    fn status(&self) -> StatusType {
+        self.indexer.status()
+    }
 }
 
 #[async_trait]
@@ -133,7 +140,7 @@ impl ZcashService for FetchService {
             config,
         };
 
-        while fetch_service.status().await != StatusType::Ready {
+        while fetch_service.status() != StatusType::Ready {
             tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
         }
 
@@ -148,11 +155,6 @@ impl ZcashService for FetchService {
             data: self.data.clone(),
             config: self.config.clone(),
         })
-    }
-
-    /// Fetches the current status
-    async fn status(&self) -> StatusType {
-        self.indexer.status()
     }
 
     /// Shuts down the StateService.
@@ -189,9 +191,16 @@ pub struct FetchServiceSubscriber {
     config: FetchServiceConfig,
 }
 
+impl Status for FetchServiceSubscriber {
+    fn status(&self) -> StatusType {
+        self.indexer.status()
+    }
+}
+
 impl FetchServiceSubscriber {
     /// Fetches the current status
-    pub fn status(&self) -> StatusType {
+    #[deprecated(note = "Use the Status trait method instead")]
+    pub fn get_status(&self) -> StatusType {
         self.indexer.status()
     }
 
@@ -688,7 +697,7 @@ impl LightWalletIndexer for FetchServiceSubscriber {
     /// Return the height of the tip of the best chain
     async fn get_latest_block(&self) -> Result<BlockId, Self::Error> {
         let tip = self.indexer.snapshot_nonfinalized_state().best_tip;
-        dbg!(&tip);
+        // dbg!(&tip);
 
         Ok(BlockId {
             height: tip.height.0 as u64,
