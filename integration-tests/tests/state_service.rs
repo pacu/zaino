@@ -1905,10 +1905,10 @@ mod zebra {
 
     pub(crate) mod lightwallet_indexer {
         use futures::StreamExt as _;
-        use zaino_proto::proto::service::{
+        use zaino_proto::proto::{service::{
             AddressList, BlockId, BlockRange, GetAddressUtxosArg, GetSubtreeRootsArg, PoolType,
             TxFilter,
-        };
+        }, utils::pool_types_into_i32_vec};
         use zebra_rpc::methods::{GetAddressTxIdsRequest, GetBlock};
 
         use super::*;
@@ -2533,5 +2533,78 @@ mod zebra {
                 state_service_taddress_balance
             );
         }
-    }
+        
+        #[tokio::test(flavor = "multi_thread")]
+        async fn gat_transparent_data_from_compact_block_when_requested() {
+            let (
+                mut test_manager,
+                _fetch_service,
+                fetch_service_subscriber,
+                _state_service,
+                state_service_subscriber,
+            ) = create_test_manager_and_services::<Zebrad>(
+                &ValidatorKind::Zebrad,
+                None,
+                true,
+                true,
+                Some(NetworkKind::Regtest),
+            )
+            .await;
+
+            let clients = test_manager.clients.take().unwrap();
+            let taddr = clients.get_faucet_address("transparent").await;
+            generate_blocks_and_poll_all_chain_indexes(
+                5,
+                &test_manager,
+                fetch_service_subscriber.clone(),
+                state_service_subscriber.clone(),
+            )
+            .await;
+
+            let state_service_taddress_balance = state_service_subscriber
+                .get_taddress_balance(AddressList {
+                    addresses: vec![taddr.clone()],
+                })
+                .await
+                .unwrap();
+            let fetch_service_taddress_balance = fetch_service_subscriber
+                .get_taddress_balance(AddressList {
+                    addresses: vec![taddr],
+                })
+                .await
+                .unwrap();
+            assert_eq!(
+                fetch_service_taddress_balance,
+                state_service_taddress_balance
+            );
+
+            let compact_block_range = state_service_subscriber.get_block_range(
+                    BlockRange {
+                        start: None,
+                        end: None,
+                        pool_types: pool_types_into_i32_vec(
+                            [
+                                PoolType::Transparent,
+                                PoolType::Sapling,
+                                PoolType::Orchard
+                            ].to_vec()
+                        )
+                    }
+                )
+                .await
+                .unwrap()
+                .map(Result::unwrap)
+                .collect::<Vec<_>>()
+                .await;         
+
+            for cb in compact_block_range.into_iter() {
+                for tx in cb.vtx {
+                    // first transaction of a block is coinbase
+                    assert!(tx.vin.first().unwrap().prevout_txid.is_empty());
+                    // script pub key of this transaction is not empty
+                    assert!(!tx.vout.first().unwrap().script_pub_key.is_empty());
+                }
+            }            
+        }
+    }    
 }
