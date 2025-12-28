@@ -43,7 +43,7 @@ use zaino_fetch::{
 use zaino_proto::proto::{
     compact_formats::CompactBlock,
     service::{
-        AddressList, Balance, BlockId, BlockRange, Exclude, GetAddressUtxosArg,
+        AddressList, Balance, BlockId, BlockRange, GetMempoolTxRequest, GetAddressUtxosArg,
         GetAddressUtxosReply, GetAddressUtxosReplyList, LightdInfo, PingResponse, RawTransaction,
         SendResponse, TransparentAddressBlockFilter, TreeState, TxFilter,
     },
@@ -2220,16 +2220,22 @@ impl LightWalletIndexer for StateServiceSubscriber {
     /// in the exclude list that don't exist in the mempool are ignored.
     async fn get_mempool_tx(
         &self,
-        request: Exclude,
+        request: GetMempoolTxRequest,
     ) -> Result<CompactTransactionStream, Self::Error> {
-        let exclude_txids: Vec<String> = request
-            .txid
-            .iter()
-            .map(|txid_bytes| {
-                let reversed_txid_bytes: Vec<u8> = txid_bytes.iter().cloned().rev().collect();
-                hex::encode(&reversed_txid_bytes)
-            })
-            .collect();
+        let mut exclude_txids: Vec<String> = vec![];
+        
+        for (i, excluded_id) in request.exclude_txid_suffixes.iter().enumerate() {
+            if excluded_id.len() > 32 {
+                return Err(StateServiceError::TonicStatusError(tonic::Status::invalid_argument(
+                    format!("Error: excluded txid {} is larger than 32 bytes", i)
+                )))
+            }
+
+            // NOTE: the TransactionHash methods cannot be used for this hex encoding as exclusions could be truncated to less than 32 bytes
+            let reversed_txid_bytes: Vec<u8> = excluded_id.iter().cloned().rev().collect();
+            let hex_string_txid: String = hex::encode(&reversed_txid_bytes);
+            exclude_txids.push(hex_string_txid);
+        }
 
         let mempool = self.mempool.clone();
         let service_timeout = self.config.service.timeout;
@@ -2531,6 +2537,15 @@ impl LightWalletIndexer for StateServiceSubscriber {
         )
         .to_string();
 
+        let nu_info = blockchain_info.upgrades()
+                        .last()
+                        .expect("Expected validator to have a consenus activated.")
+                        .1
+                        .into_parts();
+
+        let nu_name = nu_info.0;
+        let nu_height = nu_info.1;
+                
         Ok(LightdInfo {
             version: self.data.build_info().version(),
             vendor: "ZingoLabs ZainoD".to_string(),
@@ -2546,8 +2561,10 @@ impl LightWalletIndexer for StateServiceSubscriber {
             estimated_height: blockchain_info.estimated_height().0 as u64,
             zcashd_build: self.data.zebra_build(),
             zcashd_subversion: self.data.zebra_subversion(),
-            // TODO: support donation addresses see https://github.com/zingolabs/zaino/issues/626
             donation_address: "".to_string(),
+            upgrade_name: nu_name.to_string(),
+            upgrade_height: nu_height.0 as u64,
+            lightwallet_protocol_version: "v0.4.0".to_string(),
         })
     }
 
