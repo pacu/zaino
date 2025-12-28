@@ -40,7 +40,7 @@ use zaino_fetch::{
 use zaino_proto::proto::{
     compact_formats::CompactBlock,
     service::{
-        AddressList, Balance, BlockId, BlockRange, Duration, Exclude, GetAddressUtxosArg,
+        AddressList, Balance, BlockId, BlockRange, Duration, GetMempoolTxRequest, GetAddressUtxosArg,
         GetAddressUtxosReply, GetAddressUtxosReplyList, LightdInfo, PingResponse, RawTransaction,
         SendResponse, TransparentAddressBlockFilter, TreeState, TxFilter,
     },
@@ -1177,30 +1177,39 @@ impl LightWalletIndexer for FetchServiceSubscriber {
         }
     }
 
-    /// Return the compact transactions currently in the mempool; the results
-    /// can be a few seconds out of date. If the Exclude list is empty, return
-    /// all transactions; otherwise return all *except* those in the Exclude list
-    /// (if any); this allows the client to avoid receiving transactions that it
-    /// already has (from an earlier call to this rpc). The transaction IDs in the
-    /// Exclude list can be shortened to any number of bytes to make the request
-    /// more bandwidth-efficient; if two or more transactions in the mempool
-    /// match a shortened txid, they are all sent (none is excluded). Transactions
-    /// in the exclude list that don't exist in the mempool are ignored.
+    /// Returns a stream of the compact transaction representation for transactions
+    /// currently in the mempool. The results of this operation may be a few
+    /// seconds out of date. If the `exclude_txid_suffixes` list is empty,
+    /// return all transactions; otherwise return all *except* those in the
+    /// `exclude_txid_suffixes` list (if any); this allows the client to avoid
+    /// receiving transactions that it already has (from an earlier call to this
+    /// RPC). The transaction IDs in the `exclude_txid_suffixes` list can be
+    /// shortened to any number of bytes to make the request more
+    /// bandwidth-efficient; if two or more transactions in the mempool match a
+    /// txid suffix, none of the matching transactions are excluded. Txid
+    /// suffixes in the exclude list that don't match any transactions in the
+    /// mempool are ignored.
     #[allow(deprecated)]
     async fn get_mempool_tx(
         &self,
-        request: Exclude,
+        request: GetMempoolTxRequest,
     ) -> Result<CompactTransactionStream, Self::Error> {
-        let exclude_txids: Vec<String> = request
-            .txid
-            .iter()
-            .map(|txid_bytes| {
-                // NOTE: the TransactionHash methods cannot be used for this hex encoding as exclusions could be truncated to less than 32 bytes
-                let reversed_txid_bytes: Vec<u8> = txid_bytes.iter().cloned().rev().collect();
-                hex::encode(&reversed_txid_bytes)
-            })
-            .collect();
 
+        let mut exclude_txids: Vec<String> = vec![];
+        
+        for (i, excluded_id) in request.exclude_txid_suffixes.iter().enumerate() {
+            if excluded_id.len() > 32 {
+                return Err(FetchServiceError::TonicStatusError(tonic::Status::invalid_argument(
+                    format!("Error: excluded txid {} is larger than 32 bytes", i)
+                )))
+            }
+
+            // NOTE: the TransactionHash methods cannot be used for this hex encoding as exclusions could be truncated to less than 32 bytes
+            let reversed_txid_bytes: Vec<u8> = excluded_id.iter().cloned().rev().collect();
+            let hex_string_txid: String = hex::encode(&reversed_txid_bytes);
+            exclude_txids.push(hex_string_txid);
+        }
+        
         let mempool = self.mempool.clone();
         let service_timeout = self.config.service.timeout;
         let (channel_tx, channel_rx) = mpsc::channel(self.config.service.channel_size as usize);
@@ -1593,6 +1602,7 @@ impl LightWalletIndexer for FetchServiceSubscriber {
                 })?
                 .into(),
         );
+        
         let sapling_activation_height = blockchain_info
             .upgrades()
             .get(&sapling_id)
@@ -1603,6 +1613,15 @@ impl LightWalletIndexer for FetchServiceSubscriber {
         )
         .to_string();
 
+        let nu_info = blockchain_info.upgrades()
+                        .last()
+                        .expect("Expected validator to have a consenus activated.")
+                        .1
+                        .into_parts();
+
+        let nu_name = nu_info.0;
+        let nu_height = nu_info.1;
+                
         Ok(LightdInfo {
             version: self.data.build_info().version(),
             vendor: "ZingoLabs ZainoD".to_string(),
@@ -1619,6 +1638,9 @@ impl LightWalletIndexer for FetchServiceSubscriber {
             zcashd_build: self.data.zebra_build(),
             zcashd_subversion: self.data.zebra_subversion(),
             donation_address: "".to_string(),
+            upgrade_name: nu_name.to_string(),
+            upgrade_height: nu_height.0 as u64,
+            lightwallet_protocol_version: "v0.4.0".to_string(),
         })
     }
 
