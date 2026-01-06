@@ -828,15 +828,20 @@ impl<Source: BlockchainSource> ChainIndex for NodeBackedChainIndexSubscriber<Sou
             .blocks_containing_transaction(snapshot, txid.0)
             .await?
             .collect::<Vec<_>>();
+        let start_of_nonfinalized = snapshot.heights_to_hashes.keys().min().unwrap();
         let mut best_chain_block = blocks_containing_transaction
             .iter()
-            .find(|block| snapshot.heights_to_hashes.get(&block.height()) == Some(block.hash()))
+            .find(|block| {
+                snapshot.heights_to_hashes.get(&block.height()) == Some(block.hash())
+                    || block.height() < *start_of_nonfinalized
+            })
             .map(|block| BestChainLocation::Block(*block.hash(), block.height()));
         let mut non_best_chain_blocks: HashSet<NonBestChainLocation> =
             blocks_containing_transaction
                 .iter()
                 .filter(|block| {
                     snapshot.heights_to_hashes.get(&block.height()) != Some(block.hash())
+                        && block.height() >= *start_of_nonfinalized
                 })
                 .map(|block| NonBestChainLocation::Block(*block.hash(), block.height()))
                 .collect();
