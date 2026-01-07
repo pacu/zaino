@@ -122,34 +122,21 @@ impl ZainodConfig {
         let validator_addr_result =
             try_resolve_address(&self.validator_settings.validator_jsonrpc_listen_address);
 
+        // Validator address validation:
+        // - Resolved IPs: must be private (RFC1918/ULA)
+        // - Hostnames: validated at connection time (supports Docker/K8s service discovery)
+        // - Cookie auth: determined by validator_cookie_path config, not enforced by address type
         match validator_addr_result {
             AddressResolution::Resolved(validator_addr) => {
-                // Successfully resolved - perform full IP-based validation.
                 if !is_private_listen_addr(&validator_addr) {
                     return Err(IndexerError::ConfigError(
                         "Zaino may only connect to Zebra with private IP addresses.".to_string(),
                     ));
                 }
-
-                #[cfg(not(feature = "no_tls_use_unencrypted_traffic"))]
-                {
-                    // Require cookie auth for non-loopback addresses.
-                    if !is_loopback_listen_addr(&validator_addr)
-                        && self.validator_settings.validator_cookie_path.is_none()
-                    {
-                        return Err(IndexerError::ConfigError(
-                            "Validator listen address is not loopback, so cookie authentication must be enabled."
-                                .to_string(),
-                        ));
-                    }
-                }
             }
             AddressResolution::UnresolvedHostname { ref address, .. } => {
-                // Valid hostname format but DNS lookup failed (e.g., Docker DNS).
-                // Allow this - IP validation will happen at connection time.
                 info!(
-                    "Validator address '{}' is a hostname that cannot be resolved at config time. \
-                     IP validation deferred to connection time.",
+                    "Validator address '{}' cannot be resolved at config time.",
                     address
                 );
             }
@@ -275,18 +262,6 @@ pub(crate) fn is_private_listen_addr(addr: &SocketAddr) -> bool {
     match ip {
         IpAddr::V4(ipv4) => ipv4.is_private() || ipv4.is_loopback(),
         IpAddr::V6(ipv6) => ipv6.is_unique_local() || ip.is_loopback(),
-    }
-}
-
-/// Validates that the configured `address` is a loopback address.
-///
-/// Returns `Ok(BindAddress)` if valid.
-#[cfg_attr(feature = "no_tls_use_unencrypted_traffic", allow(dead_code))]
-pub(crate) fn is_loopback_listen_addr(addr: &SocketAddr) -> bool {
-    let ip = addr.ip();
-    match ip {
-        IpAddr::V4(ipv4) => ipv4.is_loopback(),
-        IpAddr::V6(ipv6) => ipv6.is_loopback(),
     }
 }
 
@@ -1016,6 +991,80 @@ mod test {
             } else {
                 panic!("Expected ConfigError, got {result:?}");
             }
+            Ok(())
+        });
+    }
+
+    #[test]
+    /// Validates that cookie authentication is config-based, not address-type-based.
+    /// Non-loopback private IPs should work without cookie auth (operator's choice).
+    pub(crate) fn test_cookie_auth_not_forced_for_non_loopback_ip() {
+        Jail::expect_with(|jail| {
+            // Non-loopback private IP (192.168.x.x) WITHOUT cookie auth should succeed
+            let toml_str = r#"
+            backend = "fetch"
+            network = "Testnet"
+
+            [validator_settings]
+            validator_jsonrpc_listen_address = "192.168.1.10:18232"
+            # Note: NO validator_cookie_path - this is intentional
+
+            [grpc_settings]
+            listen_address = "127.0.0.1:8137"
+        "#;
+            let temp_toml_path = jail.directory().join("no_cookie_auth.toml");
+            jail.create_file(&temp_toml_path, toml_str)?;
+
+            let config_result = load_config(&temp_toml_path);
+            assert!(
+                config_result.is_ok(),
+                "Non-loopback IP without cookie auth should succeed. \
+                 Cookie auth is config-based, not address-type-based. Error: {:?}",
+                config_result.err()
+            );
+
+            let config = config_result.unwrap();
+            assert!(
+                config.validator_settings.validator_cookie_path.is_none(),
+                "Cookie path should be None as configured"
+            );
+
+            Ok(())
+        });
+    }
+
+    #[test]
+    /// Validates symmetric behavior: both IP and hostname addresses respect configuration.
+    /// Public IPs should still be rejected (private IP requirement remains).
+    pub(crate) fn test_public_ip_still_rejected() {
+        Jail::expect_with(|jail| {
+            // Public IP should be rejected regardless of cookie auth
+            let toml_str = r#"
+            backend = "fetch"
+            network = "Testnet"
+
+            [validator_settings]
+            validator_jsonrpc_listen_address = "8.8.8.8:18232"
+
+            [grpc_settings]
+            listen_address = "127.0.0.1:8137"
+        "#;
+            let temp_toml_path = jail.directory().join("public_ip.toml");
+            jail.create_file(&temp_toml_path, toml_str)?;
+
+            let config_result = load_config(&temp_toml_path);
+            assert!(
+                config_result.is_err(),
+                "Public IP should be rejected - private IP requirement still applies"
+            );
+
+            if let Err(IndexerError::ConfigError(msg)) = config_result {
+                assert!(
+                    msg.contains("private IP"),
+                    "Error should mention private IP requirement. Got: {msg}"
+                );
+            }
+
             Ok(())
         });
     }
