@@ -576,6 +576,13 @@ impl<Source: BlockchainSource> NodeBackedChainIndexSubscriber<Source> {
             .transpose()
     }
 
+    /**
+    Searches finalized and non-finalized chains for any blocks containing the transaction.
+    Ordered with non-finalized first.
+    Warning: there might be multiple blocks containing the transaction.
+    In one case, diverging non-finalized chains might each confirm the transaction.
+    An uncertain case is if there is a gap that would allow a chain to confirm a block into finalized state, but this function is called before the invalidated chain is removed from the ``NonfinalizedBlockCacheSnapshot``.
+    */
     async fn blocks_containing_transaction<'snapshot, 'self_lt, 'iter>(
         &'self_lt self,
         snapshot: &'snapshot NonfinalizedBlockCacheSnapshot,
