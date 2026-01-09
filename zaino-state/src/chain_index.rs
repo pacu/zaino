@@ -820,8 +820,8 @@ impl<Source: BlockchainSource> ChainIndex for NodeBackedChainIndexSubscriber<Sou
 
     /// Given a transaction ID, returns all known blocks containing this transaction
     ///
-    /// If the transaction is in the mempool, it will be in the BestChainLocation
-    /// if the mempool and snapshot are up-to-date, and the NonBestChainLocation set
+    /// If the transaction is in the mempool, it will be in the `BestChainLocation`
+    /// if the mempool and snapshot are up-to-date, and the `NonBestChainLocation` set
     /// if the snapshot is out-of-date compared to the mempool
     async fn get_transaction_status(
         &self,
@@ -872,9 +872,11 @@ impl<Source: BlockchainSource> ChainIndex for NodeBackedChainIndexSubscriber<Sou
                         Some(BestChainLocation::Mempool(snapshot.best_tip.height + 1));
                 }
             } else {
+                // what does it mean that the best chain and the mempool have divergent tip hashes -?
                 let target_height = self
                     .non_finalized_state
                     .get_snapshot()
+                    // refetch the snapshot because -?
                     .blocks
                     .iter()
                     .find_map(|(hash, block)| {
