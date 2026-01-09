@@ -578,7 +578,8 @@ impl<Source: BlockchainSource> NodeBackedChainIndexSubscriber<Source> {
 
     /**
     Searches finalized and non-finalized chains for any blocks containing the transaction.
-    Ordered with non-finalized first.
+    Ordered with finalized blocks first.
+
     Warning: there might be multiple blocks containing the transaction.
     In one case, diverging non-finalized chains might each confirm the transaction.
     An uncertain case is if there is a gap that would allow a chain to confirm a block into finalized state, but this function is called before the invalidated chain is removed from the ``NonfinalizedBlockCacheSnapshot``.
@@ -592,35 +593,32 @@ impl<Source: BlockchainSource> NodeBackedChainIndexSubscriber<Source> {
         'snapshot: 'iter,
         'self_lt: 'iter,
     {
-        Ok(snapshot
-            .blocks
-            .values()
-            .filter_map(move |block| {
+        let finalized_blocks_containing_transaction = match self
+            .finalized_state
+            .get_tx_location(&types::TransactionHash(txid))
+            .await?
+        {
+            Some(tx_location) => {
+                self.finalized_state
+                    .get_chain_block(crate::Height(tx_location.block_height()))
+                    .await?
+            }
+
+            None => None,
+        }
+        .into_iter();
+        let non_finalized_blocks_containing_transaction =
+            snapshot.blocks.values().filter_map(move |block| {
                 block.transactions().iter().find_map(|transaction| {
                     if transaction.txid().0 == txid {
-                        Some(block)
+                        Some(block.clone())
                     } else {
                         None
                     }
                 })
-            })
-            .cloned()
-            .chain(
-                match self
-                    .finalized_state
-                    .get_tx_location(&types::TransactionHash(txid))
-                    .await?
-                {
-                    Some(tx_location) => {
-                        self.finalized_state
-                            .get_chain_block(crate::Height(tx_location.block_height()))
-                            .await?
-                    }
-
-                    None => None,
-                }
-                .into_iter(),
-            ))
+            });
+        Ok(finalized_blocks_containing_transaction
+            .chain(non_finalized_blocks_containing_transaction))
     }
 }
 
