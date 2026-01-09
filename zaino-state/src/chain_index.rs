@@ -838,6 +838,7 @@ impl<Source: BlockchainSource> ChainIndex for NodeBackedChainIndexSubscriber<Sou
             .find(|block| {
                 snapshot.heights_to_hashes.get(&block.height()) == Some(block.hash())
                     || block.height() < *start_of_nonfinalized
+                // this block is either in the best chain ``heights_to_hashes`` or finalized.
             })
             .map(|block| BestChainLocation::Block(*block.hash(), block.height()));
         let mut non_best_chain_blocks: HashSet<NonBestChainLocation> =
