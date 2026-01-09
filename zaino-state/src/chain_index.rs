@@ -882,6 +882,7 @@ impl<Source: BlockchainSource> ChainIndex for NodeBackedChainIndexSubscriber<Sou
                     .find_map(|(hash, block)| {
                         if *hash == mempool_tip_hash {
                             Some(block.height() + 1)
+                            // found the block that is the tip that the mempool is hanging on to
                         } else {
                             None
                         }
