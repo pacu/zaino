@@ -871,11 +871,11 @@ impl<Source: BlockchainSource> ChainIndex for NodeBackedChainIndexSubscriber<Sou
                         Some(BestChainLocation::Mempool(snapshot.best_tip.height + 1));
                 }
             } else {
-                // what does it mean that the best chain and the mempool have divergent tip hashes -?
+                // the best chain and the mempool have divergent tip hashes
+                // refetch the snapshot to catch up to the mempool
                 let target_height = self
                     .non_finalized_state
                     .get_snapshot()
-                    // refetch the snapshot because -?
                     .blocks
                     .iter()
                     .find_map(|(hash, block)| {
