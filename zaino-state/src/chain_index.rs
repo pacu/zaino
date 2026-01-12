@@ -582,7 +582,7 @@ impl<Source: BlockchainSource> NodeBackedChainIndexSubscriber<Source> {
 
     Warning: there might be multiple blocks containing the transaction.
     In one case, diverging non-finalized chains might each confirm the transaction.
-    An uncertain case is if there is a gap that would allow a chain to confirm a block into finalized state, but this function is called before the invalidated chain is removed from the ``NonfinalizedBlockCacheSnapshot``.
+    An uncertain case: If a transaction, which is already on a NonBest chain, becomes Finalized, it might show up in both places in a single return of this function.
     */
     async fn blocks_containing_transaction<'snapshot, 'self_lt, 'iter>(
         &'self_lt self,
