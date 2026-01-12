@@ -302,6 +302,19 @@ impl BlockchainSource for ProptestMockchain {
         Ok(Some(self.best_branch().last().unwrap().hash()))
     }
 
+    /// Returns the hash of the block at the tip of the best chain.
+    async fn get_best_block_height(
+        &self,
+    ) -> BlockchainSourceResult<Option<zebra_chain::block::Height>> {
+        Ok(Some(
+            self.best_branch()
+                .last()
+                .unwrap()
+                .coinbase_height()
+                .unwrap(),
+        ))
+    }
+
     /// Get a listener for new nonfinalized blocks,
     /// if supported
     async fn nonfinalized_listener(

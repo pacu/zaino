@@ -65,6 +65,11 @@ pub trait BlockchainSource: Clone + Send + Sync + 'static {
     async fn get_best_block_hash(&self)
         -> BlockchainSourceResult<Option<zebra_chain::block::Hash>>;
 
+    /// Returns the height of the block at the tip of the best chain.
+    async fn get_best_block_height(
+        &self,
+    ) -> BlockchainSourceResult<Option<zebra_chain::block::Height>>;
+
     /// Get a listener for new nonfinalized blocks,
     /// if supported
     async fn nonfinalized_listener(
@@ -552,6 +557,48 @@ impl BlockchainSource for ValidatorConnector {
         }
     }
 
+    /// Returns the height of the block at the tip of the best chain.
+    async fn get_best_block_height(
+        &self,
+    ) -> BlockchainSourceResult<Option<zebra_chain::block::Height>> {
+        match self {
+            ValidatorConnector::State(State {
+                read_state_service,
+                mempool_fetcher,
+                network: _,
+            }) => {
+                match read_state_service.best_tip() {
+                    Some((height, _hash)) => Ok(Some(height)),
+                    None => {
+                        // try RPC if state read fails:
+                        Ok(Some(
+                            mempool_fetcher
+                                .get_block_count()
+                                .await
+                                .map_err(|e| {
+                                    BlockchainSourceError::Unrecoverable(format!(
+                                        "could not fetch best block hash from validator: {e}"
+                                    ))
+                                })?
+                                .into(),
+                        ))
+                    }
+                }
+            }
+            ValidatorConnector::Fetch(fetch) => Ok(Some(
+                fetch
+                    .get_block_count()
+                    .await
+                    .map_err(|e| {
+                        BlockchainSourceError::Unrecoverable(format!(
+                            "could not fetch best block hash from validator: {e}"
+                        ))
+                    })?
+                    .into(),
+            )),
+        }
+    }
+
     async fn nonfinalized_listener(
         &self,
     ) -> Result<
@@ -849,6 +896,20 @@ pub(crate) mod test {
             }
 
             Ok(Some(self.blocks[active_chain_height].hash()))
+        }
+
+        async fn get_best_block_height(
+            &self,
+        ) -> BlockchainSourceResult<Option<zebra_chain::block::Height>> {
+            let active_chain_height = self.active_height() as usize;
+
+            if self.blocks.is_empty() || active_chain_height > self.max_chain_height() as usize {
+                return Ok(None);
+            }
+
+            Ok(Some(
+                self.blocks[active_chain_height].coinbase_height().unwrap(),
+            ))
         }
 
         async fn nonfinalized_listener(

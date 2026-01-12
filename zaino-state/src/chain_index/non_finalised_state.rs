@@ -57,6 +57,11 @@ pub struct NonfinalizedBlockCacheSnapshot {
     // best_tip is a BestTip, which contains
     // a Height, and a BlockHash as named fields.
     pub best_tip: BestTip,
+
+    /// if the validator has finalized above the tip
+    /// of the snapshot, we can use it for some queries
+    /// and pass through to the validator
+    pub validator_finalized_height: Option<Height>,
 }
 
 #[derive(Debug)]
@@ -167,6 +172,7 @@ impl NonfinalizedBlockCacheSnapshot {
             blocks,
             heights_to_hashes,
             best_tip,
+            validator_finalized_height: None,
         })
     }
 
@@ -386,7 +392,8 @@ impl<Source: BlockchainSource> NonFinalizedState<Source> {
             Some(prev_block) => {
                 if !working_snapshot
                     .heights_to_hashes
-                    .values().any(|hash| hash == prev_block.hash())
+                    .values()
+                    .any(|hash| hash == prev_block.hash())
                 {
                     Box::pin(self.handle_reorg(working_snapshot, &prev_block)).await?
                 } else {
@@ -481,6 +488,14 @@ impl<Source: BlockchainSource> NonFinalizedState<Source> {
         self.handle_reorg(&mut new_snapshot, best_block)
             .await
             .map_err(|_e| UpdateError::DatabaseHole)?;
+
+        let validator_tip = self
+            .source
+            .get_best_block_height()
+            .await
+            .expect("todo: error");
+        new_snapshot.validator_finalized_height =
+            validator_tip.map(|height| types::Height(height.0));
 
         // Need to get best hash at some point in this process
         let stored = self
