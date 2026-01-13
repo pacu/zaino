@@ -576,6 +576,25 @@ impl<Source: BlockchainSource> NodeBackedChainIndexSubscriber<Source> {
             .transpose()
     }
 
+    async fn get_snapshot_block_height(
+        &self,
+        nonfinalized_snapshot: &NonfinalizedBlockCacheSnapshot,
+        hash: types::BlockHash,
+    ) -> Result<Option<types::Height>, ChainIndexError> {
+        match nonfinalized_snapshot.blocks.get(&hash).cloned() {
+            Some(block) => Ok(nonfinalized_snapshot
+                .heights_to_hashes
+                .values()
+                .find(|h| **h == hash)
+                // Canonical height is None for blocks not on the best chain
+                .map(|_| block.index().height())),
+            None => match self.finalized_state.get_block_height(hash).await {
+                Ok(height) => Ok(height),
+                Err(_e) => Err(ChainIndexError::database_hole(hash)),
+            },
+        }
+    }
+
     async fn blocks_containing_transaction<'snapshot, 'self_lt, 'iter>(
         &'self_lt self,
         snapshot: &'snapshot NonfinalizedBlockCacheSnapshot,
@@ -615,6 +634,31 @@ impl<Source: BlockchainSource> NodeBackedChainIndexSubscriber<Source> {
                 .into_iter(),
             ))
     }
+
+    async fn get_block_height_passthrough(
+        &self,
+        nonfinalized_snapshot: &NonfinalizedBlockCacheSnapshot,
+        hash: types::BlockHash,
+    ) -> Result<Option<types::Height>, ChainIndexError> {
+        let Some(validator_finalized_height) = nonfinalized_snapshot.validator_finalized_height
+        else {
+            return Ok(None);
+        };
+        match self
+            .blockchain_source
+            .get_block(HashOrHeight::Hash(hash.into()))
+            .await
+        {
+            Ok(Some(block))
+                if types::Height::from(block.coinbase_height().expect("block to have height"))
+                    <= validator_finalized_height =>
+            {
+                Ok(Some(block.coinbase_height().unwrap().into()))
+            }
+            Ok(_) => Ok(None),
+            Err(e) => Err(ChainIndexError::backing_validator(e)),
+        }
+    }
 }
 
 impl<Source: BlockchainSource> ChainIndex for NodeBackedChainIndexSubscriber<Source> {
@@ -638,17 +682,15 @@ impl<Source: BlockchainSource> ChainIndex for NodeBackedChainIndexSubscriber<Sou
         nonfinalized_snapshot: &Self::Snapshot,
         hash: types::BlockHash,
     ) -> Result<Option<types::Height>, Self::Error> {
-        match nonfinalized_snapshot.blocks.get(&hash).cloned() {
-            Some(block) => Ok(nonfinalized_snapshot
-                .heights_to_hashes
-                .values()
-                .find(|h| **h == hash)
-                // Canonical height is None for blocks not on the best chain
-                .map(|_| block.index().height())),
-            None => match self.finalized_state.get_block_height(hash).await {
-                Ok(height) => Ok(height),
-                Err(_e) => Err(ChainIndexError::database_hole(hash)),
-            },
+        let snapshot_block_height = self
+            .get_snapshot_block_height(nonfinalized_snapshot, hash)
+            .await?;
+        match snapshot_block_height {
+            Some(h) => Ok(Some(h)),
+            None => {
+                self.get_block_height_passthrough(nonfinalized_snapshot, hash)
+                    .await
+            }
         }
     }
 

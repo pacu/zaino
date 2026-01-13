@@ -495,7 +495,7 @@ impl<Source: BlockchainSource> NonFinalizedState<Source> {
             .await
             .expect("todo: error");
         new_snapshot.validator_finalized_height =
-            validator_tip.map(|height| types::Height(height.0));
+            validator_tip.map(|height| types::Height(height.0.saturating_sub(100)));
 
         // Need to get best hash at some point in this process
         let stored = self

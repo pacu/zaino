@@ -356,11 +356,12 @@ impl From<Height> for zebra_chain::block::Height {
     }
 }
 
-impl TryFrom<zebra_chain::block::Height> for Height {
-    type Error = &'static str;
-
-    fn try_from(h: zebra_chain::block::Height) -> Result<Self, Self::Error> {
-        Height::try_from(h.0)
+impl From<zebra_chain::block::Height> for Height {
+    // Zebra checks heights to ensure they're not above
+    // height::MAX as we do. We should trust zebra heights
+    // to be valid
+    fn from(h: zebra_chain::block::Height) -> Self {
+        Height(h.0)
     }
 }
 
