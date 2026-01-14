@@ -202,7 +202,7 @@ pub trait ChainIndex {
         &self,
         snapshot: &Self::Snapshot,
         block_hash: &types::BlockHash,
-    ) -> Result<Option<(types::BlockHash, types::Height)>, Self::Error>;
+    ) -> impl std::future::Future<Output = Result<Option<(types::BlockHash, types::Height)>, Self::Error>>;
 
     /// Returns the block commitment tree data by hash
     #[allow(clippy::type_complexity)]
@@ -759,20 +759,44 @@ impl<Source: BlockchainSource> ChainIndex for NodeBackedChainIndexSubscriber<Sou
 
     /// Finds the newest ancestor of the given block on the main
     /// chain, or the block itself if it is on the main chain.
-    fn find_fork_point(
+    /// Returns Ok(None) if no fork point found. This is not an error,
+    /// as zaino does not guarentee knowledge of all sidechain data.
+    async fn find_fork_point(
         &self,
         snapshot: &Self::Snapshot,
         block_hash: &types::BlockHash,
     ) -> Result<Option<(types::BlockHash, types::Height)>, Self::Error> {
         let Some(block) = snapshot.as_ref().get_chainblock_by_hash(block_hash) else {
-            // No fork point found. This is not an error,
-            // as zaino does not guarentee knowledge of all sidechain data.
-            return Ok(None);
+            return if let Some(validator_finalized_height) = snapshot.validator_finalized_height {
+                match self
+                    .blockchain_source
+                    .get_block(HashOrHeight::Hash(zebra_chain::block::Hash::from(
+                        *block_hash,
+                    )))
+                    .await
+                {
+                    Ok(Some(block))
+                        if block.coinbase_height().unwrap()
+                            <= validator_finalized_height.into() =>
+                    {
+                        Ok(Some((
+                            types::BlockHash::from(block.hash()),
+                            types::Height::from(block.coinbase_height().unwrap()),
+                        )))
+                    }
+                    Ok(_) => Ok(None),
+                    Err(e) => Err(ChainIndexError::backing_validator(e)),
+                }
+            } else {
+                Ok(None)
+            };
         };
         if snapshot.heights_to_hashes.get(&block.height()) == Some(block.hash()) {
             Ok(Some((*block.hash(), block.height())))
         } else {
-            self.find_fork_point(snapshot, block.index().parent_hash())
+            // gotta pin recursive async functions to prevent infinite-sized
+            // Future-implementing types
+            Box::pin(self.find_fork_point(snapshot, block.index().parent_hash())).await
         }
     }
 
