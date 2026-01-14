@@ -697,15 +697,20 @@ impl<Source: BlockchainSource> ChainIndex for NodeBackedChainIndexSubscriber<Sou
     /// Given inclusive start and end heights, stream all blocks
     /// between the given heights.
     /// Returns None if the specified end height
-    /// is greater than the snapshot's tip
+    /// is greater than the snapshot's tip and greater
+    /// than the validator's finalized height (100 blocks below tip)
     fn get_block_range(
         &self,
         nonfinalized_snapshot: &Self::Snapshot,
         start: types::Height,
         end: std::option::Option<types::Height>,
     ) -> Option<impl Stream<Item = Result<Vec<u8>, Self::Error>>> {
+        let max_servable_height = nonfinalized_snapshot
+            .validator_finalized_height
+            .unwrap_or(nonfinalized_snapshot.best_tip.height)
+            .max(nonfinalized_snapshot.best_tip.height);
         let end = end.unwrap_or(nonfinalized_snapshot.best_tip.height);
-        if end <= nonfinalized_snapshot.best_tip.height {
+        if end <= max_servable_height {
             Some(
                 futures::stream::iter((start.0)..=(end.0)).then(move |height| async move {
                     match self
@@ -736,7 +741,12 @@ impl<Source: BlockchainSource> ChainIndex for NodeBackedChainIndexSubscriber<Sou
                                         .await?
                                         .ok_or(ChainIndexError::database_hole(block.hash()))
                                 }
-                                None => Err(ChainIndexError::database_hole(height)),
+                                None => self
+                                    .get_fullblock_bytes_from_node(HashOrHeight::Height(
+                                        zebra_chain::block::Height(height),
+                                    ))
+                                    .await?
+                                    .ok_or(ChainIndexError::database_hole(height)),
                             }
                         }
                     }
