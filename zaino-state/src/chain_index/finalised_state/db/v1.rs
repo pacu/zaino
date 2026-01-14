@@ -1,4 +1,28 @@
-//! ZainoDB V1 Implementation
+//! ZainoDB Finalised State (Schema V1)
+//!
+//! This module provides the **V1** implementation of Zaino’s LMDB-backed finalised-state database.
+//! It stores a validated, append-only view of the best chain and exposes a set of capability traits
+//! (read, write, metadata, block-range fetchers, compact-block generation, and transparent history).
+//!
+//! ## On-disk layout
+//! The V1 on-disk layout is described by an ASCII schema file that is embedded into the binary at
+//! compile time (`db_schema_v1_0.txt`). A fixed 32-byte BLAKE2b checksum of that schema description
+//! is stored in / compared against the database metadata to detect accidental schema drift.
+//!
+//! ## Validation model
+//! The database maintains a monotonically increasing **validated tip** (`validated_tip`) and a set
+//! of validated heights above that tip (`validated_set`) to support out-of-order validation. Reads
+//! that require correctness use `resolve_validated_hash_or_height()` to ensure the requested height
+//! is validated (performing on-demand validation if required).
+//!
+//! A background task performs:
+//! - an initial full scan of the stored data for checksum / structural correctness, then
+//! - steady-state incremental validation of newly appended blocks.
+//!
+//! ## Concurrency model
+//! LMDB supports many concurrent readers and a single writer per environment. This implementation
+//! uses `tokio::task::block_in_place` / `spawn_blocking` for LMDB operations to avoid blocking the
+//! async runtime, and configures `max_readers` to support high read concurrency.
 
 use crate::{
     chain_index::{
@@ -46,8 +70,11 @@ use tracing::{error, info, warn};
 // ───────────────────────── Schema v1 constants ─────────────────────────
 
 /// Full V1 schema text file.
-// 1. Bring the *exact* ASCII description of the on-disk layout into the binary
-//    at compile-time.  The path is relative to this source file.
+///
+/// This is the exact ASCII description of the V1 on-disk layout embedded into the binary at
+/// compile-time. The path is relative to this source file.
+///
+/// 1. Bring the *exact* ASCII description of the on-disk layout into the binary at compile-time.
 pub(crate) const DB_SCHEMA_V1_TEXT: &str = include_str!("db_schema_v1_0.txt");
 
 /*
@@ -73,6 +100,9 @@ pub(crate) const DB_SCHEMA_V1_TEXT: &str = include_str!("db_schema_v1_0.txt");
 */
 
 /// *Current* database V1 schema hash, used for version validation.
+///
+/// This value is compared against the schema hash stored in the metadata record to detect schema
+/// drift without a corresponding version bump.
 pub(crate) const DB_SCHEMA_V1_HASH: [u8; 32] = [
     0xbc, 0x13, 0x52, 0x47, 0xb4, 0x6b, 0xb4, 0x6a, 0x4a, 0x97, 0x1e, 0x4c, 0x27, 0x07, 0x82, 0x6f,
     0x80, 0x95, 0xe6, 0x62, 0xb6, 0x91, 0x9d, 0x28, 0x87, 0x2c, 0x71, 0xb6, 0xbd, 0x67, 0x65, 0x93,
@@ -87,6 +117,10 @@ pub(crate) const DB_VERSION_V1: DbVersion = DbVersion {
 
 // ───────────────────────── ZainoDb v1 Capabilities ─────────────────────────
 
+/// [`DbRead`] capability implementation for [`DbV1`].
+///
+/// This trait is the read-only surface used by higher layers. Methods typically delegate to
+/// inherent async helpers that enforce validated reads where required.
 #[async_trait]
 impl DbRead for DbV1 {
     async fn db_height(&self) -> Result<Option<Height>, FinalisedStateError> {
@@ -126,6 +160,10 @@ impl DbRead for DbV1 {
     }
 }
 
+/// [`DbWrite`] capability implementation for [`DbV1`].
+///
+/// This trait represents the mutating surface (append / delete tip / update metadata). Writes are
+/// performed via LMDB write transactions and validated before becoming visible as “known-good”.
 #[async_trait]
 impl DbWrite for DbV1 {
     async fn write_block(&self, block: IndexedBlock) -> Result<(), FinalisedStateError> {
@@ -145,6 +183,9 @@ impl DbWrite for DbV1 {
     }
 }
 
+/// [`DbCore`] capability implementation for [`DbV1`].
+///
+/// This trait exposes lifecycle operations and a high-level status indicator.
 #[async_trait]
 impl DbCore for DbV1 {
     fn status(&self) -> StatusType {
@@ -168,6 +209,9 @@ impl DbCore for DbV1 {
     }
 }
 
+/// [`BlockCoreExt`] capability implementation for [`DbV1`].
+///
+/// Provides access to block headers, txid lists, and transaction location mapping.
 #[async_trait]
 impl BlockCoreExt for DbV1 {
     async fn get_block_header(
@@ -212,6 +256,10 @@ impl BlockCoreExt for DbV1 {
     }
 }
 
+/// [`BlockTransparentExt`] capability implementation for [`DbV1`].
+///
+/// Provides access to transparent compact transaction data at both per-transaction and per-block
+/// granularity.
 #[async_trait]
 impl BlockTransparentExt for DbV1 {
     async fn get_transparent(
@@ -237,6 +285,10 @@ impl BlockTransparentExt for DbV1 {
     }
 }
 
+/// [`BlockShieldedExt`] capability implementation for [`DbV1`].
+///
+/// Provides access to Sapling / Orchard compact transaction data and per-block commitment tree
+/// metadata.
 #[async_trait]
 impl BlockShieldedExt for DbV1 {
     async fn get_sapling(
@@ -299,6 +351,10 @@ impl BlockShieldedExt for DbV1 {
     }
 }
 
+/// [`CompactBlockExt`] capability implementation for [`DbV1`].
+///
+/// Exposes `zcash_client_backend`-compatible compact blocks derived from stored header + shielded
+/// transaction data.
 #[async_trait]
 impl CompactBlockExt for DbV1 {
     async fn get_compact_block(
@@ -309,6 +365,9 @@ impl CompactBlockExt for DbV1 {
     }
 }
 
+/// [`IndexedBlockExt`] capability implementation for [`DbV1`].
+///
+/// Exposes reconstructed [`IndexedBlock`] values from stored per-height entries.
 #[async_trait]
 impl IndexedBlockExt for DbV1 {
     async fn get_chain_block(
@@ -319,6 +378,10 @@ impl IndexedBlockExt for DbV1 {
     }
 }
 
+/// [`TransparentHistExt`] capability implementation for [`DbV1`].
+///
+/// Provides address history queries built over the LMDB `DUP_SORT`/`DUP_FIXED` address-history
+/// database.
 #[async_trait]
 impl TransparentHistExt for DbV1 {
     async fn addr_records(
@@ -383,49 +446,67 @@ impl TransparentHistExt for DbV1 {
 
 // ───────────────────────── ZainoDb v1 Implementation ─────────────────────────
 
-/// Zaino’s Finalised state database V1.
-/// Implements a persistent LMDB-backed chain index for fast read access and verified data.
+/// Zaino’s Finalised State database V1.
+///
+/// This type owns an LMDB [`Environment`] and a fixed set of named databases representing the V1
+/// schema. It implements the capability traits used by the rest of the chain indexer.
+///
+/// Data is stored per-height in “best chain” order and is validated (checksums and continuity)
+/// before being treated as reliable for downstream reads.
 pub(crate) struct DbV1 {
     /// Shared LMDB environment.
     env: Arc<Environment>,
 
-    /// Block headers: `Height` -> `StoredEntry<BlockHeaderData>`
+    /// Block headers: `Height` -> `StoredEntryVar<BlockHeaderData>`
     ///
     /// Stored per-block, in order.
     headers: Database,
-    /// Txids: `Height` -> `StoredEntry<TxidList>`
+
+    /// Txids: `Height` -> `StoredEntryVar<TxidList>`
     ///
     /// Stored per-block, in order.
     txids: Database,
-    /// Transparent: `Height` -> `StoredEntry<Vec<TransparentTxList>>`
+
+    /// Transparent: `Height` -> `StoredEntryVar<Vec<TransparentTxList>>`
     ///
     /// Stored per-block, in order.
     transparent: Database,
-    /// Sapling: `Height` -> `StoredEntry<Vec<TxData>>`
+
+    /// Sapling: `Height` -> `StoredEntryVar<Vec<TxData>>`
     ///
     /// Stored per-block, in order.
     sapling: Database,
-    /// Orchard: `Height` -> `StoredEntry<Vec<TxData>>`
+
+    /// Orchard: `Height` -> `StoredEntryVar<Vec<TxData>>`
     ///
     /// Stored per-block, in order.
     orchard: Database,
-    /// Block commitment tree data: `Height` -> `StoredEntry<Vec<CommitmentTreeData>>`
+
+    /// Block commitment tree data: `Height` -> `StoredEntryFixed<Vec<CommitmentTreeData>>`
     ///
     /// Stored per-block, in order.
     commitment_tree_data: Database,
-    /// Heights: `Hash` -> `StoredEntry<Height>`
+
+    /// Heights: `Hash` -> `StoredEntryFixed<Height>`
     ///
     /// Used for hash based fetch of the best chain (and random access).
     heights: Database,
-    /// Spent outpoints: `Outpoint` -> `StoredEntry<Vec<TxLocation>>`
+
+    /// Spent outpoints: `Outpoint` -> `StoredEntryFixed<Vec<TxLocation>>`
     ///
     /// Used to check spent status of given outpoints, retuning spending tx.
     spent: Database,
-    /// Transparent address history: `AddrScript` -> `StoredEntry<AddrEventBytes>`
+
+    /// Transparent address history: `AddrScript` -> duplicate values of `StoredEntryFixed<AddrEventBytes>`.
+    ///
+    /// Stored as an LMDB `DUP_SORT | DUP_FIXED` database keyed by address script bytes. Each duplicate
+    /// value is a fixed-size entry encoding one address event (mined output or spending input),
+    /// including flags and checksum.
     ///
     /// Used to search all transparent address indexes (txids, utxos, balances, deltas)
     address_history: Database,
-    /// Metadata: singleton entry "metadata" -> `StoredEntry<DbMetadata>`
+
+    /// Metadata: singleton entry "metadata" -> `StoredEntryFixed<DbMetadata>`
     metadata: Database,
 
     /// Contiguous **water-mark**: every height ≤ `validated_tip` is known-good.
@@ -433,6 +514,7 @@ pub(crate) struct DbV1 {
     /// Wrapped in an `Arc` so the background validator and any foreground tasks
     /// all see (and update) the **same** atomic.
     validated_tip: Arc<AtomicU32>,
+
     /// Heights **above** the tip that have also been validated.
     ///
     /// Whenever the next consecutive height is inserted we pop it
@@ -440,7 +522,7 @@ pub(crate) struct DbV1 {
     /// grows beyond the number of “holes” in the sequence.
     validated_set: DashSet<u32>,
 
-    /// Database handler task handle.
+    /// Background validator / maintenance task handle.
     db_handler: Option<tokio::task::JoinHandle<()>>,
 
     /// ZainoDB status.
@@ -450,13 +532,23 @@ pub(crate) struct DbV1 {
     config: BlockCacheConfig,
 }
 
+/// Inherent implementation for [`DbV1`].
+///
+/// This block contains:
+/// - environment / database setup (`spawn`, `open_or_create_db`, schema checks),
+/// - background validation task management,
+/// - write/delete operations for finalised blocks,
+/// - validated read fetchers used by the capability trait implementations, and
+/// - internal validation / indexing helpers.
 impl DbV1 {
-    /// Spawns a new [`DbV1`] and syncs the FinalisedState to the servers finalised state.
+    /// Spawns a new [`DbV1`] and opens (or creates) the LMDB environment for the configured network.
     ///
-    /// Uses ReadStateService to fetch chain data if given else uses JsonRPC client.
-    ///
-    /// Inputs:
-    /// - config: ChainIndexConfig.
+    /// This method:
+    /// - chooses a versioned path suffix (`.../<network>/v1`),
+    /// - configures LMDB map size and reader slots,
+    /// - opens or creates all V1 named databases,
+    /// - validates or initializes the `"metadata"` record (schema hash + version), and
+    /// - spawns the background validator / maintenance task.
     pub(crate) async fn spawn(config: &BlockCacheConfig) -> Result<Self, FinalisedStateError> {
         info!("Launching ZainoDB");
 
@@ -578,7 +670,9 @@ impl DbV1 {
         self.status.load()
     }
 
-    /// Awaits until the DB returns a Ready status.
+    /// Waits until the DB reaches [`StatusType::Ready`].
+    ///
+    /// NOTE: This does not currently backpressure on LMDB reader availability.
     ///
     /// TODO: check db for free readers and wait if busy.
     pub(crate) async fn wait_until_ready(&self) {
@@ -597,11 +691,11 @@ impl DbV1 {
 
     /// Spawns the background validator / maintenance task.
     ///
-    /// *   **Startup** – runs a full‐DB validation pass (`initial_root_scan` →
-    ///     `initial_block_scan`).
-    /// *   **Steady-state** – every 5 s tries to validate the next block that
-    ///     appeared after the current `validated_tip`.
-    ///     Every 60 s it also calls `clean_trailing()` to purge stale reader slots.
+    /// The task runs:
+    /// - **Startup:** full validation passes (`initial_spent_scan`, `initial_address_history_scan`,
+    ///   `initial_block_scan`).
+    /// - **Steady state:** periodically attempts to validate the next height after `validated_tip`.
+    ///   Separately, it performs periodic trailing-reader cleanup via `clean_trailing()`.
     async fn spawn_handler(&mut self) -> Result<(), FinalisedStateError> {
         // Clone everything the task needs so we can move it into the async block.
         let zaino_db = Self {
@@ -718,7 +812,7 @@ impl DbV1 {
         }
     }
 
-    /// Validate every stored `TxLocation`.
+    /// Validates every stored spent-outpoint entry (`Outpoint` -> `TxLocation`) by checksum.
     async fn initial_spent_scan(&self) -> Result<(), FinalisedStateError> {
         let env = self.env.clone();
         let spent = self.spent;
@@ -745,7 +839,7 @@ impl DbV1 {
         .map_err(|e| FinalisedStateError::Custom(format!("Tokio task error: {e}")))?
     }
 
-    /// Validate every stored `AddrEventBytes`.
+    /// Validates every stored address-history record (`AddrScript` duplicates of `AddrEventBytes`) by checksum.
     async fn initial_address_history_scan(&self) -> Result<(), FinalisedStateError> {
         let env = self.env.clone();
         let address_history = self.address_history;
@@ -773,7 +867,7 @@ impl DbV1 {
         .map_err(|e| FinalisedStateError::Custom(format!("spawn_blocking failed: {e}")))?
     }
 
-    /// Scan the whole finalised chain once at start-up and validate every block.
+    /// Scans the whole finalised chain once at start-up and validates every block by checksum and continuity.
     async fn initial_block_scan(&self) -> Result<(), FinalisedStateError> {
         let zaino_db = Self {
             env: Arc::clone(&self.env),
@@ -3155,20 +3249,67 @@ impl DbV1 {
     }
 
     // *** Internal DB validation / varification ***
+    //
+    // The finalised-state database supports **incremental, concurrency-safe validation** of blocks that
+    // have already been written to LMDB.
+    //
+    // Validation is tracked using two structures:
+    //
+    // - `validated_tip` (atomic u32): every height `<= validated_tip` is known-good (contiguous prefix).
+    // - `validated_set` (DashSet<u32>): a sparse set of individually validated heights `> validated_tip`
+    //   (i.e., “holes” validated out-of-order).
+    //
+    // This scheme provides:
+    // - O(1) fast-path for the common case (`height <= validated_tip`),
+    // - O(1) expected membership tests above the tip,
+    // - and an efficient “coalescing” step that advances `validated_tip` when gaps are filled.
+    //
+    // IMPORTANT:
+    // - Validation here is *structural / integrity* validation of stored records plus basic chain
+    //   continuity checks (parent hash, header merkle root vs txids).
+    // - It is intentionally “lightweight” and does **not** attempt full consensus verification.
+    // - NOTE: It is planned to add basic shielded tx data validation using the "block_commitments"
+    //   field in [`BlockData`] however this is currently unimplemented.
 
-    /// Return `true` if *height* is already known-good.
+    /// Return `true` if `height` is already known-good.
     ///
-    /// O(1) look-ups: we check the tip first (fast) and only hit the DashSet
-    /// when `h > tip`.
+    /// Semantics:
+    /// - `height <= validated_tip` is always validated (contiguous prefix).
+    /// - For `height > validated_tip`, membership is tracked in `validated_set`.
+    ///
+    /// Performance:
+    /// - O(1) in the fast-path (`height <= validated_tip`).
+    /// - O(1) expected for DashSet membership checks when `height > validated_tip`.
+    ///
+    /// Concurrency:
+    /// - `validated_tip` is read with `Acquire` so subsequent reads of dependent state in the same
+    ///   thread are not reordered before the tip read.
     fn is_validated(&self, h: u32) -> bool {
         let tip = self.validated_tip.load(Ordering::Acquire);
         h <= tip || self.validated_set.contains(&h)
     }
 
-    /// Mark *height* as validated and coalesce contiguous ranges.
+    /// Mark `height` as validated and coalesce contiguous ranges into `validated_tip`.
     ///
-    /// 1. Insert it into the DashSet (if it was a “hole”).
-    /// 2. While `validated_tip + 1` is now present, pop it and advance the tip.
+    /// This method maintains the invariant:
+    /// - After completion, all heights `<= validated_tip` are validated.
+    /// - All validated heights `> validated_tip` remain represented in `validated_set`.
+    ///
+    /// Algorithm:
+    /// 1. If `height == validated_tip + 1`, attempt to atomically advance `validated_tip`.
+    /// 2. If that succeeds, repeatedly consume `validated_tip + 1` from `validated_set` and advance
+    ///    `validated_tip` until the next height is not present.
+    /// 3. If `height > validated_tip + 1`, record it as an out-of-order validated “hole” in
+    ///    `validated_set`.
+    /// 4. If `height <= validated_tip`, it is already covered by the contiguous prefix; no action.
+    ///
+    /// Concurrency:
+    /// - Uses CAS to ensure only one thread advances `validated_tip` at a time.
+    /// - Stores after successful coalescing use `Release` so other threads observing the new tip do not
+    ///   see older state re-ordered after the tip update.
+    ///
+    /// NOTE:
+    /// - This function is intentionally tolerant of races: redundant inserts / removals are benign.
     fn mark_validated(&self, h: u32) {
         let mut next = h;
         loop {
@@ -3205,9 +3346,40 @@ impl DbV1 {
 
     /// Lightweight per-block validation.
     ///
-    /// *Confirms the checksum* in each of the three per-block tables.
+    /// This validates the internal consistency of the LMDB-backed records for the specified
+    /// `(height, hash)` pair and marks the height as validated on success.
     ///
-    /// WARNING: This is a blocking function and **MUST** be called within a blocking thread / task.
+    /// Validations performed:
+    /// - Per-height tables: checksum + deserialization integrity for:
+    ///   - `headers` (BlockHeaderData)
+    ///   - `txids` (TxidList)
+    ///   - `transparent` (TransparentTxList)
+    ///   - `sapling` (SaplingTxList)
+    ///   - `orchard` (OrchardTxList)
+    ///   - `commitment_tree_data` (CommitmentTreeData; fixed entry)
+    /// - Hash→height mapping:
+    ///   - checksum integrity under `hash_key`
+    ///   - mapped height equals the requested `height`
+    /// - Chain continuity:
+    ///   - for `height > 1`, the block header `parent_hash` equals the stored hash at `height - 1`
+    /// - Header merkle root:
+    ///   - merkle root computed from `txids` matches the header’s merkle root
+    /// - Transparent indices / histories:
+    ///   - each non-coinbase transparent input must have a `spent` record pointing at this tx
+    ///   - each transparent output must have an addrhist mined record
+    ///   - each non-coinbase transparent input must have an addrhist input record
+    ///
+    /// Fast-path:
+    /// - If `height` is already known validated (`is_validated`), this is a no-op.
+    ///
+    /// Error semantics:
+    /// - Returns `FinalisedStateError::InvalidBlock { .. }` when any integrity/continuity check fails.
+    /// - Returns LMDB errors for underlying storage failures (e.g., missing keys), which are then
+    ///   typically mapped by callers into `DataUnavailable` where appropriate.
+    ///
+    /// WARNING:
+    /// - This is a blocking function and **MUST** be called from a blocking context
+    ///   (`tokio::task::block_in_place` or `spawn_blocking`).
     fn validate_block_blocking(
         &self,
         height: Height,
@@ -3455,7 +3627,9 @@ impl DbV1 {
         Ok(())
     }
 
-    /// Double‑SHA‑256 (SHA256d) as used by Bitcoin/Zcash headers and Merkle nodes.
+    /// Double-SHA-256 (SHA256d), as used by Bitcoin/Zcash headers and merkle nodes.
+    ///
+    /// Input and output are raw bytes (no endianness conversions are performed here).
     fn sha256d(data: &[u8]) -> [u8; 32] {
         let mut hasher = Sha256::new();
         Digest::update(&mut hasher, data); // first pass
@@ -3468,8 +3642,16 @@ impl DbV1 {
         out
     }
 
-    /// Compute the Merkle root of a non‑empty slice of 32‑byte transaction IDs.
-    /// `txids` must be in block order and already in internal (little‑endian) byte order.
+    /// Compute the merkle root of a non-empty slice of 32-byte transaction IDs.
+    ///
+    /// Requirements:
+    /// - `txids` must be in block order.
+    /// - `txids` must already be in the internal byte order (little endian) expected by the header merkle root
+    ///   comparison performed by this module (no byte order transforms are applied here).
+    ///
+    /// Behavior:
+    /// - Duplicates the final element when the layer width is odd, matching Bitcoin/Zcash merkle rules.
+    /// - Uses SHA256d over 64-byte concatenated pairs at each layer.
     fn calculate_block_merkle_root(txids: &[[u8; 32]]) -> [u8; 32] {
         assert!(
             !txids.is_empty(),
@@ -3503,10 +3685,20 @@ impl DbV1 {
         layer[0]
     }
 
-    /// Validate a contiguous range of block heights `[start, end]` inclusive.
+    /// Validate a contiguous inclusive range of block heights `[start, end]`.
     ///
-    /// Optimized to skip blocks already known to be validated.
-    /// Returns the full requested `(start, end)` range on success.
+    /// This method is optimized to skip heights already known validated via `validated_tip` /
+    /// `validated_set`.
+    ///
+    /// Semantics:
+    /// - If `end < start`, returns an error.
+    /// - If the entire range is already validated, returns `(start, end)` without touching LMDB.
+    /// - Otherwise, validates each missing height in ascending order using `validate_block_blocking`.
+    ///
+    /// WARNING:
+    /// - This uses `tokio::task::block_in_place` internally and performs LMDB reads; callers should
+    ///   avoid invoking it from latency-sensitive async paths unless they explicitly intend to
+    ///   validate on-demand.
     async fn validate_block_range(
         &self,
         start: Height,
