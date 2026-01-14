@@ -1,7 +1,4 @@
-use std::{
-    sync::{Arc, Mutex},
-    time::Duration,
-};
+use std::{sync::Arc, time::Duration};
 
 use proptest::{
     prelude::{Arbitrary as _, BoxedStrategy, Just},
@@ -28,7 +25,6 @@ use crate::{
 };
 
 #[test]
-#[ignore = "Failing due to sync reorg bugs"]
 fn make_chain() {
     init_tracing();
     let network = Network::Regtest(ActivationHeights::default());
@@ -47,7 +43,6 @@ fn make_chain() {
         runtime.block_on(async {
             let (genesis_segment, branching_segments) = segments;
             let mockchain = ProptestMockchain {
-                best_block: Mutex::new(genesis_segment.first().unwrap().hash()),
                 genesis_segment,
                 branching_segments,
             };
@@ -63,7 +58,7 @@ fn make_chain() {
                     ..Default::default()
                 },
                 db_version: 1,
-                network ,
+                network,
 
             };
 
@@ -80,35 +75,26 @@ fn make_chain() {
             for (hash, block) in &snapshot.blocks {
                 if hash != &best_tip_hash {
                     assert!(block.chainwork().to_u256() <= best_tip_block.chainwork().to_u256());
-                    if snapshot.heights_to_hashes.values().any(|h| block.hash() == h) {
+                    if snapshot.heights_to_hashes.get(&block.height()) == Some(block.hash()) {
                         assert_eq!(index_reader.find_fork_point(&snapshot, hash).unwrap().unwrap().0, *hash);
                     } else {
                         assert_ne!(index_reader.find_fork_point(&snapshot, hash).unwrap().unwrap().0, *hash);
                     }
                 }
             }
-            assert_eq!(snapshot.heights_to_hashes.len(), segment_length * 2);
-            assert_eq!(snapshot.heights_to_hashes.len(), segment_length * (branch_count + 1));
+            assert_eq!(snapshot.heights_to_hashes.len(), (segment_length * 2) + 2);
+            assert_eq!(
+                snapshot.blocks.len(),
+                (segment_length * (branch_count + 1)) + 2
+            );
         });
     });
 }
 
+#[derive(Clone)]
 struct ProptestMockchain {
     genesis_segment: ChainSegment,
     branching_segments: Vec<ChainSegment>,
-    // Updated each time we simulate a reorg, to keep us
-    // from reorging indefinitely
-    best_block: Mutex<zebra_chain::block::Hash>,
-}
-
-impl Clone for ProptestMockchain {
-    fn clone(&self) -> Self {
-        Self {
-            genesis_segment: self.genesis_segment.clone(),
-            branching_segments: self.branching_segments.clone(),
-            best_block: Mutex::new(*self.best_block.lock().unwrap()),
-        }
-    }
 }
 
 impl ProptestMockchain {
@@ -196,71 +182,21 @@ impl BlockchainSource for ProptestMockchain {
                     })
                     .cloned())
             }
-            // This implementation:
-            // a) Picks a random block in the branching section with
-            //     chainwork >= the current 'best_block'
-            // b) sets that block as the new best block
-            // c) returns the block at the provided height, on the best_block's chain
-            HashOrHeight::Height(height) => Ok({
-                let chainwork = self
-                    .get_block_and_all_preceeding(|block| {
-                        block.hash() == *self.best_block.lock().unwrap()
-                    })
-                    .unwrap()
-                    .iter()
-                    .map(|block| {
-                        block
-                            .header
-                            .difficulty_threshold
-                            .to_work()
-                            .unwrap()
-                            .as_u128()
-                    })
-                    .sum();
-                let better_blocks: Vec<_> = self
-                    .branching_segments
-                    .iter()
-                    .flat_map(|segment| segment.iter())
-                    .filter(|block| {
-                        self.get_block_and_all_preceeding(|b| b.hash() == block.hash())
-                            .unwrap()
-                            .iter()
-                            .map(|block| {
-                                block
-                                    .header
-                                    .difficulty_threshold
-                                    .to_work()
-                                    .unwrap()
-                                    .as_u128()
-                            })
-                            .sum::<u128>()
-                            >= chainwork
-                    })
-                    .collect();
-                println!("prev best chainwork: {chainwork}");
-                *self.best_block.lock().unwrap() = better_blocks
-                    .choose(&mut rand::thread_rng())
-                    .unwrap()
-                    .hash();
-
-                self.genesis_segment
-                    .iter()
-                    .find(|block| block.coinbase_height().unwrap() == height)
-                    .cloned()
-                    .or_else(|| {
-                        self.branching_segments
-                            .iter()
-                            .find(|branch| {
-                                branch
-                                    .iter()
-                                    .any(|block| block.hash() == *self.best_block.lock().unwrap())
-                            })
-                            .unwrap()
-                            .iter()
-                            .find(|block| block.coinbase_height().unwrap() == height)
-                            .cloned()
-                    })
-            }),
+            // This implementation selects a block from a random branch instead
+            // of the best branch. This is intended to simulate reorgs
+            HashOrHeight::Height(height) => Ok(self
+                .genesis_segment
+                .iter()
+                .find(|block| block.coinbase_height().unwrap() == height)
+                .cloned()
+                .or_else(|| {
+                    self.branching_segments
+                        .choose(&mut rand::thread_rng())
+                        .unwrap()
+                        .iter()
+                        .find(|block| block.coinbase_height().unwrap() == height)
+                        .cloned()
+                })),
         }
     }
 
