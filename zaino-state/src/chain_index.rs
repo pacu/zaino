@@ -580,9 +580,7 @@ impl<Source: BlockchainSource> NodeBackedChainIndexSubscriber<Source> {
     Searches finalized and non-finalized chains for any blocks containing the transaction.
     Ordered with finalized blocks first.
 
-    Warning: there might be multiple blocks containing the transaction.
-    In one case, diverging non-finalized chains might each confirm the transaction.
-    An uncertain case: If a transaction, which is already on a NonBest chain, becomes Finalized, it might show up in both places in a single return of this function.
+    WARNING: there might be multiple chains, each containing a block with the transaction.
     */
     async fn blocks_containing_transaction<'snapshot, 'self_lt, 'iter>(
         &'self_lt self,
@@ -872,7 +870,7 @@ impl<Source: BlockchainSource> ChainIndex for NodeBackedChainIndexSubscriber<Sou
                 }
             } else {
                 // the best chain and the mempool have divergent tip hashes
-                // refetch the snapshot to catch up to the mempool
+                // get a new snapshot and use it to find the height of the mempool
                 let target_height = self
                     .non_finalized_state
                     .get_snapshot()
