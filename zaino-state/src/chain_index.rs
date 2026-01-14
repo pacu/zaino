@@ -576,6 +576,12 @@ impl<Source: BlockchainSource> NodeBackedChainIndexSubscriber<Source> {
             .transpose()
     }
 
+    /**
+    Searches finalized and non-finalized chains for any blocks containing the transaction.
+    Ordered with finalized blocks first.
+
+    WARNING: there might be multiple chains, each containing a block with the transaction.
+    */
     async fn blocks_containing_transaction<'snapshot, 'self_lt, 'iter>(
         &'self_lt self,
         snapshot: &'snapshot NonfinalizedBlockCacheSnapshot,
@@ -585,35 +591,32 @@ impl<Source: BlockchainSource> NodeBackedChainIndexSubscriber<Source> {
         'snapshot: 'iter,
         'self_lt: 'iter,
     {
-        Ok(snapshot
-            .blocks
-            .values()
-            .filter_map(move |block| {
+        let finalized_blocks_containing_transaction = match self
+            .finalized_state
+            .get_tx_location(&types::TransactionHash(txid))
+            .await?
+        {
+            Some(tx_location) => {
+                self.finalized_state
+                    .get_chain_block(crate::Height(tx_location.block_height()))
+                    .await?
+            }
+
+            None => None,
+        }
+        .into_iter();
+        let non_finalized_blocks_containing_transaction =
+            snapshot.blocks.values().filter_map(move |block| {
                 block.transactions().iter().find_map(|transaction| {
                     if transaction.txid().0 == txid {
-                        Some(block)
+                        Some(block.clone())
                     } else {
                         None
                     }
                 })
-            })
-            .cloned()
-            .chain(
-                match self
-                    .finalized_state
-                    .get_tx_location(&types::TransactionHash(txid))
-                    .await?
-                {
-                    Some(tx_location) => {
-                        self.finalized_state
-                            .get_chain_block(crate::Height(tx_location.block_height()))
-                            .await?
-                    }
-
-                    None => None,
-                }
-                .into_iter(),
-            ))
+            });
+        Ok(finalized_blocks_containing_transaction
+            .chain(non_finalized_blocks_containing_transaction))
     }
 }
 
@@ -796,10 +799,8 @@ impl<Source: BlockchainSource> ChainIndex for NodeBackedChainIndexSubscriber<Sou
             .map_err(ChainIndexError::backing_validator)?
             .ok_or_else(|| ChainIndexError::database_hole(block.index().hash()))?;
         let block_consensus_branch_id = full_block.coinbase_height().and_then(|height| {
-            ConsensusBranchId::current(&self.non_finalized_state.network, dbg!(height))
-                .map(u32::from)
+            ConsensusBranchId::current(&self.non_finalized_state.network, height).map(u32::from)
         });
-        dbg!(block_consensus_branch_id);
         full_block
             .transactions
             .iter()
@@ -816,8 +817,8 @@ impl<Source: BlockchainSource> ChainIndex for NodeBackedChainIndexSubscriber<Sou
 
     /// Given a transaction ID, returns all known blocks containing this transaction
     ///
-    /// If the transaction is in the mempool, it will be in the BestChainLocation
-    /// if the mempool and snapshot are up-to-date, and the NonBestChainLocation set
+    /// If the transaction is in the mempool, it will be in the `BestChainLocation`
+    /// if the mempool and snapshot are up-to-date, and the `NonBestChainLocation` set
     /// if the snapshot is out-of-date compared to the mempool
     async fn get_transaction_status(
         &self,
@@ -834,6 +835,7 @@ impl<Source: BlockchainSource> ChainIndex for NodeBackedChainIndexSubscriber<Sou
             .find(|block| {
                 snapshot.heights_to_hashes.get(&block.height()) == Some(block.hash())
                     || block.height() < *start_of_nonfinalized
+                // this block is either in the best chain ``heights_to_hashes`` or finalized.
             })
             .map(|block| BestChainLocation::Block(*block.hash(), block.height()));
         let mut non_best_chain_blocks: HashSet<NonBestChainLocation> =
@@ -867,6 +869,8 @@ impl<Source: BlockchainSource> ChainIndex for NodeBackedChainIndexSubscriber<Sou
                         Some(BestChainLocation::Mempool(snapshot.best_tip.height + 1));
                 }
             } else {
+                // the best chain and the mempool have divergent tip hashes
+                // get a new snapshot and use it to find the height of the mempool
                 let target_height = self
                     .non_finalized_state
                     .get_snapshot()
@@ -875,6 +879,7 @@ impl<Source: BlockchainSource> ChainIndex for NodeBackedChainIndexSubscriber<Sou
                     .find_map(|(hash, block)| {
                         if *hash == mempool_tip_hash {
                             Some(block.height() + 1)
+                            // found the block that is the tip that the mempool is hanging on to
                         } else {
                             None
                         }

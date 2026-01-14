@@ -51,6 +51,7 @@ pub struct NonfinalizedBlockCacheSnapshot {
     /// removed by a reorg. Blocks reorged away have no height.
     pub blocks: HashMap<BlockHash, IndexedBlock>,
     /// hashes indexed by height
+    /// Hashes in this map are part of the best chain.
     pub heights_to_hashes: HashMap<Height, BlockHash>,
     // Do we need height here?
     /// The highest known block
@@ -386,7 +387,8 @@ impl<Source: BlockchainSource> NonFinalizedState<Source> {
             Some(prev_block) => {
                 if !working_snapshot
                     .heights_to_hashes
-                    .values().any(|hash| hash == prev_block.hash())
+                    .values()
+                    .any(|hash| hash == prev_block.hash())
                 {
                     Box::pin(self.handle_reorg(working_snapshot, &prev_block)).await?
                 } else {
