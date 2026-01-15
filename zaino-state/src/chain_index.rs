@@ -762,6 +762,9 @@ impl<Source: BlockchainSource> ChainIndex for NodeBackedChainIndexSubscriber<Sou
         block_hash: &types::BlockHash,
     ) -> Result<Option<(types::BlockHash, types::Height)>, Self::Error> {
         let Some(block) = snapshot.as_ref().get_chainblock_by_hash(block_hash) else {
+            // If we don't have the block in our non-finalized state,
+            // we'll only be aware of it if it's main-chain.
+            // Find it from the source, and return its height and hash
             return match self
                 .blockchain_source
                 .get_block(HashOrHeight::Hash(zebra_chain::block::Hash::from(
@@ -770,6 +773,8 @@ impl<Source: BlockchainSource> ChainIndex for NodeBackedChainIndexSubscriber<Sou
                 .await
             {
                 Ok(Some(block))
+                    // If we don't have the block in our non-finalized state
+                    // we can only passthrough assuming the block is finalized
                     if block.coinbase_height().unwrap()
                         <= snapshot.validator_finalized_height.into() =>
                 {
@@ -778,12 +783,19 @@ impl<Source: BlockchainSource> ChainIndex for NodeBackedChainIndexSubscriber<Sou
                         types::Height::from(block.coinbase_height().unwrap()),
                     )))
                 }
+                // The block is non-finalized, and we haven't synced it yet.
+                // We can't make any assertions about the best chain
+                // if it's not in our snapshot.
+                //  TODO: Should this be an error?
                 Ok(_) => Ok(None),
                 Err(e) => Err(ChainIndexError::backing_validator(e)),
             };
         };
+        // If we have the block in our heights_to_hashes set, it's main-chain
+        // Return it's hash and height
         if snapshot.heights_to_hashes.get(&block.height()) == Some(block.hash()) {
             Ok(Some((*block.hash(), block.height())))
+            // Otherwise, it's non-best chain! Grab its parent, and recurse
         } else {
             // gotta pin recursive async functions to prevent infinite-sized
             // Future-implementing types
@@ -794,10 +806,10 @@ impl<Source: BlockchainSource> ChainIndex for NodeBackedChainIndexSubscriber<Sou
     /// Returns the block commitment tree data by hash
     async fn get_treestate(
         &self,
-        // snapshot: &Self::Snapshot,
         // currently not implemented internally, fetches data from validator.
-        //
-        // NOTE: Should this check blockhash exists in snapshot and db before proxying call?
+        // as this looks up the block by hash, and cares not if the
+        // block is on the main chain or not, this is safe to pass through
+        // even if the target block is non-finalized
         hash: &types::BlockHash,
     ) -> Result<(Option<Vec<u8>>, Option<Vec<u8>>), Self::Error> {
         match self.blockchain_source.get_treestate(*hash).await {
@@ -811,6 +823,8 @@ impl<Source: BlockchainSource> ChainIndex for NodeBackedChainIndexSubscriber<Sou
     }
 
     /// given a transaction id, returns the transaction
+    /// and the consensus branch ID for the block the transaction
+    /// is in
     async fn get_raw_transaction(
         &self,
         snapshot: &Self::Snapshot,
