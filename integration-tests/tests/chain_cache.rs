@@ -68,10 +68,7 @@ mod chain_query_interface {
     };
     use zcash_local_net::validator::{zcashd::Zcashd, zebrad::Zebrad};
     use zebra_chain::{
-        parameters::{
-            testnet::{ConfiguredActivationHeights, RegtestParameters},
-            NetworkKind,
-        },
+        parameters::{testnet::RegtestParameters, NetworkKind},
         serialization::{ZcashDeserialize, ZcashDeserializeInto},
     };
 
@@ -111,11 +108,11 @@ mod chain_query_interface {
                     None => test_manager.data_dir.clone(),
                 };
                 let network = match test_manager.network {
-                    NetworkKind::Regtest => zebra_chain::parameters::Network::new_regtest(
-                        RegtestParameters::from(ConfiguredActivationHeights::from(
+                    NetworkKind::Regtest => {
+                        zebra_chain::parameters::Network::new_regtest(RegtestParameters::from(
                             test_manager.local_net.get_activation_heights().await,
-                        )),
-                    ),
+                        ))
+                    }
 
                     NetworkKind::Testnet => zebra_chain::parameters::Network::new_default_testnet(),
                     NetworkKind::Mainnet => zebra_chain::parameters::Network::Mainnet,
@@ -347,9 +344,9 @@ mod chain_query_interface {
 
             assert_eq!(
                 branch_id,
-                if height == Some(chain_index::types::GENESIS_HEIGHT) {
+                if height == chain_index::types::GENESIS_HEIGHT {
                     None
-                } else if height == Some(Height::try_from(1).unwrap()) {
+                } else if height == Height::try_from(1).unwrap() {
                     zebra_chain::parameters::NetworkUpgrade::Canopy
                         .branch_id()
                         .map(u32::from)
@@ -406,7 +403,7 @@ mod chain_query_interface {
                 .unwrap();
             assert_eq!(
                 transaction_status_best_chain.unwrap(),
-                BestChainLocation::Block(*block_hash, height.unwrap())
+                BestChainLocation::Block(*block_hash, height)
             );
             assert!(transaction_status_nonbest_chain.is_empty());
         }
