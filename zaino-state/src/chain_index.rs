@@ -503,56 +503,68 @@ impl<Source: BlockchainSource> NodeBackedChainIndex<Source> {
         let fs = self.finalized_db.clone();
         let status = self.status.clone();
         tokio::task::spawn(async move {
-            loop {
-                if status.load() == StatusType::Closing {
-                    break;
-                }
-
-                status.store(StatusType::Syncing);
-                // Sync nfs to chain tip, trimming blocks to finalized tip.
-                nfs.sync(fs.clone()).await?;
-
-                // Sync fs to chain tip - 100.
-                {
-                    let snapshot = nfs.get_snapshot();
-                    while snapshot.best_tip.height.0
-                        > (fs
-                            .to_reader()
-                            .db_height()
-                            .await
-                            .map_err(|_e| SyncError::CannotReadFinalizedState)?
-                            .unwrap_or(types::Height(0))
-                            .0
-                            + 100)
-                    {
-                        let next_finalized_height = fs
-                            .to_reader()
-                            .db_height()
-                            .await
-                            .map_err(|_e| SyncError::CannotReadFinalizedState)?
-                            .map(|height| height + 1)
-                            .unwrap_or(types::Height(0));
-                        let next_finalized_block = snapshot
-                            .blocks
-                            .get(
-                                snapshot
-                                    .heights_to_hashes
-                                    .get(&(next_finalized_height))
-                                    .ok_or(SyncError::CompetingSyncProcess)?,
-                            )
-                            .ok_or(SyncError::CompetingSyncProcess)?;
-                        // TODO: Handle write errors better (fix db and continue)
-                        fs.write_block(next_finalized_block.clone())
-                            .await
-                            .map_err(|_e| SyncError::CompetingSyncProcess)?;
+            let result: Result<(), SyncError> = async {
+                loop {
+                    if status.load() == StatusType::Closing {
+                        break;
                     }
+
+                    status.store(StatusType::Syncing);
+                    // Sync nfs to chain tip, trimming blocks to finalized tip.
+                    nfs.sync(fs.clone()).await?;
+
+                    // Sync fs to chain tip - 100.
+                    {
+                        let snapshot = nfs.get_snapshot();
+                        while snapshot.best_tip.height.0
+                            > (fs
+                                .to_reader()
+                                .db_height()
+                                .await
+                                .map_err(|_e| SyncError::CannotReadFinalizedState)?
+                                .unwrap_or(types::Height(0))
+                                .0
+                                + 100)
+                        {
+                            let next_finalized_height = fs
+                                .to_reader()
+                                .db_height()
+                                .await
+                                .map_err(|_e| SyncError::CannotReadFinalizedState)?
+                                .map(|height| height + 1)
+                                .unwrap_or(types::Height(0));
+                            let next_finalized_block = snapshot
+                                .blocks
+                                .get(
+                                    snapshot
+                                        .heights_to_hashes
+                                        .get(&(next_finalized_height))
+                                        .ok_or(SyncError::CompetingSyncProcess)?,
+                                )
+                                .ok_or(SyncError::CompetingSyncProcess)?;
+                            // TODO: Handle write errors better (fix db and continue)
+                            fs.write_block(next_finalized_block.clone())
+                                .await
+                                .map_err(|_e| SyncError::CompetingSyncProcess)?;
+                        }
+                    }
+                    status.store(StatusType::Ready);
+                    // TODO: configure sleep duration?
+                    tokio::time::sleep(Duration::from_millis(500)).await
+                    // TODO: Check for shutdown signal.
                 }
-                status.store(StatusType::Ready);
-                // TODO: configure sleep duration?
-                tokio::time::sleep(Duration::from_millis(500)).await
-                // TODO: Check for shutdown signal.
+                Ok(())
             }
-            Ok(())
+            .await;
+
+            // If the sync loop exited unexpectedly with an error, set CriticalError
+            // so that liveness checks can detect the failure.
+            if let Err(ref e) = result {
+                tracing::error!("Sync loop exited with error: {e:?}");
+                status.store(StatusType::CriticalError);
+            }
+
+            result
         })
     }
 }
