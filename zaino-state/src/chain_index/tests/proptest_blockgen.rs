@@ -76,9 +76,9 @@ fn make_chain() {
                 if hash != &best_tip_hash {
                     assert!(block.chainwork().to_u256() <= best_tip_block.chainwork().to_u256());
                     if snapshot.heights_to_hashes.get(&block.height()) == Some(block.hash()) {
-                        assert_eq!(index_reader.find_fork_point(&snapshot, hash).unwrap().unwrap().0, *hash);
+                        assert_eq!(index_reader.find_fork_point(&snapshot, hash).await.unwrap().unwrap().0, *hash);
                     } else {
-                        assert_ne!(index_reader.find_fork_point(&snapshot, hash).unwrap().unwrap().0, *hash);
+                        assert_ne!(index_reader.find_fork_point(&snapshot, hash).await.unwrap().unwrap().0, *hash);
                     }
                 }
             }

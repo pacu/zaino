@@ -640,10 +640,6 @@ impl<Source: BlockchainSource> NodeBackedChainIndexSubscriber<Source> {
         nonfinalized_snapshot: &NonfinalizedBlockCacheSnapshot,
         hash: types::BlockHash,
     ) -> Result<Option<types::Height>, ChainIndexError> {
-        let Some(validator_finalized_height) = nonfinalized_snapshot.validator_finalized_height
-        else {
-            return Ok(None);
-        };
         match self
             .blockchain_source
             .get_block(HashOrHeight::Hash(hash.into()))
@@ -651,7 +647,7 @@ impl<Source: BlockchainSource> NodeBackedChainIndexSubscriber<Source> {
         {
             Ok(Some(block))
                 if types::Height::from(block.coinbase_height().expect("block to have height"))
-                    <= validator_finalized_height =>
+                    <= nonfinalized_snapshot.validator_finalized_height =>
             {
                 Ok(Some(block.coinbase_height().unwrap().into()))
             }
@@ -707,7 +703,6 @@ impl<Source: BlockchainSource> ChainIndex for NodeBackedChainIndexSubscriber<Sou
     ) -> Option<impl Stream<Item = Result<Vec<u8>, Self::Error>>> {
         let max_servable_height = nonfinalized_snapshot
             .validator_finalized_height
-            .unwrap_or(nonfinalized_snapshot.best_tip.height)
             .max(nonfinalized_snapshot.best_tip.height);
         let end = end.unwrap_or(nonfinalized_snapshot.best_tip.height);
         if end <= max_servable_height {
@@ -767,28 +762,24 @@ impl<Source: BlockchainSource> ChainIndex for NodeBackedChainIndexSubscriber<Sou
         block_hash: &types::BlockHash,
     ) -> Result<Option<(types::BlockHash, types::Height)>, Self::Error> {
         let Some(block) = snapshot.as_ref().get_chainblock_by_hash(block_hash) else {
-            return if let Some(validator_finalized_height) = snapshot.validator_finalized_height {
-                match self
-                    .blockchain_source
-                    .get_block(HashOrHeight::Hash(zebra_chain::block::Hash::from(
-                        *block_hash,
-                    )))
-                    .await
+            return match self
+                .blockchain_source
+                .get_block(HashOrHeight::Hash(zebra_chain::block::Hash::from(
+                    *block_hash,
+                )))
+                .await
+            {
+                Ok(Some(block))
+                    if block.coinbase_height().unwrap()
+                        <= snapshot.validator_finalized_height.into() =>
                 {
-                    Ok(Some(block))
-                        if block.coinbase_height().unwrap()
-                            <= validator_finalized_height.into() =>
-                    {
-                        Ok(Some((
-                            types::BlockHash::from(block.hash()),
-                            types::Height::from(block.coinbase_height().unwrap()),
-                        )))
-                    }
-                    Ok(_) => Ok(None),
-                    Err(e) => Err(ChainIndexError::backing_validator(e)),
+                    Ok(Some((
+                        types::BlockHash::from(block.hash()),
+                        types::Height::from(block.coinbase_height().unwrap()),
+                    )))
                 }
-            } else {
-                Ok(None)
+                Ok(_) => Ok(None),
+                Err(e) => Err(ChainIndexError::backing_validator(e)),
             };
         };
         if snapshot.heights_to_hashes.get(&block.height()) == Some(block.hash()) {

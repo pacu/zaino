@@ -61,7 +61,7 @@ pub struct NonfinalizedBlockCacheSnapshot {
     /// if the validator has finalized above the tip
     /// of the snapshot, we can use it for some queries
     /// and pass through to the validator
-    pub validator_finalized_height: Option<Height>,
+    pub validator_finalized_height: Height,
 }
 
 #[derive(Debug)]
@@ -116,6 +116,10 @@ impl From<UpdateError> for SyncError {
             UpdateError::DatabaseHole => {
                 SyncError::ReorgFailure(String::from("could not determine best chain"))
             }
+            UpdateError::ValidatorConnectionError => SyncError::ZebradConnectionError(todo!(
+                "don't have a request error. \
+                HELPME: rethink some error types"
+            )),
         }
     }
 }
@@ -172,7 +176,7 @@ impl NonfinalizedBlockCacheSnapshot {
             blocks,
             heights_to_hashes,
             best_tip,
-            validator_finalized_height: None,
+            validator_finalized_height: Height(0),
         })
     }
 
@@ -493,9 +497,9 @@ impl<Source: BlockchainSource> NonFinalizedState<Source> {
             .source
             .get_best_block_height()
             .await
-            .expect("todo: error");
-        new_snapshot.validator_finalized_height =
-            validator_tip.map(|height| types::Height(height.0.saturating_sub(100)));
+            .map_err(|_| UpdateError::ValidatorConnectionError)?
+            .ok_or(UpdateError::ValidatorConnectionError)?;
+        new_snapshot.validator_finalized_height = Height(validator_tip.0.saturating_sub(100));
 
         // Need to get best hash at some point in this process
         let stored = self
@@ -664,6 +668,9 @@ pub enum UpdateError {
 
     /// A block in the snapshot is missing
     DatabaseHole,
+
+    /// Failed to connect to the backing validator
+    ValidatorConnectionError,
 }
 
 trait Block {
