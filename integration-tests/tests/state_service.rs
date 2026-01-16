@@ -636,6 +636,9 @@ async fn state_service_get_raw_mempool_testnet() {
     test_manager.close().await;
 }
 
+/// Tests whether that calls to `get_block_range` with the same block range are the same when
+/// specifying the default `PoolType`s and passing and empty Vec to verify that the method falls
+/// back to the default pools when these are not explicitly specified.
 async fn state_service_get_block_range_returns_default_pools<V:ValidatorExt>(validator: &ValidatorKind) {
     let (
         mut test_manager,
@@ -687,8 +690,7 @@ async fn state_service_get_block_range_returns_default_pools<V:ValidatorExt>(val
     let start_height: u64 = 100;
     let end_height: u64 = 103;
 
-    let fetch_service_get_block_range = fetch_service_subscriber
-        .get_block_range(BlockRange {
+    let default_pools_request = BlockRange {
             start: Some(BlockId {
                 height: start_height,
                 hash: vec![],
@@ -698,15 +700,17 @@ async fn state_service_get_block_range_returns_default_pools<V:ValidatorExt>(val
                 hash: vec![],
             }),
             pool_types: vec![],
-        })
+        };
+        
+    let fetch_service_get_block_range = fetch_service_subscriber
+        .get_block_range(default_pools_request.clone())
         .await
         .unwrap()
         .map(Result::unwrap)
         .collect::<Vec<_>>()
         .await;
 
-    let fetch_service_get_block_range_specifying_pools = fetch_service_subscriber
-        .get_block_range(BlockRange {
+    let explicit_default_pool_request = BlockRange {
             start: Some(BlockId {
                 height: start_height,
                 hash: vec![],
@@ -716,7 +720,10 @@ async fn state_service_get_block_range_returns_default_pools<V:ValidatorExt>(val
                 hash: vec![],
             }),
             pool_types: vec![PoolType::Sapling as i32, PoolType::Orchard as i32],
-        })
+        };
+        
+    let fetch_service_get_block_range_specifying_pools = fetch_service_subscriber
+        .get_block_range(explicit_default_pool_request.clone())
         .await
         .unwrap()
         .map(Result::unwrap)
@@ -729,17 +736,7 @@ async fn state_service_get_block_range_returns_default_pools<V:ValidatorExt>(val
     );
 
     let state_service_get_block_range_specifying_pools = state_service_subscriber
-        .get_block_range(BlockRange {
-            start: Some(BlockId {
-                height: start_height,
-                hash: vec![],
-            }),
-            end: Some(BlockId {
-                height: end_height,
-                hash: vec![],
-            }),
-            pool_types: vec![PoolType::Sapling as i32, PoolType::Orchard as i32],
-        })
+        .get_block_range(explicit_default_pool_request)
         .await
         .unwrap()
         .map(Result::unwrap)
@@ -747,17 +744,7 @@ async fn state_service_get_block_range_returns_default_pools<V:ValidatorExt>(val
         .await;
 
     let state_service_get_block_range = state_service_subscriber
-        .get_block_range(BlockRange {
-            start: Some(BlockId {
-                height: start_height,
-                hash: vec![],
-            }),
-            end: Some(BlockId {
-                height: end_height,
-                hash: vec![],
-            }),
-            pool_types: vec![],
-        })
+        .get_block_range(default_pools_request)
         .await
         .unwrap()
         .map(Result::unwrap)
@@ -870,8 +857,7 @@ async fn state_service_get_block_range_returns_all_pools<V: ValidatorExt>(valida
     let start_height: u64 = 100;
     let end_height: u64 = 106;
 
-    let fetch_service_get_block_range = fetch_service_subscriber
-        .get_block_range(BlockRange {
+    let block_range = BlockRange {
             start: Some(BlockId {
                 height: start_height,
                 hash: vec![],
@@ -885,7 +871,10 @@ async fn state_service_get_block_range_returns_all_pools<V: ValidatorExt>(valida
                 PoolType::Sapling as i32,
                 PoolType::Orchard as i32,
             ],
-        })
+        };
+        
+    let fetch_service_get_block_range = fetch_service_subscriber
+        .get_block_range(block_range.clone())
         .await
         .unwrap()
         .map(Result::unwrap)
@@ -893,21 +882,7 @@ async fn state_service_get_block_range_returns_all_pools<V: ValidatorExt>(valida
         .await;
 
     let state_service_get_block_range = state_service_subscriber
-        .get_block_range(BlockRange {
-            start: Some(BlockId {
-                height: start_height,
-                hash: vec![],
-            }),
-            end: Some(BlockId {
-                height: end_height,
-                hash: vec![],
-            }),
-            pool_types: vec![
-                PoolType::Transparent as i32,
-                PoolType::Sapling as i32,
-                PoolType::Orchard as i32,
-            ],
-        })
+        .get_block_range(block_range)
         .await
         .unwrap()
         .map(Result::unwrap)
