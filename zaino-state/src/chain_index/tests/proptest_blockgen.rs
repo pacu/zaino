@@ -16,7 +16,7 @@ use zebra_state::{FromDisk, HashOrHeight, IntoDisk as _};
 
 use crate::{
     chain_index::{
-        source::BlockchainSourceResult,
+        source::{BlockchainSourceResult, GetTransactionLocation},
         tests::{init_tracing, proptest_blockgen::proptest_helpers::add_segment},
         NonFinalizedSnapshot,
     },
@@ -285,13 +285,23 @@ impl BlockchainSource for ProptestMockchain {
     async fn get_transaction(
         &self,
         txid: TransactionHash,
-    ) -> BlockchainSourceResult<Option<Arc<zebra_chain::transaction::Transaction>>> {
+    ) -> BlockchainSourceResult<
+        Option<(
+            Arc<zebra_chain::transaction::Transaction>,
+            GetTransactionLocation,
+        )>,
+    > {
         Ok(self.all_blocks_arb_branch_order().find_map(|block| {
             block
                 .transactions
                 .iter()
                 .find(|transaction| transaction.hash() == txid.into())
                 .cloned()
+                .zip(Some(if self.best_branch().contains(block) {
+                    GetTransactionLocation::BestChain(block.coinbase_height().unwrap())
+                } else {
+                    GetTransactionLocation::NonbestChain
+                }))
         }))
     }
 

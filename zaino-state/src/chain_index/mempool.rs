@@ -246,7 +246,7 @@ impl<T: BlockchainSource> Mempool<T> {
         })?;
 
         for txid in txids {
-            let transaction = self
+            let (transaction, _location) = self
                 .fetcher
                 .get_transaction(txid.0.into())
                 .await?

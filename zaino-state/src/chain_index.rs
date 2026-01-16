@@ -655,6 +655,28 @@ impl<Source: BlockchainSource> NodeBackedChainIndexSubscriber<Source> {
             Err(e) => Err(ChainIndexError::backing_validator(e)),
         }
     }
+
+    // Get the height of the mempool
+    fn get_mempool_height(
+        &self,
+        snapshot: &NonfinalizedBlockCacheSnapshot,
+    ) -> Option<types::Height> {
+        snapshot
+            .blocks
+            .iter()
+            .find(|(hash, _block)| **hash == self.mempool.mempool_chain_tip())
+            .map(|(_hash, block)| block.height())
+    }
+
+    fn mempool_branch_id(&self, snapshot: &NonfinalizedBlockCacheSnapshot) -> Option<u32> {
+        self.get_mempool_height(snapshot).and_then(|height| {
+            ConsensusBranchId::current(
+                &self.non_finalized_state.network,
+                zebra_chain::block::Height::from(height + 1),
+            )
+            .map(u32::from)
+        })
+    }
 }
 
 impl<Source: BlockchainSource> ChainIndex for NodeBackedChainIndexSubscriber<Source> {
@@ -838,18 +860,7 @@ impl<Source: BlockchainSource> ChainIndex for NodeBackedChainIndexSubscriber<Sou
             .await
         {
             let bytes = mempool_tx.serialized_tx.as_ref().as_ref().to_vec();
-            let mempool_height = snapshot
-                .blocks
-                .iter()
-                .find(|(hash, _block)| **hash == self.mempool.mempool_chain_tip())
-                .map(|(_hash, block)| block.height());
-            let mempool_branch_id = mempool_height.and_then(|height| {
-                ConsensusBranchId::current(
-                    &self.non_finalized_state.network,
-                    zebra_chain::block::Height::from(height + 1),
-                )
-                .map(u32::from)
-            });
+            let mempool_branch_id = self.mempool_branch_id(snapshot);
 
             return Ok(Some((bytes, mempool_branch_id)));
         }

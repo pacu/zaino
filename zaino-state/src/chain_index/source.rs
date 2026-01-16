@@ -12,7 +12,7 @@ use zaino_fetch::jsonrpsee::{
     response::{GetBlockError, GetBlockResponse, GetTransactionResponse, GetTreestateResponse},
 };
 use zcash_primitives::merkle_tree::read_commitment_tree;
-use zebra_chain::serialization::ZcashDeserialize;
+use zebra_chain::{block::TryIntoHeight, serialization::ZcashDeserialize};
 use zebra_state::{HashOrHeight, ReadRequest, ReadResponse, ReadStateService};
 
 macro_rules! expected_read_response {
@@ -59,7 +59,12 @@ pub trait BlockchainSource: Clone + Send + Sync + 'static {
     async fn get_transaction(
         &self,
         txid: TransactionHash,
-    ) -> BlockchainSourceResult<Option<Arc<zebra_chain::transaction::Transaction>>>;
+    ) -> BlockchainSourceResult<
+        Option<(
+            Arc<zebra_chain::transaction::Transaction>,
+            GetTransactionLocation,
+        )>,
+    >;
 
     /// Returns the hash of the block at the tip of the best chain.
     async fn get_best_block_hash(&self)
@@ -414,10 +419,16 @@ impl BlockchainSource for ValidatorConnector {
         Ok(Some(txids))
     }
 
+    // Returns the transaction, and the height of the block that transaction is in if on the best chain
     async fn get_transaction(
         &self,
         txid: TransactionHash,
-    ) -> BlockchainSourceResult<Option<Arc<zebra_chain::transaction::Transaction>>> {
+    ) -> BlockchainSourceResult<
+        Option<(
+            Arc<zebra_chain::transaction::Transaction>,
+            GetTransactionLocation,
+        )>,
+    > {
         match self {
             ValidatorConnector::State(State {
                 read_state_service,
@@ -441,19 +452,21 @@ impl BlockchainSource for ValidatorConnector {
 
                 if let zebra_state::ReadResponse::Transaction(opt) = response {
                     if let Some(mined_tx) = opt {
-                        return Ok(Some((mined_tx).tx.clone()));
+                        return Ok(Some((
+                            (mined_tx).tx.clone(),
+                            GetTransactionLocation::BestChain(mined_tx.height),
+                        )));
                     }
                 } else {
                     unreachable!("unmatched response to a `Transaction` read request");
                 }
 
-                // Else heck mempool for transaction.
+                // Else check mempool for transaction.
                 let mempool_txids = self.get_mempool_txids().await?.ok_or_else(|| {
                     BlockchainSourceError::Unrecoverable(
                         "could not fetch mempool transaction ids: none returned".to_string(),
                     )
                 })?;
-
                 if mempool_txids.contains(&zebra_txid) {
                     let serialized_transaction = if let GetTransactionResponse::Raw(
                         serialized_transaction,
@@ -480,38 +493,48 @@ impl BlockchainSource for ValidatorConnector {
                                 "could not deserialize transaction data: {e}"
                             ))
                         })?;
-                    Ok(Some(transaction.into()))
+                    Ok(Some((transaction.into(), GetTransactionLocation::Mempool)))
                 } else {
                     Ok(None)
                 }
             }
             ValidatorConnector::Fetch(fetch) => {
-                let serialized_transaction =
-                    if let GetTransactionResponse::Raw(serialized_transaction) = fetch
-                        .get_raw_transaction(txid.to_string(), Some(0))
+                let transaction_object = if let GetTransactionResponse::Object(transaction_object) =
+                    fetch
+                        .get_raw_transaction(txid.to_string(), Some(1))
                         .await
                         .map_err(|e| {
                             BlockchainSourceError::Unrecoverable(format!(
                                 "could not fetch transaction data: {e}"
                             ))
-                        })?
-                    {
-                        serialized_transaction
-                    } else {
-                        return Err(BlockchainSourceError::Unrecoverable(
-                            "could not fetch transaction data: non-raw response".to_string(),
-                        ));
-                    };
+                        })? {
+                    transaction_object
+                } else {
+                    return Err(BlockchainSourceError::Unrecoverable(
+                        "could not fetch transaction data: non-obj response".to_string(),
+                    ));
+                };
                 let transaction: zebra_chain::transaction::Transaction =
                     zebra_chain::transaction::Transaction::zcash_deserialize(std::io::Cursor::new(
-                        serialized_transaction.as_ref(),
+                        transaction_object.hex().as_ref(),
                     ))
                     .map_err(|e| {
                         BlockchainSourceError::Unrecoverable(format!(
                             "could not deserialize transaction data: {e}"
                         ))
                     })?;
-                Ok(Some(transaction.into()))
+                let location = match transaction_object.height() {
+                    Some(-1) => GetTransactionLocation::NonbestChain,
+                    None => GetTransactionLocation::Mempool,
+                    Some(n) => {
+                        GetTransactionLocation::BestChain(n.try_into_height().map_err(|_e| {
+                            BlockchainSourceError::Unrecoverable(format!(
+                                "invalid height value {n}"
+                            ))
+                        })?)
+                    }
+                };
+                Ok(Some((transaction.into(), location)))
             }
         }
     }
@@ -629,6 +652,15 @@ impl BlockchainSource for ValidatorConnector {
             ValidatorConnector::Fetch(_fetch) => Ok(None),
         }
     }
+}
+
+/// get_transaction can get the height of the block
+/// containing the transaction if it's on the best
+/// chain, but cannot reliably if it isn't.
+pub(crate) enum GetTransactionLocation {
+    BestChain(zebra_chain::block::Height),
+    NonbestChain,
+    Mempool,
 }
 
 #[cfg(test)]
@@ -853,7 +885,12 @@ pub(crate) mod test {
         async fn get_transaction(
             &self,
             txid: TransactionHash,
-        ) -> BlockchainSourceResult<Option<Arc<zebra_chain::transaction::Transaction>>> {
+        ) -> BlockchainSourceResult<
+            Option<(
+                Arc<zebra_chain::transaction::Transaction>,
+                GetTransactionLocation,
+            )>,
+        > {
             let zebra_txid: zebra_chain::transaction::Hash =
                 zebra_chain::transaction::Hash::from(txid.0);
 
@@ -869,7 +906,12 @@ pub(crate) mod test {
                     .iter()
                     .find(|transaction| transaction.hash() == zebra_txid)
                 {
-                    return Ok(Some(Arc::clone(found)));
+                    return Ok(Some((
+                        Arc::clone(found),
+                        GetTransactionLocation::BestChain(zebra_chain::block::Height(
+                            height as u32,
+                        )),
+                    )));
                 }
             }
 
@@ -879,7 +921,7 @@ pub(crate) mod test {
                     .iter()
                     .find(|transaction| transaction.hash() == zebra_txid)
                 {
-                    return Ok(Some(Arc::clone(found)));
+                    return Ok(Some((Arc::clone(found), GetTransactionLocation::Mempool)));
                 }
             }
 
