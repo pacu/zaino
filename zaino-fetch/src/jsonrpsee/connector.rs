@@ -911,6 +911,6 @@ pub async fn test_node_and_return_url(
         }
         interval.tick().await;
     }
-    error!("Error: Could not establish connection with node. Please check config and confirm node is listening at the correct address and the correct authorisation details have been entered. Exiting..");
+    error!("Error: Could not establish connection with node. Please check config and confirm node is listening at {url} and the correct authorisation details have been entered. Exiting..");
     std::process::exit(1);
 }
