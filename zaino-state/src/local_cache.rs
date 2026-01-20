@@ -281,9 +281,10 @@ async fn try_state_path(
                         block_hex.as_ref(),
                         Some(display_txids_to_server(txid_strings)?),
                     )?
-                    .into_compact(
+                    .into_compact_block(
                         u32::try_from(trees.sapling())?,
                         u32::try_from(trees.orchard())?,
+                        PoolTypeFilter::includes_all()
                     )?,
                 ))
             }
@@ -347,7 +348,7 @@ async fn try_fetcher_path(
                             type_name::<GetBlockError>(),
                         ))
                     })?,
-                    PoolTypeFilter::default(),
+                    PoolTypeFilter::includes_all(),
                 )
                 .map_err(|e| {
                     RpcRequestError::Transport(TransportError::BadNodeData(

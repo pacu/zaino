@@ -365,7 +365,7 @@ impl FullBlock {
             return Err(ParseError::InvalidData(format!(
                 "Error decoding full block - {} bytes of Remaining data. Compact Block Created: ({:?})",
                 remaining_data.len(),
-                full_block.into_compact_block(0, 0, PoolTypeFilter::default())
+                full_block.into_compact_block(0, 0, PoolTypeFilter::includes_all())
             )));
         }
         Ok(full_block)
@@ -386,7 +386,7 @@ impl FullBlock {
             .enumerate()
             .filter_map(|(index, tx)| {
                 if tx.has_shielded_elements() {
-                    Some(tx.to_compact_tx(Some(index as u64), pool_types.clone()))
+                    Some(tx.to_compact_tx(Some(index as u64), &pool_types))
                 } else {
                     None
                 }

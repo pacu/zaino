@@ -47,7 +47,7 @@ use zaino_proto::proto::{
         GetAddressUtxosReplyList, GetMempoolTxRequest, LightdInfo, PingResponse, RawTransaction,
         SendResponse, TransparentAddressBlockFilter, TreeState, TxFilter,
     },
-    utils::{pool_types_from_vector, PoolTypeError, ValidatedBlockRangeRequest},
+    utils::{PoolTypeError, PoolTypeFilter, ValidatedBlockRangeRequest, pool_types_from_vector},
 };
 
 use zcash_protocol::consensus::NetworkType;
@@ -2240,6 +2240,22 @@ impl LightWalletIndexer for StateServiceSubscriber {
             exclude_txids.push(hex_string_txid);
         }
 
+        let pool_types = match PoolTypeFilter::new_from_slice(&request.pool_types) {
+                Ok(pool_type_filter) => pool_type_filter,
+                Err(PoolTypeError::InvalidPoolType) => return Err(StateServiceError::TonicStatusError(
+                    tonic::Status::invalid_argument(format!(
+                        "Error: An invalid `PoolType' was found"
+                    )),
+                )),
+                Err(PoolTypeError::UnknownPoolType(unknown_pool_type)) => return Err(StateServiceError::TonicStatusError(
+                    tonic::Status::invalid_argument(format!(
+                        "Error: Unknown `PoolType' {} was found",
+                        unknown_pool_type
+                    )),
+                ))
+        };
+           
+            
         let mempool = self.mempool.clone();
         let service_timeout = self.config.service.timeout;
         let (channel_tx, channel_rx) = mpsc::channel(self.config.service.channel_size as usize);
@@ -2277,7 +2293,7 @@ impl LightWalletIndexer for StateServiceSubscriber {
                                         .send(
                                             transaction
                                                 .1
-                                                .to_compact(0)
+                                                .to_compact_tx(None, &pool_types)
                                                 .map_err(|e| tonic::Status::unknown(e.to_string())),
                                         )
                                         .await

@@ -1134,7 +1134,7 @@ impl FullTransaction {
     /// Converts a zcash full transaction into a compact transaction.
     #[deprecated]
     pub fn to_compact(self, index: u64) -> Result<CompactTx, ParseError> {
-        self.to_compact_tx(Some(index), PoolTypeFilter::default())
+        self.to_compact_tx(Some(index), &PoolTypeFilter::default())
     }
 
     /// Converts a Zcash Transaction into a `CompactTx` of the Light wallet protocol.
@@ -1144,7 +1144,7 @@ impl FullTransaction {
     pub fn to_compact_tx(
         self,
         index: Option<u64>,
-        pool_types: PoolTypeFilter,
+        pool_types: &PoolTypeFilter,
     ) -> Result<CompactTx, ParseError> {
         let hash = self.tx_id();
 
