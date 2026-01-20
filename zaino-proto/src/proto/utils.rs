@@ -1,6 +1,6 @@
 use crate::proto::service::{BlockRange, PoolType};
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 /// Errors that can arise when mapping `PoolType` from an `i32` value.
 pub enum PoolTypeError {
     /// Pool Type value was map to the enum `PoolType::Invalid`.
@@ -9,8 +9,9 @@ pub enum PoolTypeError {
     UnknownPoolType(i32),
 }
 
-// Converts a vector of pool_types (i32) into its rich-type representation
-// Returns `None` when invalid `pool_types` are found
+/// Converts a vector of pool_types (i32) into its rich-type representation
+/// Returns `PoolTypeError::InvalidPoolType` when invalid `pool_types` are found 
+/// or `PoolTypeError::UnknownPoolType` if unknown ones are found.
 pub fn pool_types_from_vector(pool_types: &[i32]) -> Result<Vec<PoolType>, PoolTypeError> {
     let pools = if pool_types.is_empty() {
         vec![PoolType::Sapling, PoolType::Orchard]
@@ -135,23 +136,42 @@ impl PoolTypeFilter {
         }
     }
 
+    /// A PoolType Filter that will include all existing pool types.
+    pub fn includes_all() -> Self {
+        PoolTypeFilter { 
+            include_transparent: true,
+            include_sapling: true,
+            include_orchard: true 
+        }
+    }
+
+    /// create a `PoolTypeFilter` from a vector of raw i32 `PoolType`s
+    /// If the vector is empty it will return `Self::default()`.
+    /// If the vector contains `PoolType::Invalid` or the vector contains more than 3 elements 
+    /// returns `PoolTypeError::InvalidPoolType`
+    pub fn new_from_slice(pool_types: &[i32]) -> Result<Self, PoolTypeError> {
+        let pool_types = pool_types_from_vector(pool_types)?;
+        
+        Self::new_from_pool_types(&pool_types)
+    }
+
     /// create a `PoolTypeFilter` from a vector of `PoolType`
     /// If the vector is empty it will return `Self::default()`.
-    /// If the vector contains `PoolType::Invalid`, returns `None`
-    /// If the vector contains more than 3 elements, returns `None`
-    pub fn new_from_pool_types(pool_types: &Vec<PoolType>) -> Option<PoolTypeFilter> {
+    /// If the vector contains `PoolType::Invalid` or the vector contains more than 3 elements 
+    /// returns `PoolTypeError::InvalidPoolType`
+    pub fn new_from_pool_types(pool_types: &Vec<PoolType>) -> Result<PoolTypeFilter, PoolTypeError> {
         if pool_types.len() > PoolType::Orchard as usize {
-            return None;
+            return Err(PoolTypeError::InvalidPoolType);
         }
 
         if pool_types.is_empty() {
-            Some(Self::default())
+            Ok(Self::default())
         } else {
             let mut filter = PoolTypeFilter::empty();
 
             for pool_type in pool_types {
                 match pool_type {
-                    PoolType::Invalid => return None,
+                    PoolType::Invalid => return Err(PoolTypeError::InvalidPoolType),
                     PoolType::Transparent => filter.include_transparent = true,
                     PoolType::Sapling => filter.include_sapling = true,
                     PoolType::Orchard => filter.include_orchard = true,
@@ -160,9 +180,9 @@ impl PoolTypeFilter {
 
             // guard against returning an invalid state this shouls never happen.
             if filter.is_empty() {
-                return Some(Self::default());
+                return Ok(Self::default());
             } else {
-                return Some(filter);
+                return Ok(filter);
             }
         }
     }
@@ -213,10 +233,10 @@ impl PoolTypeFilter {
 
 #[cfg(test)]
 mod test {
-    use crate::proto::{service::PoolType, utils::PoolTypeFilter};
+    use crate::proto::{service::PoolType, utils::{PoolTypeError, PoolTypeFilter}};
 
     #[test]
-    fn test_pool_type_filter_none_when_invalid() {
+    fn test_pool_type_filter_fails_when_invalid() {
         let pools = [
             PoolType::Transparent,
             PoolType::Sapling,
@@ -225,11 +245,11 @@ mod test {
         ]
         .to_vec();
 
-        assert_eq!(PoolTypeFilter::new_from_pool_types(&pools), None);
+        assert_eq!(PoolTypeFilter::new_from_pool_types(&pools), Err(PoolTypeError::InvalidPoolType));
     }
 
     #[test]
-    fn test_pool_type_filter_none_when_too_many_items() {
+    fn test_pool_type_filter_fails_when_too_many_items() {
         let pools = [
             PoolType::Transparent,
             PoolType::Sapling,
@@ -238,7 +258,7 @@ mod test {
         ]
         .to_vec();
 
-        assert_eq!(PoolTypeFilter::new_from_pool_types(&pools), None);
+        assert_eq!(PoolTypeFilter::new_from_pool_types(&pools), Err(PoolTypeError::InvalidPoolType));
     }
 
     #[test]
@@ -247,7 +267,7 @@ mod test {
 
         assert_eq!(
             PoolTypeFilter::new_from_pool_types(&pools),
-            Some(PoolTypeFilter::from_checked_parts(true, true, false))
+            Ok(PoolTypeFilter::from_checked_parts(true, true, false))
         );
     }
 
@@ -257,7 +277,7 @@ mod test {
 
         assert_eq!(
             PoolTypeFilter::new_from_pool_types(&pools),
-            Some(PoolTypeFilter::from_checked_parts(true, false, false))
+            Ok(PoolTypeFilter::from_checked_parts(true, false, false))
         );
     }
 
@@ -265,7 +285,15 @@ mod test {
     fn test_pool_type_filter_default() {
         assert_eq!(
             PoolTypeFilter::new_from_pool_types(&vec![]),
-            Some(PoolTypeFilter::default())
+            Ok(PoolTypeFilter::default())
+        );
+    }
+
+     #[test]
+    fn test_pool_type_filter_includes_all() {
+        assert_eq!(
+            PoolTypeFilter::from_checked_parts(true, true, true),
+            PoolTypeFilter::includes_all()
         );
     }
 }
