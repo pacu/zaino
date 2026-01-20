@@ -51,6 +51,7 @@ pub struct NonfinalizedBlockCacheSnapshot {
     /// removed by a reorg. Blocks reorged away have no height.
     pub blocks: HashMap<BlockHash, IndexedBlock>,
     /// hashes indexed by height
+    /// Hashes in this map are part of the best chain.
     pub heights_to_hashes: HashMap<Height, BlockHash>,
     // Do we need height here?
     /// The highest known block
