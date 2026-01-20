@@ -865,6 +865,29 @@ impl<Source: BlockchainSource> ChainIndex for NodeBackedChainIndexSubscriber<Sou
             return Ok(Some((bytes, mempool_branch_id)));
         }
 
+        if let Some((transaction, location)) = self
+            .blockchain_source
+            .get_transaction(*txid)
+            .await
+            .map_err(|e| -> ChainIndexError { todo!() })?
+        {
+            // Passthrough, if the transaction is finalized
+            // on the best chain
+            if let source::GetTransactionLocation::BestChain(height) = location {
+                if height <= snapshot.validator_finalized_height.into() {
+                    return Ok(Some((
+                        zebra_chain::transaction::SerializedTransaction::from(transaction)
+                            .as_ref()
+                            .to_vec(),
+                        ConsensusBranchId::current(&self.non_finalized_state.network, height)
+                            .map(u32::from),
+                    )));
+                }
+            }
+        }
+
+        // if the tranasction isn't finalized on the best chain
+        // check our indexes
         let Some(block) = self
             .blocks_containing_transaction(snapshot, txid.0)
             .await?
@@ -873,13 +896,6 @@ impl<Source: BlockchainSource> ChainIndex for NodeBackedChainIndexSubscriber<Sou
             return Ok(None);
         };
 
-        // NOTE: Could we safely use zebra's get transaction method here without invalidating the snapshot?
-        // This would be a more efficient way to fetch transaction data.
-        //
-        // Should NodeBackedChainIndex keep a clone of source to use here?
-        //
-        // This will require careful attention as there is a case where a transaction may still exist,
-        // but may have been reorged into a different block, possibly breaking the validation of this interface.
         let full_block = self
             .non_finalized_state
             .source
