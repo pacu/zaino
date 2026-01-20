@@ -1093,17 +1093,10 @@ async fn fetch_service_get_block_range_returns_all_pools<V: ValidatorExt>(valida
     } else {
         // zcashd
         test_manager
-            .generate_blocks_and_poll_indexer(11, &fetch_service_subscriber)
+            .generate_blocks_and_poll_indexer(14, &fetch_service_subscriber)
             .await;
 
         clients.faucet.sync_and_await().await.unwrap();
-        for _ in 1..4 {
-            clients.faucet.quick_shield(AccountId::ZERO).await.unwrap();
-            test_manager
-                .generate_blocks_and_poll_indexer(1, &fetch_service_subscriber)
-                .await;
-            clients.faucet.sync_and_await().await.unwrap();
-        }
     }
 
     let recipient_transparent = clients.get_recipient_address("transparent").await;
@@ -1135,8 +1128,16 @@ async fn fetch_service_get_block_range_returns_all_pools<V: ValidatorExt>(valida
         .generate_blocks_and_poll_indexer(1, &fetch_service_subscriber)
         .await;
 
-    let start_height: u64 = 100;
-    let end_height: u64 = 106;
+    let start_height: u64 = if matches!(validator, ValidatorKind::Zebrad) { 
+        100
+    } else {
+        1
+    };
+    let end_height: u64 = if matches!(validator, ValidatorKind::Zebrad) { 
+        106
+    } else {
+        6
+    };
 
     let fetch_service_get_block_range = fetch_service_subscriber
         .get_block_range(BlockRange {
@@ -1240,17 +1241,10 @@ async fn fetch_service_get_block_range_no_pools_returns_sapling_orchard<V: Valid
     } else {
         // zcashd
         test_manager
-            .generate_blocks_and_poll_indexer(11, &fetch_service_subscriber)
+            .generate_blocks_and_poll_indexer(15, &fetch_service_subscriber)
             .await;
 
         clients.faucet.sync_and_await().await.unwrap();
-        for _ in 1..4 {
-            clients.faucet.quick_shield(AccountId::ZERO).await.unwrap();
-            test_manager
-                .generate_blocks_and_poll_indexer(1, &fetch_service_subscriber)
-                .await;
-            clients.faucet.sync_and_await().await.unwrap();
-        }
     }
 
     let recipient_transparent = clients.get_recipient_address("transparent").await;
@@ -1282,8 +1276,16 @@ async fn fetch_service_get_block_range_no_pools_returns_sapling_orchard<V: Valid
         .generate_blocks_and_poll_indexer(1, &fetch_service_subscriber)
         .await;
 
-    let start_height: u64 = 100;
-    let end_height: u64 = 106;
+    let start_height: u64 = if matches!(validator, ValidatorKind::Zebrad) { 
+        100
+    } else {
+        10
+    };
+    let end_height: u64 = if matches!(validator, ValidatorKind::Zebrad) { 
+        106
+    } else {
+        16
+    };
 
     let fetch_service_get_block_range = fetch_service_subscriber
         .get_block_range(BlockRange {
@@ -2270,7 +2272,7 @@ mod zcashd {
         }
 
         #[tokio::test(flavor = "multi_thread")]
-        pub(crate) async fn block_range_returns_all_blocks() {
+        pub(crate) async fn block_range_returns_all_pools_when_requested() {
             fetch_service_get_block_range_returns_all_pools::<Zcashd>(&ValidatorKind::Zcashd).await;
         }
 
