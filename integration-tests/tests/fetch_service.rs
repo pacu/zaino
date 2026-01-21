@@ -1241,7 +1241,7 @@ async fn fetch_service_get_block_range_no_pools_returns_sapling_orchard<V: Valid
     } else {
         // zcashd
         test_manager
-            .generate_blocks_and_poll_indexer(15, &fetch_service_subscriber)
+            .generate_blocks_and_poll_indexer(14, &fetch_service_subscriber)
             .await;
 
         clients.faucet.sync_and_await().await.unwrap();
@@ -1284,7 +1284,7 @@ async fn fetch_service_get_block_range_no_pools_returns_sapling_orchard<V: Valid
     let end_height: u64 = if matches!(validator, ValidatorKind::Zebrad) { 
         106
     } else {
-        16
+        17
     };
 
     let fetch_service_get_block_range = fetch_service_subscriber
@@ -1308,9 +1308,14 @@ async fn fetch_service_get_block_range_no_pools_returns_sapling_orchard<V: Valid
     let compact_block = fetch_service_get_block_range.last().unwrap();
 
     assert_eq!(compact_block.height, end_height);
-
+    
+    let expected_tx_count = if matches!(validator, ValidatorKind::Zebrad) { 
+        3
+    } else {
+        4 // zcashd shields coinbase and tx count will be one more than zebra's
+    };
     // the compact block has 3 transactions
-    assert_eq!(compact_block.vtx.len(), 3);
+    assert_eq!(compact_block.vtx.len(), expected_tx_count);
 
     // transaction order is not guaranteed so it's necessary to look up for them by TXID
     let deshielding_tx = compact_block
