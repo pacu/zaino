@@ -12,6 +12,7 @@
 //!   - NOTE: Full transaction and block data is served from the backend finalizer.
 
 use crate::chain_index::non_finalised_state::BestTip;
+use crate::chain_index::source::GetTransactionLocation;
 use crate::chain_index::types::{BestChainLocation, NonBestChainLocation};
 use crate::error::{ChainIndexError, ChainIndexErrorKind, FinalisedStateError};
 use crate::IndexedBlock;
@@ -23,6 +24,7 @@ use futures::{FutureExt, Stream};
 use non_finalised_state::NonfinalizedBlockCacheSnapshot;
 use source::{BlockchainSource, ValidatorConnector};
 use tokio_stream::StreamExt;
+use tonic::IntoRequest;
 use tracing::info;
 use zebra_chain::parameters::ConsensusBranchId;
 pub use zebra_chain::parameters::Network as ZebraNetwork;
@@ -993,6 +995,30 @@ impl<Source: BlockchainSource> ChainIndex for NodeBackedChainIndexSubscriber<Sou
                         }
                     });
                 non_best_chain_blocks.insert(NonBestChainLocation::Mempool(target_height));
+            }
+        }
+
+        // passthrough
+        if best_chain_block == None {
+            if let Some((_transaction, location)) = self
+                .blockchain_source
+                .get_transaction(*txid)
+                .await
+                .map_err(|e| -> ChainIndexError { todo!() })?
+            {
+                if let GetTransactionLocation::BestChain(height) = location {
+                    if height <= snapshot.validator_finalized_height.into() {
+                        if let Some(block) = self
+                            .blockchain_source
+                            .get_block(HashOrHeight::Height(height))
+                            .await
+                            .map_err(|e| -> ChainIndexError { todo!() })?
+                        {
+                            best_chain_block =
+                                Some(BestChainLocation::Block(block.hash().into(), height.into()));
+                        }
+                    }
+                }
             }
         }
 
