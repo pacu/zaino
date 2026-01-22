@@ -24,7 +24,6 @@ use futures::{FutureExt, Stream};
 use non_finalised_state::NonfinalizedBlockCacheSnapshot;
 use source::{BlockchainSource, ValidatorConnector};
 use tokio_stream::StreamExt;
-use tonic::IntoRequest;
 use tracing::info;
 use zebra_chain::parameters::ConsensusBranchId;
 pub use zebra_chain::parameters::Network as ZebraNetwork;
@@ -874,7 +873,7 @@ impl<Source: BlockchainSource> ChainIndex for NodeBackedChainIndexSubscriber<Sou
             .blockchain_source
             .get_transaction(*txid)
             .await
-            .map_err(|e| -> ChainIndexError { todo!() })?
+            .map_err(|e| ChainIndexError::backing_validator(e))?
         {
             // Passthrough, if the transaction is finalized
             // on the best chain
@@ -1004,7 +1003,7 @@ impl<Source: BlockchainSource> ChainIndex for NodeBackedChainIndexSubscriber<Sou
                 .blockchain_source
                 .get_transaction(*txid)
                 .await
-                .map_err(|e| -> ChainIndexError { todo!() })?
+                .map_err(|e| ChainIndexError::backing_validator(e))?
             {
                 if let GetTransactionLocation::BestChain(height) = location {
                     if height <= snapshot.validator_finalized_height.into() {
@@ -1012,7 +1011,7 @@ impl<Source: BlockchainSource> ChainIndex for NodeBackedChainIndexSubscriber<Sou
                             .blockchain_source
                             .get_block(HashOrHeight::Height(height))
                             .await
-                            .map_err(|e| -> ChainIndexError { todo!() })?
+                            .map_err(|e| ChainIndexError::backing_validator(e))?
                         {
                             best_chain_block =
                                 Some(BestChainLocation::Block(block.hash().into(), height.into()));

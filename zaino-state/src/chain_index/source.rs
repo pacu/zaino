@@ -654,12 +654,19 @@ impl BlockchainSource for ValidatorConnector {
     }
 }
 
-/// get_transaction can get the height of the block
-/// containing the transaction if it's on the best
-/// chain, but cannot reliably if it isn't.
-pub(crate) enum GetTransactionLocation {
+/// The location of a transaction returned by
+/// [BlockchainSource::get_transaction]
+pub enum GetTransactionLocation {
+    // get_transaction can get the height of the block
+    // containing the transaction if it's on the best
+    // chain, but cannot reliably if it isn't.
+    //
+    /// The transaction is in the best chain,
+    /// the block height is returned
     BestChain(zebra_chain::block::Height),
+    /// The transaction is on a non-best chain
     NonbestChain,
+    /// The transaction is in the mempool
     Mempool,
 }
 
