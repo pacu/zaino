@@ -4,7 +4,7 @@ use figment::{
     Figment,
 };
 use std::{
-    net::{IpAddr, SocketAddr, ToSocketAddrs},
+    net::{IpAddr, SocketAddr},
     path::PathBuf,
 };
 // Added for Serde deserialization helpers
@@ -17,8 +17,8 @@ use serde::{
 use tracing::warn;
 use tracing::{error, info};
 use zaino_common::{
-    CacheConfig, DatabaseConfig, DatabaseSize, Network, ServiceConfig, StorageConfig,
-    ValidatorConfig,
+    try_resolve_address, AddressResolution, CacheConfig, DatabaseConfig, DatabaseSize, Network,
+    ServiceConfig, StorageConfig, ValidatorConfig,
 };
 use zaino_serve::server::config::{GrpcServerConfig, JsonRpcServerConfig};
 
@@ -117,18 +117,36 @@ impl ZainodConfig {
         let grpc_addr =
             fetch_socket_addr_from_hostname(&self.grpc_settings.listen_address.to_string())?;
 
-        let validator_addr = fetch_socket_addr_from_hostname(
-            &self
-                .validator_settings
-                .validator_jsonrpc_listen_address
-                .to_string(),
-        )?;
+        // Validate the validator address using the richer result type that distinguishes
+        // between format errors (always fail) and DNS lookup failures (can defer for Docker).
+        let validator_addr_result =
+            try_resolve_address(&self.validator_settings.validator_jsonrpc_listen_address);
 
-        // Ensure validator listen address is private.
-        if !is_private_listen_addr(&validator_addr) {
-            return Err(IndexerError::ConfigError(
-                "Zaino may only connect to Zebra with private IP addresses.".to_string(),
-            ));
+        // Validator address validation:
+        // - Resolved IPs: must be private (RFC1918/ULA)
+        // - Hostnames: validated at connection time (supports Docker/K8s service discovery)
+        // - Cookie auth: determined by validator_cookie_path config, not enforced by address type
+        match validator_addr_result {
+            AddressResolution::Resolved(validator_addr) => {
+                if !is_private_listen_addr(&validator_addr) {
+                    return Err(IndexerError::ConfigError(
+                        "Zaino may only connect to Zebra with private IP addresses.".to_string(),
+                    ));
+                }
+            }
+            AddressResolution::UnresolvedHostname { ref address, .. } => {
+                info!(
+                    "Validator address '{}' cannot be resolved at config time.",
+                    address
+                );
+            }
+            AddressResolution::InvalidFormat { address, reason } => {
+                // Invalid address format - always fail immediately.
+                return Err(IndexerError::ConfigError(format!(
+                    "Invalid validator address '{}': {}",
+                    address, reason
+                )));
+            }
         }
 
         #[cfg(not(feature = "no_tls_use_unencrypted_traffic"))]
@@ -138,16 +156,6 @@ impl ZainodConfig {
                 return Err(IndexerError::ConfigError(
                     "TLS required when connecting to external addresses.".to_string(),
                 ));
-            }
-
-            // Ensure validator rpc cookie authentication is used when connecting to non-loopback addresses.
-            if !is_loopback_listen_addr(&validator_addr)
-                && self.validator_settings.validator_cookie_path.is_none()
-            {
-                return Err(IndexerError::ConfigError(
-                "Validator listen address is not loopback, so cookie authentication must be enabled."
-                    .to_string(),
-            ));
             }
         }
 
@@ -191,8 +199,8 @@ impl Default for ZainodConfig {
                 tls: None,
             },
             validator_settings: ValidatorConfig {
-                validator_grpc_listen_address: Some("127.0.0.1:18230".parse().unwrap()),
-                validator_jsonrpc_listen_address: "127.0.0.1:18232".parse().unwrap(),
+                validator_grpc_listen_address: Some("127.0.0.1:18230".to_string()),
+                validator_jsonrpc_listen_address: "127.0.0.1:18232".to_string(),
                 validator_cookie_path: None,
                 validator_user: Some("xxxxxx".to_string()),
                 validator_password: Some("xxxxxx".to_string()),
@@ -240,19 +248,8 @@ pub fn default_zebra_db_path() -> Result<PathBuf, IndexerError> {
 
 /// Resolves a hostname to a SocketAddr.
 fn fetch_socket_addr_from_hostname(address: &str) -> Result<SocketAddr, IndexerError> {
-    address.parse::<SocketAddr>().or_else(|_| {
-        let addrs: Vec<_> = address
-            .to_socket_addrs()
-            .map_err(|e| IndexerError::ConfigError(format!("Invalid address '{address}': {e}")))?
-            .collect();
-        if let Some(ipv4_addr) = addrs.iter().find(|addr| addr.is_ipv4()) {
-            Ok(*ipv4_addr)
-        } else {
-            addrs.into_iter().next().ok_or_else(|| {
-                IndexerError::ConfigError(format!("Unable to resolve address '{address}'"))
-            })
-        }
-    })
+    zaino_common::net::resolve_socket_addr(address)
+        .map_err(|e| IndexerError::ConfigError(format!("Invalid address '{address}': {e}")))
 }
 
 /// Validates that the configured `address` is either:
@@ -265,18 +262,6 @@ pub(crate) fn is_private_listen_addr(addr: &SocketAddr) -> bool {
     match ip {
         IpAddr::V4(ipv4) => ipv4.is_private() || ipv4.is_loopback(),
         IpAddr::V6(ipv6) => ipv6.is_unique_local() || ip.is_loopback(),
-    }
-}
-
-/// Validates that the configured `address` is a loopback address.
-///
-/// Returns `Ok(BindAddress)` if valid.
-#[cfg_attr(feature = "no_tls_use_unencrypted_traffic", allow(dead_code))]
-pub(crate) fn is_loopback_listen_addr(addr: &SocketAddr) -> bool {
-    let ip = addr.ip();
-    match ip {
-        IpAddr::V4(ipv4) => ipv4.is_loopback(),
-        IpAddr::V6(ipv6) => ipv6.is_loopback(),
     }
 }
 
@@ -343,19 +328,41 @@ impl TryFrom<ZainodConfig> for BackendConfig {
     fn try_from(cfg: ZainodConfig) -> Result<Self, Self::Error> {
         match cfg.backend {
             zaino_state::BackendType::State => {
-                Ok(BackendConfig::State(StateServiceConfig::from(cfg)))
+                Ok(BackendConfig::State(StateServiceConfig::try_from(cfg)?))
             }
             zaino_state::BackendType::Fetch => {
-                Ok(BackendConfig::Fetch(FetchServiceConfig::from(cfg)))
+                Ok(BackendConfig::Fetch(FetchServiceConfig::try_from(cfg)?))
             }
         }
     }
 }
 
 #[allow(deprecated)]
-impl From<ZainodConfig> for StateServiceConfig {
-    fn from(cfg: ZainodConfig) -> Self {
-        StateServiceConfig {
+impl TryFrom<ZainodConfig> for StateServiceConfig {
+    type Error = IndexerError;
+
+    fn try_from(cfg: ZainodConfig) -> Result<Self, Self::Error> {
+        let grpc_listen_address = cfg
+            .validator_settings
+            .validator_grpc_listen_address
+            .as_ref()
+            .ok_or_else(|| {
+                IndexerError::ConfigError(
+                    "Missing validator_grpc_listen_address in configuration".to_string(),
+                )
+            })?;
+        let validator_grpc_address =
+            fetch_socket_addr_from_hostname(grpc_listen_address).map_err(|e| {
+                let msg = match e {
+                    IndexerError::ConfigError(msg) => msg,
+                    other => other.to_string(),
+                };
+                IndexerError::ConfigError(format!(
+                    "Invalid validator_grpc_listen_address '{grpc_listen_address}': {msg}"
+                ))
+            })?;
+
+        Ok(StateServiceConfig {
             validator_state_config: zebra_state::Config {
                 cache_dir: cfg.zebra_db_path.clone(),
                 ephemeral: false,
@@ -364,11 +371,11 @@ impl From<ZainodConfig> for StateServiceConfig {
                 debug_validity_check_interval: None,
                 should_backup_non_finalized_state: true,
             },
-            validator_rpc_address: cfg.validator_settings.validator_jsonrpc_listen_address,
-            validator_grpc_address: cfg
+            validator_rpc_address: cfg
                 .validator_settings
-                .validator_grpc_listen_address
-                .expect("Zebra config with no grpc_listen_address"),
+                .validator_jsonrpc_listen_address
+                .clone(),
+            validator_grpc_address,
             validator_cookie_auth: cfg.validator_settings.validator_cookie_path.is_some(),
             validator_cookie_path: cfg.validator_settings.validator_cookie_path,
             validator_rpc_user: cfg
@@ -382,14 +389,16 @@ impl From<ZainodConfig> for StateServiceConfig {
             service: cfg.service,
             storage: cfg.storage,
             network: cfg.network,
-        }
+        })
     }
 }
 
 #[allow(deprecated)]
-impl From<ZainodConfig> for FetchServiceConfig {
-    fn from(cfg: ZainodConfig) -> Self {
-        FetchServiceConfig {
+impl TryFrom<ZainodConfig> for FetchServiceConfig {
+    type Error = IndexerError;
+
+    fn try_from(cfg: ZainodConfig) -> Result<Self, Self::Error> {
+        Ok(FetchServiceConfig {
             validator_rpc_address: cfg.validator_settings.validator_jsonrpc_listen_address,
             validator_cookie_path: cfg.validator_settings.validator_cookie_path,
             validator_rpc_user: cfg
@@ -403,7 +412,7 @@ impl From<ZainodConfig> for FetchServiceConfig {
             service: cfg.service,
             storage: cfg.storage,
             network: cfg.network,
-        }
+        })
     }
 }
 
@@ -982,6 +991,80 @@ mod test {
             } else {
                 panic!("Expected ConfigError, got {result:?}");
             }
+            Ok(())
+        });
+    }
+
+    #[test]
+    /// Validates that cookie authentication is config-based, not address-type-based.
+    /// Non-loopback private IPs should work without cookie auth (operator's choice).
+    pub(crate) fn test_cookie_auth_not_forced_for_non_loopback_ip() {
+        Jail::expect_with(|jail| {
+            // Non-loopback private IP (192.168.x.x) WITHOUT cookie auth should succeed
+            let toml_str = r#"
+            backend = "fetch"
+            network = "Testnet"
+
+            [validator_settings]
+            validator_jsonrpc_listen_address = "192.168.1.10:18232"
+            # Note: NO validator_cookie_path - this is intentional
+
+            [grpc_settings]
+            listen_address = "127.0.0.1:8137"
+        "#;
+            let temp_toml_path = jail.directory().join("no_cookie_auth.toml");
+            jail.create_file(&temp_toml_path, toml_str)?;
+
+            let config_result = load_config(&temp_toml_path);
+            assert!(
+                config_result.is_ok(),
+                "Non-loopback IP without cookie auth should succeed. \
+                 Cookie auth is config-based, not address-type-based. Error: {:?}",
+                config_result.err()
+            );
+
+            let config = config_result.unwrap();
+            assert!(
+                config.validator_settings.validator_cookie_path.is_none(),
+                "Cookie path should be None as configured"
+            );
+
+            Ok(())
+        });
+    }
+
+    #[test]
+    /// Validates symmetric behavior: both IP and hostname addresses respect configuration.
+    /// Public IPs should still be rejected (private IP requirement remains).
+    pub(crate) fn test_public_ip_still_rejected() {
+        Jail::expect_with(|jail| {
+            // Public IP should be rejected regardless of cookie auth
+            let toml_str = r#"
+            backend = "fetch"
+            network = "Testnet"
+
+            [validator_settings]
+            validator_jsonrpc_listen_address = "8.8.8.8:18232"
+
+            [grpc_settings]
+            listen_address = "127.0.0.1:8137"
+        "#;
+            let temp_toml_path = jail.directory().join("public_ip.toml");
+            jail.create_file(&temp_toml_path, toml_str)?;
+
+            let config_result = load_config(&temp_toml_path);
+            assert!(
+                config_result.is_err(),
+                "Public IP should be rejected - private IP requirement still applies"
+            );
+
+            if let Err(IndexerError::ConfigError(msg)) = config_result {
+                assert!(
+                    msg.contains("private IP"),
+                    "Error should mention private IP requirement. Got: {msg}"
+                );
+            }
+
             Ok(())
         });
     }

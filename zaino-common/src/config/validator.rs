@@ -2,16 +2,15 @@
 
 // use serde::{Deserialize, Serialize};
 // use zebra_chain::parameters::testnet::ConfiguredActivationHeights;
-use std::net::SocketAddr;
 use std::path::PathBuf;
 
 /// Validator (full-node) type for Zaino configuration.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 pub struct ValidatorConfig {
     /// Full node / validator gprc listen port. Only exists for zebra
-    pub validator_grpc_listen_address: Option<SocketAddr>,
-    /// Full node / validator listen port.
-    pub validator_jsonrpc_listen_address: SocketAddr,
+    pub validator_grpc_listen_address: Option<String>,
+    /// Full node / validator listen address (supports hostname:port or ip:port format).
+    pub validator_jsonrpc_listen_address: String,
     /// Path to the validator cookie file. Enable validator rpc cookie authentication with Some.
     pub validator_cookie_path: Option<PathBuf>,
     /// Full node / validator Username.
