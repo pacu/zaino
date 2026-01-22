@@ -1136,7 +1136,7 @@ async fn fetch_service_get_block_range_returns_all_pools<V: ValidatorExt>(valida
     let end_height: u64 = if matches!(validator, ValidatorKind::Zebrad) { 
         106
     } else {
-        6
+        17
     };
 
     let fetch_service_get_block_range = fetch_service_subscriber
@@ -1165,8 +1165,13 @@ async fn fetch_service_get_block_range_returns_all_pools<V: ValidatorExt>(valida
 
     assert_eq!(compact_block.height, end_height);
 
-    // the compact block has 3 transactions
-    assert_eq!(compact_block.vtx.len(), 3);
+    let expected_transaction_count = if matches!(validator, ValidatorKind::Zebrad) { 
+        3
+    } else {
+        4 // zcashd uses shielded coinbase which will add an extra compact tx
+    };
+    // the compact block has the right number of transactions
+    assert_eq!(compact_block.vtx.len(), expected_transaction_count);
 
     // transaction order is not guaranteed so it's necessary to look up for them by TXID
     let deshielding_tx = compact_block
