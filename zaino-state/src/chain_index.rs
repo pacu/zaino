@@ -812,7 +812,7 @@ impl<Source: BlockchainSource> ChainIndex for NodeBackedChainIndexSubscriber<Sou
                 // The block is non-finalized, and we haven't synced it yet.
                 // We can't make any assertions about the best chain
                 // if it's not in our snapshot.
-                //  TODO: Should this be an error?
+                // TODO: Should this be an error?
                 Ok(_) => Ok(None),
                 Err(e) => Err(ChainIndexError::backing_validator(e)),
             };

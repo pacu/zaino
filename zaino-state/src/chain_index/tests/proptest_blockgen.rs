@@ -27,23 +27,42 @@ use crate::{
 #[test]
 fn test_passthroughs_with_delay() {
     init_tracing();
+    let network = Network::Regtest(ActivationHeights::default());
+    // Long enough to have some finalized blocks to play with
+    let segment_length = 120;
+    // No need to worry about non-best chains for this test
+    let branch_count = 1;
+
+    // from this line to `runtime.block_on(async {` are all
+    // copy-pasted. Could a macro get rid of some of this boilerplate?
+    proptest::proptest!(proptest::test_runner::Config::with_cases(1), |(segments in make_branching_chain(branch_count, segment_length, network))| {
+        let runtime = tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_time().build().unwrap();
+        runtime.block_on(async {
+            let (genesis_segment, branching_segments) = segments;
+            let mockchain = ProptestMockchain {
+                genesis_segment,
+                branching_segments,
+                // This number can be played with. We want to slow down
+                // sync enough to trigger passthrough without
+                // slowing down passthrough more than we need to
+                //
+                delay: Some(Duration::from_secs(1)),
+            };
+        });
+    })
 }
 
 #[test]
 fn make_chain() {
     init_tracing();
     let network = Network::Regtest(ActivationHeights::default());
-    // The length of the initial segment, and of the branches
-    // TODO: it would be useful to allow branches of different lengths.
     let segment_length = 12;
 
-    // The number of separate branches, after the branching point at the tip
-    // of the initial segment.
     let branch_count = 2;
 
     // default is 256. As each case takes multiple seconds, this seems too many.
     // TODO: this should be higher than 1. Currently set to 1 for ease of iteration
-    proptest::proptest!(proptest::test_runner::Config::with_cases(1), |(segments in make_branching_chain(2, segment_length, network))| {
+    proptest::proptest!(proptest::test_runner::Config::with_cases(1), |(segments in make_branching_chain(branch_count, segment_length, network))| {
         let runtime = tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_time().build().unwrap();
         runtime.block_on(async {
             let (genesis_segment, branching_segments) = segments;
@@ -88,10 +107,10 @@ fn make_chain() {
                     }
                 }
             }
-            assert_eq!(snapshot.heights_to_hashes.len(), (segment_length * 2) + 2);
+            assert_eq!(snapshot.heights_to_hashes.len(), (segment_length * 2) );
             assert_eq!(
                 snapshot.blocks.len(),
-                (segment_length * (branch_count + 1)) + 2
+                segment_length * (branch_count + 1)
             );
         });
     });
@@ -376,48 +395,52 @@ impl BlockchainSource for ProptestMockchain {
 }
 
 type ChainSegment = SummaryDebug<Vec<Arc<zebra_chain::block::Block>>>;
+
 fn make_branching_chain(
+    // The number of separate branches, after the branching point at the tip
+    // of the initial segment.
     num_branches: usize,
+    // The length of the initial segment, and of the branches
+    // TODO: it would be useful to allow branches of different lengths.
     chain_size: usize,
     network_override: Network,
 ) -> BoxedStrategy<(ChainSegment, Vec<ChainSegment>)> {
     let network_override = Some(network_override.to_zebra_network());
-    // these feel like they shouldn't be needed. The closure lifetimes are fighting me
-    let n_o_clone = network_override.clone();
-    let n_o_clone_2 = network_override.clone();
-    add_segment(SummaryDebug(Vec::new()), network_override.clone(), 1)
-        .prop_flat_map(move |segment| add_segment(segment, n_o_clone.clone(), 1))
-        .prop_flat_map(move |segment| add_segment(segment, n_o_clone_2.clone(), chain_size))
-        .prop_flat_map(move |segment| {
-            (
-                Just(segment.clone()),
-                LedgerState::arbitrary_with(LedgerStateOverride {
-                    height_override: segment.last().unwrap().coinbase_height().unwrap() + 1,
-                    previous_block_hash_override: Some(segment.last().unwrap().hash()),
-                    network_upgrade_override: None,
-                    transaction_version_override: None,
-                    transaction_has_valid_network_upgrade: true,
-                    always_has_coinbase: true,
-                    network_override: network_override.clone(),
-                }),
-            )
-        })
-        .prop_flat_map(move |(segment, ledger)| {
-            (
-                Just(segment),
-                std::iter::repeat_with(|| {
-                    zebra_chain::block::Block::partial_chain_strategy(
-                        ledger.clone(),
-                        chain_size,
-                        arbitrary::allow_all_transparent_coinbase_spends,
-                        true,
-                    )
-                })
-                .take(num_branches)
-                .collect::<Vec<_>>(),
-            )
-        })
-        .boxed()
+    add_segment(
+        SummaryDebug(Vec::new()),
+        network_override.clone(),
+        chain_size,
+    )
+    .prop_flat_map(move |segment| {
+        (
+            Just(segment.clone()),
+            LedgerState::arbitrary_with(LedgerStateOverride {
+                height_override: segment.last().unwrap().coinbase_height().unwrap() + 1,
+                previous_block_hash_override: Some(segment.last().unwrap().hash()),
+                network_upgrade_override: None,
+                transaction_version_override: None,
+                transaction_has_valid_network_upgrade: true,
+                always_has_coinbase: true,
+                network_override: network_override.clone(),
+            }),
+        )
+    })
+    .prop_flat_map(move |(segment, ledger)| {
+        (
+            Just(segment),
+            std::iter::repeat_with(|| {
+                zebra_chain::block::Block::partial_chain_strategy(
+                    ledger.clone(),
+                    chain_size,
+                    arbitrary::allow_all_transparent_coinbase_spends,
+                    true,
+                )
+            })
+            .take(num_branches)
+            .collect::<Vec<_>>(),
+        )
+    })
+    .boxed()
 }
 
 mod proptest_helpers {
