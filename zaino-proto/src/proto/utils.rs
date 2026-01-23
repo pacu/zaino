@@ -206,7 +206,7 @@ impl PoolTypeFilter {
     }
 
     /// retuns whether the filter includes transparent data
-    pub fn includes_tranparent(&self) -> bool {
+    pub fn includes_transparent(&self) -> bool {
         self.include_transparent
     }
 

@@ -45,6 +45,7 @@ use crate::{
     TxInCompact, TxLocation, TxOutCompact, TxidList, ZainoVersionedSerde as _,
 };
 
+use zaino_proto::proto::utils::PoolTypeFilter;
 use zebra_chain::parameters::NetworkKind;
 use zebra_state::HashOrHeight;
 
@@ -361,7 +362,8 @@ impl CompactBlockExt for DbV1 {
         &self,
         height: Height,
     ) -> Result<zaino_proto::proto::compact_formats::CompactBlock, FinalisedStateError> {
-        self.get_compact_block(height).await
+        self.get_compact_block(height, PoolTypeFilter::default())
+            .await
     }
 }
 
@@ -3047,16 +3049,222 @@ impl DbV1 {
     async fn get_compact_block(
         &self,
         height: Height,
+        pool_types: PoolTypeFilter,
     ) -> Result<zaino_proto::proto::compact_formats::CompactBlock, FinalisedStateError> {
-        let block = self.get_chain_block(height).await?;
+        let validated_height = self
+            .resolve_validated_hash_or_height(HashOrHeight::Height(height.into()))
+            .await?;
+        let height_bytes = validated_height.to_bytes()?;
 
-        match block {
-            Some(b) => Ok(b.to_compact_block()),
-            None => Err(FinalisedStateError::DataUnavailable(format!(
-                "Block {} not present in validator's state.",
-                height
-            ))),
-        }
+        tokio::task::block_in_place(|| {
+            let txn = self.env.begin_ro_txn()?;
+
+            // ----- Fetch Header -----
+            let raw = match txn.get(self.headers, &height_bytes) {
+                Ok(val) => val,
+                Err(lmdb::Error::NotFound) => {
+                    return Err(FinalisedStateError::DataUnavailable(
+                        "block data missing from db".into(),
+                    ));
+                }
+                Err(e) => return Err(FinalisedStateError::LmdbError(e)),
+            };
+            let header: BlockHeaderData = *StoredEntryVar::from_bytes(raw)
+                .map_err(|e| FinalisedStateError::Custom(format!("header decode error: {e}")))?
+                .inner();
+
+            // ----- Fetch Txids -----
+            let raw = match txn.get(self.txids, &height_bytes) {
+                Ok(val) => val,
+                Err(lmdb::Error::NotFound) => {
+                    return Err(FinalisedStateError::DataUnavailable(
+                        "block data missing from db".into(),
+                    ));
+                }
+                Err(e) => return Err(FinalisedStateError::LmdbError(e)),
+            };
+            let txids_stored_entry_var = StoredEntryVar::<TxidList>::from_bytes(raw)
+                .map_err(|e| FinalisedStateError::Custom(format!("txids decode error: {e}")))?;
+            let txids = txids_stored_entry_var.inner().txids();
+
+            // ----- Fetch Transparent Tx Data -----
+            let transparent_stored_entry_var = if pool_types.includes_transparent() {
+                let raw = match txn.get(self.transparent, &height_bytes) {
+                    Ok(val) => val,
+                    Err(lmdb::Error::NotFound) => {
+                        return Err(FinalisedStateError::DataUnavailable(
+                            "block data missing from db".into(),
+                        ));
+                    }
+                    Err(e) => return Err(FinalisedStateError::LmdbError(e)),
+                };
+
+                Some(
+                    StoredEntryVar::<TransparentTxList>::from_bytes(raw).map_err(|e| {
+                        FinalisedStateError::Custom(format!("transparent decode error: {e}"))
+                    })?,
+                )
+            } else {
+                None
+            };
+            let transparent = match transparent_stored_entry_var.as_ref() {
+                Some(stored_entry_var) => stored_entry_var.inner().tx(),
+                None => &[],
+            };
+
+            // ----- Fetch Sapling Tx Data -----
+            let sapling_stored_entry_var = if pool_types.includes_sapling() {
+                let raw = match txn.get(self.sapling, &height_bytes) {
+                    Ok(val) => val,
+                    Err(lmdb::Error::NotFound) => {
+                        return Err(FinalisedStateError::DataUnavailable(
+                            "block data missing from db".into(),
+                        ));
+                    }
+                    Err(e) => return Err(FinalisedStateError::LmdbError(e)),
+                };
+
+                Some(
+                    StoredEntryVar::<SaplingTxList>::from_bytes(raw).map_err(|e| {
+                        FinalisedStateError::Custom(format!("sapling decode error: {e}"))
+                    })?,
+                )
+            } else {
+                None
+            };
+            let sapling = match sapling_stored_entry_var.as_ref() {
+                Some(stored_entry_var) => stored_entry_var.inner().tx(),
+                None => &[],
+            };
+
+            // ----- Fetch Orchard Tx Data -----
+            let orchard_stored_entry_var = if pool_types.includes_orchard() {
+                let raw = match txn.get(self.orchard, &height_bytes) {
+                    Ok(val) => val,
+                    Err(lmdb::Error::NotFound) => {
+                        return Err(FinalisedStateError::DataUnavailable(
+                            "block data missing from db".into(),
+                        ));
+                    }
+                    Err(e) => return Err(FinalisedStateError::LmdbError(e)),
+                };
+
+                Some(
+                    StoredEntryVar::<OrchardTxList>::from_bytes(raw).map_err(|e| {
+                        FinalisedStateError::Custom(format!("orchard decode error: {e}"))
+                    })?,
+                )
+            } else {
+                None
+            };
+            let orchard = match orchard_stored_entry_var.as_ref() {
+                Some(stored_entry_var) => stored_entry_var.inner().tx(),
+                None => &[],
+            };
+
+            // ----- Construct CompactTx -----
+            let vtx: Vec<zaino_proto::proto::compact_formats::CompactTx> = txids
+                .iter()
+                .enumerate()
+                .filter_map(|(i, txid)| {
+                    let spends = sapling
+                        .get(i)
+                        .and_then(|opt| opt.as_ref())
+                        .map(|s| {
+                            s.spends()
+                                .iter()
+                                .map(|sp| sp.into_compact())
+                                .collect::<Vec<_>>()
+                        })
+                        .unwrap_or_default();
+
+                    let outputs = sapling
+                        .get(i)
+                        .and_then(|opt| opt.as_ref())
+                        .map(|s| {
+                            s.outputs()
+                                .iter()
+                                .map(|o| o.into_compact())
+                                .collect::<Vec<_>>()
+                        })
+                        .unwrap_or_default();
+
+                    let actions = orchard
+                        .get(i)
+                        .and_then(|opt| opt.as_ref())
+                        .map(|o| {
+                            o.actions()
+                                .iter()
+                                .map(|a| a.into_compact())
+                                .collect::<Vec<_>>()
+                        })
+                        .unwrap_or_default();
+
+                    let (vin, vout) = transparent
+                        .get(i)
+                        .and_then(|opt| opt.as_ref())
+                        .map(|t| (t.compact_vin(), t.compact_vout()))
+                        .unwrap_or_default();
+
+                    // Skip txs that have no elements in any requested pool type.
+                    //
+                    // TODO: Explore whether we can avoid this check.
+                    if spends.is_empty()
+                        && outputs.is_empty()
+                        && actions.is_empty()
+                        && vin.is_empty()
+                        && vout.is_empty()
+                    {
+                        return None;
+                    }
+
+                    Some(zaino_proto::proto::compact_formats::CompactTx {
+                        index: i as u64,
+                        txid: txid.0.to_vec(),
+                        fee: 0,
+                        spends,
+                        outputs,
+                        actions,
+                        vin,
+                        vout,
+                    })
+                })
+                .collect();
+
+            // ----- Fetch Commitment Tree Data -----
+            let raw = match txn.get(self.commitment_tree_data, &height_bytes) {
+                Ok(val) => val,
+                Err(lmdb::Error::NotFound) => {
+                    return Err(FinalisedStateError::DataUnavailable(
+                        "block data missing from db".into(),
+                    ));
+                }
+                Err(e) => return Err(FinalisedStateError::LmdbError(e)),
+            };
+            let commitment_tree_data: CommitmentTreeData = *StoredEntryFixed::from_bytes(raw)
+                .map_err(|e| {
+                    FinalisedStateError::Custom(format!("commitment_tree decode error: {e}"))
+                })?
+                .inner();
+
+            let chain_metadata = zaino_proto::proto::compact_formats::ChainMetadata {
+                sapling_commitment_tree_size: commitment_tree_data.sizes().sapling(),
+                orchard_commitment_tree_size: commitment_tree_data.sizes().orchard(),
+            };
+
+            // ----- Construct CompactBlock -----
+            Ok(zaino_proto::proto::compact_formats::CompactBlock {
+                proto_version: 4,
+                height: header.index().height().0 as u64,
+                hash: header.index().hash().0.to_vec(),
+                prev_hash: header.index().parent_hash().0.to_vec(),
+                // Is this safe?
+                time: header.data().time() as u32,
+                header: Vec::new(),
+                vtx,
+                chain_metadata: Some(chain_metadata),
+            })
+        })
     }
 
     /// Fetch database metadata.

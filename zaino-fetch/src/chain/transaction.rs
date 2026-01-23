@@ -1194,7 +1194,7 @@ impl FullTransaction {
             vec![]
         };
 
-        let vout = if pool_types.includes_tranparent() {
+        let vout = if pool_types.includes_transparent() {
             self.raw_transaction
                 .transparent_outputs
                 .iter()
@@ -1207,7 +1207,7 @@ impl FullTransaction {
             vec![]
         };
 
-        let vin = if pool_types.includes_tranparent() {
+        let vin = if pool_types.includes_transparent() {
             self.raw_transaction
                 .transparent_inputs
                 .iter()
