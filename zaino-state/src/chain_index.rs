@@ -788,7 +788,7 @@ impl<Source: BlockchainSource> ChainIndex for NodeBackedChainIndexSubscriber<Sou
         block_hash: &types::BlockHash,
     ) -> Result<Option<(types::BlockHash, types::Height)>, Self::Error> {
         let Some(block) = snapshot.as_ref().get_chainblock_by_hash(block_hash) else {
-            // If we don't have the block in our non-finalized state,
+            // We don't have the block in our non-finalized state,
             // we'll only be aware of it if it's main-chain.
             // Find it from the source, and return its height and hash
             return match self
@@ -799,7 +799,7 @@ impl<Source: BlockchainSource> ChainIndex for NodeBackedChainIndexSubscriber<Sou
                 .await
             {
                 Ok(Some(block))
-                    // If we don't have the block in our non-finalized state
+                    // We don't have the block in our non-finalized state
                     // we can only passthrough assuming the block is finalized
                     if block.coinbase_height().unwrap()
                         <= snapshot.validator_finalized_height.into() =>
@@ -997,7 +997,8 @@ impl<Source: BlockchainSource> ChainIndex for NodeBackedChainIndexSubscriber<Sou
             }
         }
 
-        // passthrough
+        // If we haven't found a block on the best chain,
+        // try passthrough
         if best_chain_block == None {
             if let Some((_transaction, location)) = self
                 .blockchain_source

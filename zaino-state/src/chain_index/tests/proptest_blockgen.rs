@@ -25,6 +25,11 @@ use crate::{
 };
 
 #[test]
+fn test_passthroughs_with_delay() {
+    init_tracing();
+}
+
+#[test]
 fn make_chain() {
     init_tracing();
     let network = Network::Regtest(ActivationHeights::default());
@@ -45,6 +50,7 @@ fn make_chain() {
             let mockchain = ProptestMockchain {
                 genesis_segment,
                 branching_segments,
+                delay: None
             };
             let temp_dir: tempfile::TempDir = tempfile::tempdir().unwrap();
             let db_path: std::path::PathBuf = temp_dir.path().to_path_buf();
@@ -95,6 +101,7 @@ fn make_chain() {
 struct ProptestMockchain {
     genesis_segment: ChainSegment,
     branching_segments: Vec<ChainSegment>,
+    delay: Option<Duration>,
 }
 
 impl ProptestMockchain {
@@ -167,6 +174,9 @@ impl BlockchainSource for ProptestMockchain {
         &self,
         id: HashOrHeight,
     ) -> BlockchainSourceResult<Option<Arc<zebra_chain::block::Block>>> {
+        if let Some(delay) = self.delay {
+            tokio::time::sleep(delay).await;
+        }
         match id {
             HashOrHeight::Hash(hash) => {
                 let matches_hash = |block: &&Arc<zebra_chain::block::Block>| block.hash() == hash;
@@ -208,6 +218,9 @@ impl BlockchainSource for ProptestMockchain {
         Option<(zebra_chain::sapling::tree::Root, u64)>,
         Option<(zebra_chain::orchard::tree::Root, u64)>,
     )> {
+        if let Some(delay) = self.delay {
+            tokio::time::sleep(delay).await;
+        }
         let Some(chain_up_to_block) =
             self.get_block_and_all_preceeding(|block| block.hash().0 == id.0)
         else {
@@ -278,6 +291,9 @@ impl BlockchainSource for ProptestMockchain {
     async fn get_mempool_txids(
         &self,
     ) -> BlockchainSourceResult<Option<Vec<zebra_chain::transaction::Hash>>> {
+        if let Some(delay) = self.delay {
+            tokio::time::sleep(delay).await;
+        }
         Ok(Some(Vec::new()))
     }
 
@@ -291,6 +307,9 @@ impl BlockchainSource for ProptestMockchain {
             GetTransactionLocation,
         )>,
     > {
+        if let Some(delay) = self.delay {
+            tokio::time::sleep(delay).await;
+        }
         Ok(self.all_blocks_arb_branch_order().find_map(|block| {
             block
                 .transactions
@@ -309,6 +328,9 @@ impl BlockchainSource for ProptestMockchain {
     async fn get_best_block_hash(
         &self,
     ) -> BlockchainSourceResult<Option<zebra_chain::block::Hash>> {
+        if let Some(delay) = self.delay {
+            tokio::time::sleep(delay).await;
+        }
         Ok(Some(self.best_branch().last().unwrap().hash()))
     }
 
@@ -316,6 +338,9 @@ impl BlockchainSource for ProptestMockchain {
     async fn get_best_block_height(
         &self,
     ) -> BlockchainSourceResult<Option<zebra_chain::block::Height>> {
+        if let Some(delay) = self.delay {
+            tokio::time::sleep(delay).await;
+        }
         Ok(Some(
             self.best_branch()
                 .last()
