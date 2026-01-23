@@ -1708,6 +1708,23 @@ impl TransparentCompactTx {
     pub fn outputs(&self) -> &[TxOutCompact] {
         &self.vout
     }
+
+    /// Returns Proto CompactTxIn values, omitting the null prevout used by coinbase.
+    pub fn compact_vin(&self) -> Vec<zaino_proto::proto::compact_formats::CompactTxIn> {
+        self.inputs()
+            .iter()
+            .filter(|txin| !txin.is_null_prevout())
+            .map(|txin| txin.to_compact())
+            .collect()
+    }
+
+    /// Returns Proto TxOut values.
+    pub fn compact_vout(&self) -> Vec<zaino_proto::proto::compact_formats::TxOut> {
+        self.outputs()
+            .iter()
+            .map(|txout| txout.to_compact())
+            .collect()
+    }
 }
 
 /// A compact reference to a previously created transparent UTXO being spent.
@@ -1751,6 +1768,14 @@ impl TxInCompact {
     /// coinbase transaction (all-zero txid, index 0xffff_ffff).
     pub fn is_null_prevout(&self) -> bool {
         self.prevout_txid == [0u8; 32] && self.prevout_index == u32::MAX
+    }
+
+    /// Creates a Proto CompactTxIn from this record.
+    pub fn to_compact(&self) -> zaino_proto::proto::compact_formats::CompactTxIn {
+        zaino_proto::proto::compact_formats::CompactTxIn {
+            prevout_txid: self.prevout_txid.to_vec(),
+            prevout_index: self.prevout_index,
+        }
     }
 }
 
@@ -1942,6 +1967,22 @@ impl TxOutCompact {
     /// Returns script type Enum.
     pub fn script_type_enum(&self) -> Option<ScriptType> {
         ScriptType::try_from(self.script_type).ok()
+    }
+
+    /// Creates a Proto TxOut from this record.
+    ///
+    /// Note: this reconstructs standard P2PKH / P2SH scripts. For NonStandard outputs,
+    /// this returns an empty script_pub_key.
+    pub fn to_compact(&self) -> zaino_proto::proto::compact_formats::TxOut {
+        let script_pub_key = self
+            .script_type_enum()
+            .and_then(|script_type| build_standard_script(self.script_hash, script_type))
+            .unwrap_or_default();
+
+        zaino_proto::proto::compact_formats::TxOut {
+            value: self.value,
+            script_pub_key,
+        }
     }
 }
 
