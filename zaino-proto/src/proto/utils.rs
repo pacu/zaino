@@ -126,16 +126,18 @@ pub struct PoolTypeFilter {
     include_orchard: bool,
 }
 
-impl PoolTypeFilter {
+impl std::default::Default for PoolTypeFilter {
     /// By default PoolType includes `Sapling` and `Orchard` pools.
-    pub fn default() -> Self {
+    fn default() -> Self {
         PoolTypeFilter {
             include_transparent: false,
             include_sapling: true,
             include_orchard: true,
         }
     }
+}
 
+impl PoolTypeFilter {
     /// A PoolType Filter that will include all existing pool types.
     pub fn includes_all() -> Self {
         PoolTypeFilter { 
