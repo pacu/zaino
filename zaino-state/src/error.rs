@@ -97,6 +97,33 @@ pub enum StateServiceError {
     },
 }
 
+impl From<GetBlockRangeError> for StateServiceError {
+    fn from(value: GetBlockRangeError) -> Self {
+        match value {
+            GetBlockRangeError::StartHeightOutOfRange => {
+                Self::TonicStatusError(tonic::Status::out_of_range(
+                    "Error: Start height out of range. Failed to convert to u32.",
+                ))
+            }
+            GetBlockRangeError::NoStartHeightProvided => {
+                Self::TonicStatusError(tonic::Status::out_of_range(
+                    "Error: No start height given",
+                ))
+            }
+            GetBlockRangeError::EndHeightOutOfRange => {
+                Self::TonicStatusError(tonic::Status::out_of_range(
+                    "Error: End height out of range. Failed to convert to u32.",
+                ))
+            }
+            GetBlockRangeError::NoEndHeightProvided => Self::TonicStatusError(
+                tonic::Status::out_of_range("Error: No end height given."),
+            ),
+            GetBlockRangeError::PoolTypeArgumentError(_) => Self::TonicStatusError(
+                tonic::Status::invalid_argument("Error: invalid pool type"),
+            ),
+        }
+    }
+}
 #[allow(deprecated)]
 impl From<StateServiceError> for tonic::Status {
     fn from(error: StateServiceError) -> Self {
@@ -200,26 +227,26 @@ pub enum FetchServiceError {
     SerializationError(#[from] zebra_chain::serialization::SerializationError),
 }
 
-impl FetchServiceError {
-    pub(crate) fn from_get_block_change_error(error: GetBlockRangeError) -> Self {
-        match error {
+impl From<GetBlockRangeError> for FetchServiceError {
+    fn from(value: GetBlockRangeError) -> Self {
+         match value {
             GetBlockRangeError::StartHeightOutOfRange => {
-                FetchServiceError::TonicStatusError(tonic::Status::invalid_argument(
+                FetchServiceError::TonicStatusError(tonic::Status::out_of_range(
                     "Error: Start height out of range. Failed to convert to u32.",
                 ))
             }
             GetBlockRangeError::NoStartHeightProvided => {
-                FetchServiceError::TonicStatusError(tonic::Status::invalid_argument(
+                FetchServiceError::TonicStatusError(tonic::Status::out_of_range(
                     "Error: No start height given",
                 ))
             }
             GetBlockRangeError::EndHeightOutOfRange => {
-                FetchServiceError::TonicStatusError(tonic::Status::invalid_argument(
+                FetchServiceError::TonicStatusError(tonic::Status::out_of_range(
                     "Error: End height out of range. Failed to convert to u32.",
                 ))
             }
             GetBlockRangeError::NoEndHeightProvided => FetchServiceError::TonicStatusError(
-                tonic::Status::invalid_argument("Error: No end height given."),
+                tonic::Status::out_of_range("Error: No end height given."),
             ),
             GetBlockRangeError::PoolTypeArgumentError(_) => FetchServiceError::TonicStatusError(
                 tonic::Status::invalid_argument("Error: invalid pool type"),

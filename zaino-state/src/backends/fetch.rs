@@ -811,7 +811,7 @@ impl LightWalletIndexer for FetchServiceSubscriber {
         request: BlockRange,
     ) -> Result<CompactBlockStream, Self::Error> {
         let mut validated_request = ValidatedBlockRangeRequest::new_from_block_range(&request)
-            .map_err(FetchServiceError::from_get_block_change_error)?;
+            .map_err(FetchServiceError::from)?;
 
         // FIXME: this should be changed but this logic is hard to understand and we lack tests.
         // we will maintain the behaviour with less smelly code
@@ -899,7 +899,7 @@ impl LightWalletIndexer for FetchServiceSubscriber {
         request: BlockRange,
     ) -> Result<CompactBlockStream, Self::Error> {
         let mut validated_request = ValidatedBlockRangeRequest::new_from_block_range(&request)
-            .map_err(FetchServiceError::from_get_block_change_error)?;
+            .map_err(FetchServiceError::from)?;
 
         // FIXME: this should be changed but this logic is hard to understand and we lack tests.
         // we will maintain the behaviour with less smelly code

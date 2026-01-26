@@ -554,7 +554,7 @@ impl StateServiceSubscriber {
         trim_non_nullifier: bool,
     ) -> Result<CompactBlockStream, StateServiceError> {
         let mut validated_request = ValidatedBlockRangeRequest::new_from_block_range(&request)
-            .map_err(|_| StateServiceError::Custom("fixme".to_string()))?;
+            .map_err(StateServiceError::from)?;
 
         // FIXME: this should be changed but this logic is hard to understand and we lack tests.
         // we will maintain the behaviour with less smelly code
