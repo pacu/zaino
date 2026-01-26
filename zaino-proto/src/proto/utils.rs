@@ -10,7 +10,7 @@ pub enum PoolTypeError {
 }
 
 /// Converts a vector of pool_types (i32) into its rich-type representation
-/// Returns `PoolTypeError::InvalidPoolType` when invalid `pool_types` are found 
+/// Returns `PoolTypeError::InvalidPoolType` when invalid `pool_types` are found
 /// or `PoolTypeError::UnknownPoolType` if unknown ones are found.
 pub fn pool_types_from_vector(pool_types: &[i32]) -> Result<Vec<PoolType>, PoolTypeError> {
     let pools = if pool_types.is_empty() {
@@ -140,28 +140,30 @@ impl std::default::Default for PoolTypeFilter {
 impl PoolTypeFilter {
     /// A PoolType Filter that will include all existing pool types.
     pub fn includes_all() -> Self {
-        PoolTypeFilter { 
+        PoolTypeFilter {
             include_transparent: true,
             include_sapling: true,
-            include_orchard: true 
+            include_orchard: true,
         }
     }
 
     /// create a `PoolTypeFilter` from a vector of raw i32 `PoolType`s
     /// If the vector is empty it will return `Self::default()`.
-    /// If the vector contains `PoolType::Invalid` or the vector contains more than 3 elements 
+    /// If the vector contains `PoolType::Invalid` or the vector contains more than 3 elements
     /// returns `PoolTypeError::InvalidPoolType`
     pub fn new_from_slice(pool_types: &[i32]) -> Result<Self, PoolTypeError> {
         let pool_types = pool_types_from_vector(pool_types)?;
-        
+
         Self::new_from_pool_types(&pool_types)
     }
 
     /// create a `PoolTypeFilter` from a vector of `PoolType`
     /// If the vector is empty it will return `Self::default()`.
-    /// If the vector contains `PoolType::Invalid` or the vector contains more than 3 elements 
+    /// If the vector contains `PoolType::Invalid` or the vector contains more than 3 elements
     /// returns `PoolTypeError::InvalidPoolType`
-    pub fn new_from_pool_types(pool_types: &Vec<PoolType>) -> Result<PoolTypeFilter, PoolTypeError> {
+    pub fn new_from_pool_types(
+        pool_types: &Vec<PoolType>,
+    ) -> Result<PoolTypeFilter, PoolTypeError> {
         if pool_types.len() > PoolType::Orchard as usize {
             return Err(PoolTypeError::InvalidPoolType);
         }
@@ -235,7 +237,10 @@ impl PoolTypeFilter {
 
 #[cfg(test)]
 mod test {
-    use crate::proto::{service::PoolType, utils::{PoolTypeError, PoolTypeFilter}};
+    use crate::proto::{
+        service::PoolType,
+        utils::{PoolTypeError, PoolTypeFilter},
+    };
 
     #[test]
     fn test_pool_type_filter_fails_when_invalid() {
@@ -247,7 +252,10 @@ mod test {
         ]
         .to_vec();
 
-        assert_eq!(PoolTypeFilter::new_from_pool_types(&pools), Err(PoolTypeError::InvalidPoolType));
+        assert_eq!(
+            PoolTypeFilter::new_from_pool_types(&pools),
+            Err(PoolTypeError::InvalidPoolType)
+        );
     }
 
     #[test]
@@ -260,7 +268,10 @@ mod test {
         ]
         .to_vec();
 
-        assert_eq!(PoolTypeFilter::new_from_pool_types(&pools), Err(PoolTypeError::InvalidPoolType));
+        assert_eq!(
+            PoolTypeFilter::new_from_pool_types(&pools),
+            Err(PoolTypeError::InvalidPoolType)
+        );
     }
 
     #[test]
@@ -291,7 +302,7 @@ mod test {
         );
     }
 
-     #[test]
+    #[test]
     fn test_pool_type_filter_includes_all() {
         assert_eq!(
             PoolTypeFilter::from_checked_parts(true, true, true),

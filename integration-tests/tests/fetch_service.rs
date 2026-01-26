@@ -4,8 +4,8 @@ use futures::StreamExt as _;
 use zaino_fetch::jsonrpsee::connector::{test_node_and_return_url, JsonRpSeeConnector};
 use zaino_proto::proto::compact_formats::CompactBlock;
 use zaino_proto::proto::service::{
-    AddressList, BlockId, BlockRange, GetMempoolTxRequest, GetAddressUtxosArg, GetSubtreeRootsArg, PoolType,
-    TransparentAddressBlockFilter, TxFilter,
+    AddressList, BlockId, BlockRange, GetAddressUtxosArg, GetMempoolTxRequest, GetSubtreeRootsArg,
+    PoolType, TransparentAddressBlockFilter, TxFilter,
 };
 use zaino_state::FetchServiceSubscriber;
 #[allow(deprecated)]
@@ -1061,8 +1061,9 @@ async fn fetch_service_get_block_range<V: ValidatorExt>(validator: &ValidatorKin
 }
 
 #[allow(deprecated)]
-async fn fetch_service_get_block_range_returns_all_pools<V: ValidatorExt>(validator: &ValidatorKind) {
-
+async fn fetch_service_get_block_range_returns_all_pools<V: ValidatorExt>(
+    validator: &ValidatorKind,
+) {
     let mut test_manager =
         TestManager::<V, FetchService>::launch(validator, None, None, None, true, false, true)
             .await
@@ -1118,22 +1119,24 @@ async fn fetch_service_get_block_range_returns_all_pools<V: ValidatorExt>(valida
     .head;
 
     let recipient_ua = clients.get_recipient_address("unified").await;
-    let orchard_txid =
-        zaino_testutils::from_inputs::quick_send(&mut clients.faucet, vec![(&recipient_ua, 250_000, None)])
-            .await
-            .unwrap()
-            .head;
+    let orchard_txid = zaino_testutils::from_inputs::quick_send(
+        &mut clients.faucet,
+        vec![(&recipient_ua, 250_000, None)],
+    )
+    .await
+    .unwrap()
+    .head;
 
     test_manager
         .generate_blocks_and_poll_indexer(1, &fetch_service_subscriber)
         .await;
 
-    let start_height: u64 = if matches!(validator, ValidatorKind::Zebrad) { 
+    let start_height: u64 = if matches!(validator, ValidatorKind::Zebrad) {
         100
     } else {
         1
     };
-    let end_height: u64 = if matches!(validator, ValidatorKind::Zebrad) { 
+    let end_height: u64 = if matches!(validator, ValidatorKind::Zebrad) {
         106
     } else {
         17
@@ -1165,7 +1168,7 @@ async fn fetch_service_get_block_range_returns_all_pools<V: ValidatorExt>(valida
 
     assert_eq!(compact_block.height, end_height);
 
-    let expected_transaction_count = if matches!(validator, ValidatorKind::Zebrad) { 
+    let expected_transaction_count = if matches!(validator, ValidatorKind::Zebrad) {
         3
     } else {
         4 // zcashd uses shielded coinbase which will add an extra compact tx
@@ -1181,7 +1184,7 @@ async fn fetch_service_get_block_range_returns_all_pools<V: ValidatorExt>(valida
         .unwrap();
 
     dbg!(deshielding_tx);
-    
+
     assert!(
         !deshielding_tx.vout.is_empty(),
         "transparent data should be present when transaparent pool type is specified in the request."
@@ -1214,13 +1217,14 @@ async fn fetch_service_get_block_range_returns_all_pools<V: ValidatorExt>(valida
 }
 
 #[allow(deprecated)]
-async fn fetch_service_get_block_range_no_pools_returns_sapling_orchard<V: ValidatorExt>(validator: &ValidatorKind) {
-
+async fn fetch_service_get_block_range_no_pools_returns_sapling_orchard<V: ValidatorExt>(
+    validator: &ValidatorKind,
+) {
     let mut test_manager =
         TestManager::<V, FetchService>::launch(validator, None, None, None, true, false, true)
             .await
             .unwrap();
-    
+
     let mut clients = test_manager
         .clients
         .take()
@@ -1271,22 +1275,24 @@ async fn fetch_service_get_block_range_no_pools_returns_sapling_orchard<V: Valid
     .head;
 
     let recipient_ua = clients.get_recipient_address("unified").await;
-    let orchard_txid =
-        zaino_testutils::from_inputs::quick_send(&mut clients.faucet, vec![(&recipient_ua, 250_000, None)])
-            .await
-            .unwrap()
-            .head;
+    let orchard_txid = zaino_testutils::from_inputs::quick_send(
+        &mut clients.faucet,
+        vec![(&recipient_ua, 250_000, None)],
+    )
+    .await
+    .unwrap()
+    .head;
 
     test_manager
         .generate_blocks_and_poll_indexer(1, &fetch_service_subscriber)
         .await;
 
-    let start_height: u64 = if matches!(validator, ValidatorKind::Zebrad) { 
+    let start_height: u64 = if matches!(validator, ValidatorKind::Zebrad) {
         100
     } else {
         10
     };
-    let end_height: u64 = if matches!(validator, ValidatorKind::Zebrad) { 
+    let end_height: u64 = if matches!(validator, ValidatorKind::Zebrad) {
         106
     } else {
         17
@@ -1313,8 +1319,8 @@ async fn fetch_service_get_block_range_no_pools_returns_sapling_orchard<V: Valid
     let compact_block = fetch_service_get_block_range.last().unwrap();
 
     assert_eq!(compact_block.height, end_height);
-    
-    let expected_tx_count = if matches!(validator, ValidatorKind::Zebrad) { 
+
+    let expected_tx_count = if matches!(validator, ValidatorKind::Zebrad) {
         3
     } else {
         4 // zcashd shields coinbase and tx count will be one more than zebra's
@@ -1710,8 +1716,11 @@ async fn fetch_service_get_mempool_tx<V: ValidatorExt>(validator: &ValidatorKind
 
     tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
 
-    let exclude_list_empty = GetMempoolTxRequest { exclude_txid_suffixes: Vec::new(), pool_types: Vec::new() };
-    
+    let exclude_list_empty = GetMempoolTxRequest {
+        exclude_txid_suffixes: Vec::new(),
+        pool_types: Vec::new(),
+    };
+
     let fetch_service_stream = fetch_service_subscriber
         .get_mempool_tx(exclude_list_empty.clone())
         .await
@@ -1736,7 +1745,7 @@ async fn fetch_service_get_mempool_tx<V: ValidatorExt>(validator: &ValidatorKind
     assert_eq!(sorted_fetch_mempool_tx.len(), 2);
 
     let exclude_list = GetMempoolTxRequest {
-        exclude_txid_suffixes:  vec![sorted_txids[0][8..].to_vec()],
+        exclude_txid_suffixes: vec![sorted_txids[0][8..].to_vec()],
         pool_types: vec![],
     };
 
@@ -2278,7 +2287,10 @@ mod zcashd {
 
         #[tokio::test(flavor = "multi_thread")]
         pub(crate) async fn block_range_no_pool_type_returns_sapling_orchard() {
-           fetch_service_get_block_range_no_pools_returns_sapling_orchard::<Zcashd>(&ValidatorKind::Zcashd).await;
+            fetch_service_get_block_range_no_pools_returns_sapling_orchard::<Zcashd>(
+                &ValidatorKind::Zcashd,
+            )
+            .await;
         }
 
         #[tokio::test(flavor = "multi_thread")]
@@ -2466,10 +2478,13 @@ mod zebrad {
         pub(crate) async fn block_range_returns_all_pools_when_requested() {
             fetch_service_get_block_range_returns_all_pools::<Zebrad>(&ValidatorKind::Zebrad).await;
         }
-        
+
         #[tokio::test(flavor = "multi_thread")]
         pub(crate) async fn block_range_no_pool_type_returns_sapling_orchard() {
-           fetch_service_get_block_range_no_pools_returns_sapling_orchard::<Zebrad>(&ValidatorKind::Zebrad).await;
+            fetch_service_get_block_range_no_pools_returns_sapling_orchard::<Zebrad>(
+                &ValidatorKind::Zebrad,
+            )
+            .await;
         }
 
         #[tokio::test(flavor = "multi_thread")]

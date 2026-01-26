@@ -47,7 +47,7 @@ use zaino_proto::proto::{
         GetAddressUtxosReplyList, GetMempoolTxRequest, LightdInfo, PingResponse, RawTransaction,
         SendResponse, TransparentAddressBlockFilter, TreeState, TxFilter,
     },
-    utils::{PoolTypeError, PoolTypeFilter, ValidatedBlockRangeRequest, pool_types_from_vector},
+    utils::{pool_types_from_vector, PoolTypeError, PoolTypeFilter, ValidatedBlockRangeRequest},
 };
 
 use zcash_protocol::consensus::NetworkType;
@@ -574,18 +574,15 @@ impl StateServiceSubscriber {
 
         let pool_types = match pool_types_from_vector(&request.pool_types) {
             Ok(p) => Ok(p),
-            Err(e) => {
-                Err(
-                    match e {
-                        PoolTypeError::InvalidPoolType => StateServiceError::UnhandledRpcError(
-                            "PoolType::Invalid specified as argument in `BlockRange`.".to_string()
-                        ),
-                        PoolTypeError::UnknownPoolType(t) => StateServiceError::UnhandledRpcError(
-                            format!("Unknown value specified in `BlockRange`. Value '{}' is not a known PoolType.", t)
-                        )
-                    }
-                )
-            }
+            Err(e) => Err(match e {
+                PoolTypeError::InvalidPoolType => StateServiceError::UnhandledRpcError(
+                    "PoolType::Invalid specified as argument in `BlockRange`.".to_string(),
+                ),
+                PoolTypeError::UnknownPoolType(t) => StateServiceError::UnhandledRpcError(format!(
+                    "Unknown value specified in `BlockRange`. Value '{}' is not a known PoolType.",
+                    t
+                )),
+            }),
         }?;
         // FIX: find out why there's repeated code fetching the chain tip and then the rest
         tokio::spawn(async move {
@@ -2241,21 +2238,24 @@ impl LightWalletIndexer for StateServiceSubscriber {
         }
 
         let pool_types = match PoolTypeFilter::new_from_slice(&request.pool_types) {
-                Ok(pool_type_filter) => pool_type_filter,
-                Err(PoolTypeError::InvalidPoolType) => return Err(StateServiceError::TonicStatusError(
+            Ok(pool_type_filter) => pool_type_filter,
+            Err(PoolTypeError::InvalidPoolType) => {
+                return Err(StateServiceError::TonicStatusError(
                     tonic::Status::invalid_argument(format!(
                         "Error: An invalid `PoolType' was found"
                     )),
-                )),
-                Err(PoolTypeError::UnknownPoolType(unknown_pool_type)) => return Err(StateServiceError::TonicStatusError(
+                ))
+            }
+            Err(PoolTypeError::UnknownPoolType(unknown_pool_type)) => {
+                return Err(StateServiceError::TonicStatusError(
                     tonic::Status::invalid_argument(format!(
                         "Error: Unknown `PoolType' {} was found",
                         unknown_pool_type
                     )),
                 ))
+            }
         };
-           
-            
+
         let mempool = self.mempool.clone();
         let service_timeout = self.config.service.timeout;
         let (channel_tx, channel_rx) = mpsc::channel(self.config.service.channel_size as usize);

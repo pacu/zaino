@@ -23,7 +23,8 @@ use zaino_fetch::{
 };
 use zaino_proto::proto::{
     compact_formats::{ChainMetadata, CompactBlock, CompactOrchardAction},
-    service::PoolType, utils::PoolTypeFilter,
+    service::PoolType,
+    utils::PoolTypeFilter,
 };
 use zebra_chain::{
     block::{Hash, Height},
@@ -284,7 +285,7 @@ async fn try_state_path(
                     .into_compact_block(
                         u32::try_from(trees.sapling())?,
                         u32::try_from(trees.orchard())?,
-                        PoolTypeFilter::includes_all()
+                        PoolTypeFilter::includes_all(),
                     )?,
                 ))
             }

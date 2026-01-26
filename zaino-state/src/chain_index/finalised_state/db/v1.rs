@@ -33,7 +33,8 @@ use crate::{
                 TransparentHistExt,
             },
             entry::{StoredEntryFixed, StoredEntryVar},
-        }, types::{AddrEventBytes, TransactionHash, GENESIS_HEIGHT}
+        },
+        types::{AddrEventBytes, TransactionHash, GENESIS_HEIGHT},
     },
     config::BlockCacheConfig,
     error::FinalisedStateError,
@@ -3050,8 +3051,11 @@ impl DbV1 {
         let block = self.get_chain_block(height).await?;
 
         match block {
-            Some(b) =>  Ok(b.to_compact_block()),
-            None => Err(FinalisedStateError::DataUnavailable(format!("Block {} not present in validator's state.", height)))
+            Some(b) => Ok(b.to_compact_block()),
+            None => Err(FinalisedStateError::DataUnavailable(format!(
+                "Block {} not present in validator's state.",
+                height
+            ))),
         }
     }
 

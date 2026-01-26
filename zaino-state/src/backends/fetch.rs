@@ -1013,7 +1013,7 @@ impl LightWalletIndexer for FetchServiceSubscriber {
         &self,
         request: TransparentAddressBlockFilter,
     ) -> Result<RawTransactionStream, Self::Error> {
-         let chain_height = self.chain_height().await?;
+        let chain_height = self.chain_height().await?;
         let txids = self.get_taddress_txids_helper(request).await?;
         let fetch_service_clone = self.clone();
         let service_timeout = self.config.service.timeout;
