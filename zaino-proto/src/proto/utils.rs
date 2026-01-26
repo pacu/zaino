@@ -220,6 +220,27 @@ impl PoolTypeFilter {
         self.include_orchard
     }
 
+    /// Convert this filter into the corresponding `Vec<PoolType>`.
+    ///
+    /// The resulting vector contains each included pool type at most once.
+    pub fn to_pool_types_vector(&self) -> Vec<PoolType> {
+        let mut pool_types: Vec<PoolType> = Vec::new();
+
+        if self.include_transparent {
+            pool_types.push(PoolType::Transparent);
+        }
+
+        if self.include_sapling {
+            pool_types.push(PoolType::Sapling);
+        }
+
+        if self.include_orchard {
+            pool_types.push(PoolType::Orchard);
+        }
+
+        pool_types
+    }
+
     /// testing only
     #[allow(dead_code)]
     pub(crate) fn from_checked_parts(

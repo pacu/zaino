@@ -58,6 +58,7 @@ pub(crate) mod v1;
 
 use v0::DbV0;
 use v1::DbV1;
+use zaino_proto::proto::utils::PoolTypeFilter;
 
 use crate::{
     chain_index::{
@@ -69,9 +70,9 @@ use crate::{
     },
     config::BlockCacheConfig,
     error::FinalisedStateError,
-    AddrScript, BlockHash, BlockHeaderData, CommitmentTreeData, Height, IndexedBlock,
-    OrchardCompactTx, OrchardTxList, Outpoint, SaplingCompactTx, SaplingTxList, StatusType,
-    TransparentCompactTx, TransparentTxList, TxLocation, TxidList,
+    AddrScript, BlockHash, BlockHeaderData, CommitmentTreeData, CompactBlockStream, Height,
+    IndexedBlock, OrchardCompactTx, OrchardTxList, Outpoint, SaplingCompactTx, SaplingTxList,
+    StatusType, TransparentCompactTx, TransparentTxList, TxLocation, TxidList,
 };
 
 use async_trait::async_trait;
@@ -482,11 +483,32 @@ impl CompactBlockExt for DbBackend {
     async fn get_compact_block(
         &self,
         height: Height,
+        pool_types: PoolTypeFilter,
     ) -> Result<zaino_proto::proto::compact_formats::CompactBlock, FinalisedStateError> {
         #[allow(unreachable_patterns)]
         match self {
-            Self::V0(db) => db.get_compact_block(height).await,
-            Self::V1(db) => db.get_compact_block(height).await,
+            Self::V0(db) => db.get_compact_block(height, pool_types).await,
+            Self::V1(db) => db.get_compact_block(height, pool_types).await,
+            _ => Err(FinalisedStateError::FeatureUnavailable("compact_block")),
+        }
+    }
+
+    async fn get_compact_block_stream(
+        &self,
+        start_height: Height,
+        end_height: Height,
+        pool_types: PoolTypeFilter,
+    ) -> Result<CompactBlockStream, FinalisedStateError> {
+        #[allow(unreachable_patterns)]
+        match self {
+            Self::V0(db) => {
+                db.get_compact_block_stream(start_height, end_height, pool_types)
+                    .await
+            }
+            Self::V1(db) => {
+                db.get_compact_block_stream(start_height, end_height, pool_types)
+                    .await
+            }
             _ => Err(FinalisedStateError::FeatureUnavailable("compact_block")),
         }
     }

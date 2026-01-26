@@ -361,8 +361,18 @@ impl CompactBlockExt for DbV1 {
     async fn get_compact_block(
         &self,
         height: Height,
+        pool_types: PoolTypeFilter,
     ) -> Result<zaino_proto::proto::compact_formats::CompactBlock, FinalisedStateError> {
-        self.get_compact_block(height, PoolTypeFilter::default())
+        self.get_compact_block(height, pool_types).await
+    }
+
+    async fn get_compact_block_stream(
+        &self,
+        start_height: Height,
+        end_height: Height,
+        pool_types: PoolTypeFilter,
+    ) -> Result<CompactBlockStream, FinalisedStateError> {
+        self.get_compact_block_stream(start_height, end_height, pool_types)
             .await
     }
 }

@@ -5,6 +5,7 @@ use tempfile::TempDir;
 
 use zaino_common::network::ActivationHeights;
 use zaino_common::{DatabaseConfig, Network, StorageConfig};
+use zaino_proto::proto::utils::PoolTypeFilter;
 
 use crate::chain_index::finalised_state::capability::IndexedBlockExt;
 use crate::chain_index::finalised_state::db::DbBackend;
@@ -17,6 +18,7 @@ use crate::chain_index::tests::vectors::{
 };
 use crate::chain_index::types::TransactionHash;
 use crate::error::FinalisedStateError;
+use crate::local_cache::compact_block_with_pool_types;
 use crate::{
     AddrScript, BlockCacheConfig, BlockMetadata, BlockWithMetadata, ChainWork, Height,
     IndexedBlock, Outpoint,
@@ -437,8 +439,26 @@ async fn get_compact_blocks() {
 
         parent_chain_work = *chain_block.index().chainwork();
 
-        let reader_compact_block = db_reader.get_compact_block(Height(*height)).await.unwrap();
-        assert_eq!(compact_block, reader_compact_block);
+        let reader_compact_block_default = db_reader
+            .get_compact_block(Height(*height), PoolTypeFilter::default())
+            .await
+            .unwrap();
+        let default_compact_block = compact_block_with_pool_types(
+            compact_block.clone(),
+            PoolTypeFilter::default().to_pool_types_vector(),
+        );
+        assert_eq!(default_compact_block, reader_compact_block_default);
+
+        let reader_compact_block_all_data = db_reader
+            .get_compact_block(Height(*height), PoolTypeFilter::includes_all())
+            .await
+            .unwrap();
+        let all_data_compact_block = compact_block_with_pool_types(
+            compact_block,
+            PoolTypeFilter::includes_all().to_pool_types_vector(),
+        );
+        assert_eq!(all_data_compact_block, reader_compact_block_all_data);
+
         println!("CompactBlock at height {height} OK");
     }
 }
