@@ -37,17 +37,44 @@ fn test_passthroughs_with_delay() {
     // copy-pasted. Could a macro get rid of some of this boilerplate?
     proptest::proptest!(proptest::test_runner::Config::with_cases(1), |(segments in make_branching_chain(branch_count, segment_length, network))| {
         let runtime = tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_time().build().unwrap();
-        runtime.block_on(async {
-            let (genesis_segment, branching_segments) = segments;
-            let mockchain = ProptestMockchain {
-                genesis_segment,
-                branching_segments,
-                // This number can be played with. We want to slow down
-                // sync enough to trigger passthrough without
-                // slowing down passthrough more than we need to
-                //
-                delay: Some(Duration::from_secs(1)),
-            };
+            runtime.block_on(async {
+                let (genesis_segment, branching_segments) = segments;
+                let mockchain = ProptestMockchain {
+                    genesis_segment,
+                    branching_segments,
+                    // This number can be played with. We want to slow down
+                    // sync enough to trigger passthrough without
+                    // slowing down passthrough more than we need to
+                    //
+                    delay: Some(Duration::from_secs(1)),
+                };
+                let temp_dir: tempfile::TempDir = tempfile::tempdir().unwrap();
+                let db_path: std::path::PathBuf = temp_dir.path().to_path_buf();
+
+                let config = BlockCacheConfig {
+                    storage: StorageConfig {
+                        database: DatabaseConfig {
+                            path: db_path,
+                            ..Default::default()
+                        },
+                        ..Default::default()
+                    },
+                    db_version: 1,
+                    network,
+
+                };
+
+                let indexer = NodeBackedChainIndex::new(mockchain.clone(), config)
+                    .await
+                    .unwrap();
+                tokio::time::sleep(Duration::from_secs(5)).await;
+                let index_reader = indexer.subscriber().await;
+
+                for _ in 0..20 {
+                let snapshot = index_reader.snapshot_nonfinalized_state();
+                dbg!(snapshot.best_tip.height);
+                tokio::time::sleep(Duration::from_secs(1)).await
+            }
         });
     })
 }
