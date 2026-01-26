@@ -44,15 +44,17 @@
 //! `DbReader` is created from an `Arc<ZainoDB>` using [`ZainoDB::to_reader`](super::ZainoDB::to_reader).
 //! Prefer passing `DbReader` through query layers rather than passing `ZainoDB` directly.
 
+use zaino_proto::proto::utils::PoolTypeFilter;
+
 use crate::{
     chain_index::{
         finalised_state::capability::CapabilityRequest,
         types::{AddrEventBytes, TransactionHash},
     },
     error::FinalisedStateError,
-    AddrScript, BlockHash, BlockHeaderData, CommitmentTreeData, Height, IndexedBlock,
-    OrchardCompactTx, OrchardTxList, Outpoint, SaplingCompactTx, SaplingTxList, StatusType,
-    TransparentCompactTx, TransparentTxList, TxLocation, TxidList,
+    AddrScript, BlockHash, BlockHeaderData, CommitmentTreeData, CompactBlockStream, Height,
+    IndexedBlock, OrchardCompactTx, OrchardTxList, Outpoint, SaplingCompactTx, SaplingTxList,
+    StatusType, TransparentCompactTx, TransparentTxList, TxLocation, TxidList,
 };
 
 use super::{
@@ -460,14 +462,24 @@ impl DbReader {
     // ***** CompactBlock Ext *****
 
     /// Returns the CompactBlock for the given Height.
-    ///
-    /// TODO: Add separate range fetch method!
     pub(crate) async fn get_compact_block(
         &self,
         height: Height,
+        pool_types: PoolTypeFilter,
     ) -> Result<zaino_proto::proto::compact_formats::CompactBlock, FinalisedStateError> {
         self.db(CapabilityRequest::CompactBlockExt)?
-            .get_compact_block(height)
+            .get_compact_block(height, pool_types)
+            .await
+    }
+
+    async fn get_compact_block_stream(
+        &self,
+        start_height: Height,
+        end_height: Height,
+        pool_types: PoolTypeFilter,
+    ) -> Result<CompactBlockStream, FinalisedStateError> {
+        self.db(CapabilityRequest::CompactBlockExt)?
+            .get_compact_block_stream(start_height, end_height, pool_types)
             .await
     }
 }

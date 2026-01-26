@@ -1153,6 +1153,12 @@ impl IndexedBlock {
     }
 
     /// Converts this `IndexedBlock` into a CompactBlock protobuf message using proto v4 format.
+    ///
+    /// NOTE: This method currently includes transparent tx data in the compact block produced,
+    ///       `zaino-state::local_cache::compact_block_with_pool_types` should be used to selectively
+    ///       remove tx data by pool type. Alternatively this method could be updated to take a
+    ///       `zaino-proto::proto::utils::PoolTypeFilter` could be  added as an input to this method,
+    ///       with tx data being added selectively here.
     pub fn to_compact_block(&self) -> zaino_proto::proto::compact_formats::CompactBlock {
         // NOTE: Returns u64::MAX if the block is not in the best chain.
         let height: u64 = self.height().0.into();
@@ -1163,17 +1169,7 @@ impl IndexedBlock {
         let vtx: Vec<zaino_proto::proto::compact_formats::CompactTx> = self
             .transactions()
             .iter()
-            .filter_map(|tx| {
-                let has_shielded = !tx.sapling().spends().is_empty()
-                    || !tx.sapling().outputs().is_empty()
-                    || !tx.orchard().actions().is_empty();
-
-                if !has_shielded {
-                    return None;
-                }
-
-                Some(tx.to_compact_tx(None))
-            })
+            .map(|tx| tx.to_compact_tx(None))
             .collect();
 
         let sapling_commitment_tree_size = self.commitment_tree_data().sizes().sapling();
