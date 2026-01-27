@@ -472,7 +472,7 @@ impl DbReader {
             .await
     }
 
-    async fn get_compact_block_stream(
+    pub(crate) async fn get_compact_block_stream(
         &self,
         start_height: Height,
         end_height: Height,

@@ -287,3 +287,54 @@ async fn get_compact_blocks() {
         println!("CompactBlock at height {height} OK");
     }
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn get_compact_block_stream() {
+    use futures::StreamExt;
+
+    init_tracing();
+
+    let (TestVectorData { blocks, .. }, _db_dir, _zaino_db, db_reader) =
+        load_vectors_v0db_and_reader().await;
+
+    let start_height = Height(blocks.first().unwrap().height);
+    let end_height = Height(blocks.last().unwrap().height);
+
+    for pool_type_filter in [PoolTypeFilter::default(), PoolTypeFilter::includes_all()] {
+        let compact_block_stream = db_reader
+            .get_compact_block_stream(start_height, end_height, pool_type_filter.clone())
+            .await
+            .unwrap();
+
+        futures::pin_mut!(compact_block_stream);
+
+        let mut expected_next_height_u32: u32 = start_height.0;
+        let mut streamed_block_count: usize = 0;
+
+        while let Some(block_result) = compact_block_stream.next().await {
+            let streamed_compact_block = block_result.unwrap();
+
+            let streamed_height_u32: u32 = u32::try_from(streamed_compact_block.height).unwrap();
+
+            assert_eq!(streamed_height_u32, expected_next_height_u32);
+
+            let singular_compact_block = db_reader
+                .get_compact_block(Height(streamed_height_u32), pool_type_filter.clone())
+                .await
+                .unwrap();
+
+            assert_eq!(singular_compact_block, streamed_compact_block);
+
+            expected_next_height_u32 = expected_next_height_u32.saturating_add(1);
+            streamed_block_count = streamed_block_count.saturating_add(1);
+        }
+
+        let expected_block_count: usize = (end_height
+            .0
+            .saturating_sub(start_height.0)
+            .saturating_add(1)) as usize;
+
+        assert_eq!(streamed_block_count, expected_block_count);
+        assert_eq!(expected_next_height_u32, end_height.0.saturating_add(1));
+    }
+}
