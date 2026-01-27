@@ -162,7 +162,10 @@ impl BestTip {
 
 impl NonfinalizedBlockCacheSnapshot {
     /// Create initial snapshot from a single block
-    fn from_initial_block(block: IndexedBlock) -> Result<Self, InitError> {
+    fn from_initial_block(
+        block: IndexedBlock,
+        validator_finalized_height: Height,
+    ) -> Result<Self, InitError> {
         let best_tip = BestTip::from_block(&block)?;
         let hash = *block.hash();
         let height = best_tip.height;
@@ -177,7 +180,7 @@ impl NonfinalizedBlockCacheSnapshot {
             blocks,
             heights_to_hashes,
             best_tip,
-            validator_finalized_height: Height(0),
+            validator_finalized_height,
         })
     }
 
@@ -223,11 +226,22 @@ impl<Source: BlockchainSource> NonFinalizedState<Source> {
     ) -> Result<Self, InitError> {
         info!("Initialising non-finalised state.");
 
+        let validator_tip = source
+            .get_best_block_height()
+            .await
+            .map_err(|e| InitError::InvalidNodeData(Box::new(e)))?
+            .ok_or_else(|| {
+                InitError::InvalidNodeData(todo!("we need something that implements error"))
+            })?;
+
         // Resolve the initial block (provided or genesis)
         let initial_block = Self::resolve_initial_block(&source, &network, start_block).await?;
 
         // Create initial snapshot from the block
-        let snapshot = NonfinalizedBlockCacheSnapshot::from_initial_block(initial_block)?;
+        let snapshot = NonfinalizedBlockCacheSnapshot::from_initial_block(
+            initial_block,
+            Height(validator_tip.0.saturating_sub(100)),
+        )?;
 
         // Set up optional listener
         let nfs_change_listener = Self::setup_listener(&source).await;
@@ -470,7 +484,7 @@ impl<Source: BlockchainSource> NonFinalizedState<Source> {
     }
 
     /// Add all blocks from the staging area, and save a new cache snapshot, trimming block below the finalised tip.
-    async fn update(
+    pub(super) async fn update(
         &self,
         finalized_db: Arc<ZainoDB>,
         initial_state: Arc<NonfinalizedBlockCacheSnapshot>,

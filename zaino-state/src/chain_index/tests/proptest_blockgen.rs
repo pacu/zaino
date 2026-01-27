@@ -1,15 +1,18 @@
 use std::{sync::Arc, time::Duration};
 
+use futures::stream::FuturesUnordered;
 use proptest::{
     prelude::{Arbitrary as _, BoxedStrategy, Just},
     strategy::Strategy,
 };
 use rand::seq::SliceRandom;
+use tokio_stream::StreamExt as _;
 use tonic::async_trait;
 use zaino_common::{network::ActivationHeights, DatabaseConfig, Network, StorageConfig};
 use zebra_chain::{
     block::arbitrary::{self, LedgerStateOverride},
     fmt::SummaryDebug,
+    transaction::SerializedTransaction,
     LedgerState,
 };
 use zebra_state::{FromDisk, HashOrHeight, IntoDisk as _};
@@ -25,7 +28,7 @@ use crate::{
 };
 
 #[test]
-fn test_passthroughs_with_delay() {
+fn get_raw_transaction_passthrough() {
     init_tracing();
     let network = Network::Regtest(ActivationHeights::default());
     // Long enough to have some finalized blocks to play with
@@ -37,44 +40,78 @@ fn test_passthroughs_with_delay() {
     // copy-pasted. Could a macro get rid of some of this boilerplate?
     proptest::proptest!(proptest::test_runner::Config::with_cases(1), |(segments in make_branching_chain(branch_count, segment_length, network))| {
         let runtime = tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_time().build().unwrap();
-            runtime.block_on(async {
-                let (genesis_segment, branching_segments) = segments;
-                let mockchain = ProptestMockchain {
-                    genesis_segment,
-                    branching_segments,
-                    // This number can be played with. We want to slow down
-                    // sync enough to trigger passthrough without
-                    // slowing down passthrough more than we need to
-                    //
-                    delay: Some(Duration::from_secs(1)),
-                };
-                let temp_dir: tempfile::TempDir = tempfile::tempdir().unwrap();
-                let db_path: std::path::PathBuf = temp_dir.path().to_path_buf();
+        runtime.block_on(async {
+            let (genesis_segment, branching_segments) = segments;
+            let mockchain = ProptestMockchain {
+                genesis_segment,
+                branching_segments,
+                // This number can be played with. We want to slow down
+                // sync enough to trigger passthrough without
+                // slowing down passthrough more than we need to
+                delay: Some(Duration::from_secs(1)),
+            };
+            let temp_dir: tempfile::TempDir = tempfile::tempdir().unwrap();
+            let db_path: std::path::PathBuf = temp_dir.path().to_path_buf();
 
-                let config = BlockCacheConfig {
-                    storage: StorageConfig {
-                        database: DatabaseConfig {
-                            path: db_path,
-                            ..Default::default()
-                        },
+            let config = BlockCacheConfig {
+                storage: StorageConfig {
+                    database: DatabaseConfig {
+                        path: db_path,
                         ..Default::default()
                     },
-                    db_version: 1,
-                    network,
+                    ..Default::default()
+                },
+                db_version: 1,
+                network,
 
-                };
+            };
 
-                let indexer = NodeBackedChainIndex::new(mockchain.clone(), config)
-                    .await
-                    .unwrap();
-                tokio::time::sleep(Duration::from_secs(5)).await;
-                let index_reader = indexer.subscriber().await;
+            let indexer = NodeBackedChainIndex::new(mockchain.clone(), config)
+                .await
+                .unwrap();
+            tokio::time::sleep(Duration::from_secs(5)).await;
+            let index_reader = indexer.subscriber().await;
+            let snapshot = index_reader.snapshot_nonfinalized_state();
+            // 101 instead of 100 as heights are 0-indexed
+            assert_eq!(snapshot.validator_finalized_height.0 as usize, (2 * segment_length) - 101);
+            assert_eq!(snapshot.best_tip.height.0, 0);
 
-                for _ in 0..20 {
-                let snapshot = index_reader.snapshot_nonfinalized_state();
-                dbg!(snapshot.best_tip.height);
-                tokio::time::sleep(Duration::from_secs(1)).await
+
+            // We use a futures-unordered instead of only a for loop
+            // as this lets us call all the get_raw_transaction requests
+            // at the same time and wait for them in parallel
+            //
+            // This allows the artificial delays to happen in parallel
+            let mut parallel = FuturesUnordered::new();
+            // As we only have one branch, arbitrary branch order is fine
+            for (expected_transaction, height) in mockchain
+                .all_blocks_arb_branch_order()
+                .map(|block| {
+                    block.transactions
+                        .iter()
+                        .map(|transaction| {
+                            (transaction, block.coinbase_height().unwrap())
+                    }).collect::<Vec<_>>()
+                })
+                .flatten()
+            {
+                let index_reader = index_reader.clone();
+                let snapshot = snapshot.clone();
+                parallel.push(async move {
+                    let actual_transaction = index_reader.get_raw_transaction(&snapshot, &TransactionHash::from(expected_transaction.hash())).await.unwrap();
+                    if height.0 <= snapshot.validator_finalized_height.0 {
+
+                        let Some((raw_transaction, _branch_id)) = actual_transaction else {panic!("missing transaction at height {}", height.0)};
+                        assert_eq!(raw_transaction, SerializedTransaction::from(expected_transaction.clone()).as_ref())
+                    } else {
+                        assert!(actual_transaction.is_none())
+                    }
+                })
             }
+            while let Some(_success) = parallel.next().await {}
+
+
+
         });
     })
 }
@@ -174,7 +211,9 @@ impl ProptestMockchain {
                 None => best_branch_and_work = Some((branch, branch_chainwork)),
             }
         }
-        best_branch_and_work.unwrap().0
+        let mut combined = self.genesis_segment.clone();
+        combined.append(&mut best_branch_and_work.unwrap().0.clone());
+        combined
     }
 
     fn all_blocks_arb_branch_order(&self) -> impl Iterator<Item = &Arc<zebra_chain::block::Block>> {
