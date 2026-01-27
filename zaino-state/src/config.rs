@@ -3,13 +3,14 @@
 use std::path::PathBuf;
 use zaino_common::{Network, ServiceConfig, StorageConfig};
 
-#[derive(Debug, Clone, serde::Deserialize, PartialEq, Copy)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "lowercase")]
 /// Type of backend to be used.
 pub enum BackendType {
     /// Uses ReadStateService (Zebrad)
     State,
     /// Uses JsonRPC client (Zcashd. Zainod)
+    #[default]
     Fetch,
 }
 
