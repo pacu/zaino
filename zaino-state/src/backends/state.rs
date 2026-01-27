@@ -184,7 +184,7 @@ impl ZcashService for StateService {
         info!("Spawning State Service..");
 
         let rpc_client = JsonRpSeeConnector::new_from_config_parts(
-            config.validator_rpc_address,
+            &config.validator_rpc_address,
             config.validator_rpc_user.clone(),
             config.validator_rpc_password.clone(),
             config.validator_cookie_path.clone(),

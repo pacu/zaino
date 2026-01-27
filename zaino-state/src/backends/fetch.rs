@@ -105,7 +105,7 @@ impl ZcashService for FetchService {
         info!("Launching Chain Fetch Service..");
 
         let fetcher = JsonRpSeeConnector::new_from_config_parts(
-            config.validator_rpc_address,
+            &config.validator_rpc_address,
             config.validator_rpc_user.clone(),
             config.validator_rpc_password.clone(),
             config.validator_cookie_path.clone(),

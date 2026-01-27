@@ -1,6 +1,48 @@
-//! ZainoDbReader: Read only view onto a running ZainoDB
+//! Read-only view onto a running `ZainoDB` (DbReader)
 //!
-//! This should be used to fetch chain data in *all* cases.
+//! This file defines [`DbReader`], the **read-only** interface that should be used for *all* chain
+//! data fetches from the finalised database.
+//!
+//! `DbReader` exists for two reasons:
+//!
+//! 1. **API hygiene:** it narrows the surface to reads and discourages accidental use of write APIs
+//!    from query paths.
+//! 2. **Migration safety:** it routes each call through [`Router`](super::router::Router) using a
+//!    [`CapabilityRequest`](crate::chain_index::finalised_state::capability::CapabilityRequest),
+//!    ensuring the underlying backend supports the requested feature (especially important during
+//!    major migrations where different DB versions may coexist).
+//!
+//! # How routing works
+//!
+//! Each method in `DbReader` requests a specific capability (e.g. `BlockCoreExt`, `TransparentHistExt`).
+//! Internally, `DbReader::db(cap)` calls `ZainoDB::backend_for_cap(cap)`, which consults the router.
+//!
+//! - If the capability is currently served by the shadow DB (shadow mask contains the bit), the
+//!   query runs against shadow.
+//! - Otherwise, it runs against primary if primary supports it.
+//! - If neither backend supports it, the call returns `FinalisedStateError::FeatureUnavailable(...)`.
+//!
+//! # Version constraints and error handling
+//!
+//! Some queries are only available in newer DB versions (notably most v1 extension traits).
+//! Callers should either:
+//! - require a minimum DB version (via configuration and/or metadata checks), or
+//! - handle `FeatureUnavailable` errors gracefully when operating against legacy databases.
+//!
+//! # Development: adding a new read method
+//!
+//! 1. Decide whether the new query belongs under an existing extension trait or needs a new one.
+//! 2. If a new capability is required:
+//!    - add a new `Capability` bit and `CapabilityRequest` variant in `capability.rs`,
+//!    - implement the corresponding extension trait for supported DB versions,
+//!    - delegate through `DbBackend` and route via the router.
+//! 3. Add the new method on `DbReader` that requests the corresponding `CapabilityRequest` and calls
+//!    into the backend.
+//!
+//! # Usage pattern
+//!
+//! `DbReader` is created from an `Arc<ZainoDB>` using [`ZainoDB::to_reader`](super::ZainoDB::to_reader).
+//! Prefer passing `DbReader` through query layers rather than passing `ZainoDB` directly.
 
 use crate::{
     chain_index::{
@@ -24,45 +66,64 @@ use super::{
 
 use std::sync::Arc;
 
-/// Immutable view onto an already-running [`ZainoDB`].
-///
-/// Carries a plain reference with the same lifetime as the parent DB
 #[derive(Clone, Debug)]
+/// `DbReader` is the preferred entry point for serving chain queries:
+/// - it exposes only read APIs,
+/// - it routes each operation via [`CapabilityRequest`] to ensure the selected backend supports the
+///   requested feature,
+/// - and it remains stable across major migrations because routing is handled internally by the
+///   [`Router`](super::router::Router).
+///
+/// ## Cloning and sharing
+/// `DbReader` is cheap to clone; clones share the underlying `Arc<ZainoDB>`.
 pub(crate) struct DbReader {
-    /// Immutable read-only view onto the running ZainoDB
+    /// Shared handle to the running `ZainoDB` instance.
     pub(crate) inner: Arc<ZainoDB>,
 }
 
 impl DbReader {
-    /// Returns the internal db backend for the given db capability.
+    /// Resolves the backend that should serve `cap` right now.
+    ///
+    /// This is the single routing choke-point for all `DbReader` methods. It delegates to
+    /// `ZainoDB::backend_for_cap`, which consults the router’s primary/shadow masks.
+    ///
+    /// # Errors
+    /// Returns `FinalisedStateError::FeatureUnavailable(...)` if no currently-open backend
+    /// advertises the requested capability.
     #[inline(always)]
     fn db(&self, cap: CapabilityRequest) -> Result<Arc<DbBackend>, FinalisedStateError> {
         self.inner.backend_for_cap(cap)
     }
+
     // ***** DB Core Read *****
 
-    /// Returns the status of the serving ZainoDB.
+    /// Returns the current runtime status of the serving database.
+    ///
+    /// This reflects the status of the backend currently serving `READ_CORE`, which is the minimum
+    /// capability required for basic chain queries.
     pub(crate) fn status(&self) -> StatusType {
         self.inner.status()
     }
 
-    /// Returns the greatest block `Height` stored in the db
-    /// (`None` if the DB is still empty).
+    /// Returns the greatest block `Height` stored in the database, or `None` if the DB is empty.
     pub(crate) async fn db_height(&self) -> Result<Option<Height>, FinalisedStateError> {
         self.inner.db_height().await
     }
 
-    /// Fetch database metadata.
+    /// Fetches the persisted database metadata singleton (`DbMetadata`).
     pub(crate) async fn get_metadata(&self) -> Result<DbMetadata, FinalisedStateError> {
         self.inner.get_metadata().await
     }
 
-    /// Awaits untile the DB returns a Ready status.
+    /// Waits until the database reports [`StatusType::Ready`].
+    ///
+    /// This is a convenience wrapper around `ZainoDB::wait_until_ready` and should typically be
+    /// awaited once during startup before serving queries.
     pub(crate) async fn wait_until_ready(&self) {
         self.inner.wait_until_ready().await
     }
 
-    /// Fetch the block height in the main chain for a given block hash.
+    /// Fetches the main-chain height for a given block hash, if present in finalised state.
     pub(crate) async fn get_block_height(
         &self,
         hash: BlockHash,
@@ -70,7 +131,7 @@ impl DbReader {
         self.inner.get_block_height(hash).await
     }
 
-    /// Fetch the block hash in the main chain for a given block height.
+    /// Fetches the main-chain block hash for a given block height, if present in finalised state.
     pub(crate) async fn get_block_hash(
         &self,
         height: Height,

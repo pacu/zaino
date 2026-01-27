@@ -78,7 +78,7 @@ async fn create_test_manager_and_services<V: ValidatorExt>(
     test_manager.local_net.print_stdout();
 
     let fetch_service = FetchService::spawn(FetchServiceConfig::new(
-        test_manager.full_node_rpc_listen_address,
+        test_manager.full_node_rpc_listen_address.to_string(),
         None,
         None,
         None,
@@ -116,7 +116,7 @@ async fn create_test_manager_and_services<V: ValidatorExt>(
             debug_validity_check_interval: None,
             should_backup_non_finalized_state: false,
         },
-        test_manager.full_node_rpc_listen_address,
+        test_manager.full_node_rpc_listen_address.to_string(),
         test_manager.full_node_grpc_listen_address,
         false,
         None,
@@ -162,7 +162,7 @@ async fn generate_blocks_and_poll_all_chain_indexes<V, Service>(
 ) where
     V: ValidatorExt,
     Service: LightWalletService + Send + Sync + 'static,
-    Service::Config: From<ZainodConfig>,
+    Service::Config: TryFrom<ZainodConfig, Error = IndexerError>,
     IndexerError: From<<<Service as ZcashService>::Subscriber as ZcashIndexer>::Error>,
 {
     test_manager.generate_blocks_and_poll(n).await;
