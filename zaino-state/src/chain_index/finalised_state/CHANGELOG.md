@@ -138,10 +138,13 @@ API / capabilities
     - Compact block contents are now filtered by PoolTypeFilter, and may include transparent transaction data (vin/vout) when selected.
 
 Migration
-- Strategy: <in-place | shadow build | rebuild>
-- Backfill: <what gets rebuilt and how broadly>
-- Completion criteria: <how we decide migration is done>
-- Failure handling: <rollback / retry behavior>
+- Strategy: In-place (metadata-only).
+- Backfill: None.
+- Completion criteria:
+  - DbMetadata.version updated from 1.0.0 to 1.1.0.
+  - DbMetadata.migration_status reset to Empty.
+- Failure handling:
+  - Idempotent: re-running re-writes the same metadata; no partial state beyond metadata.
 
 --------------------------------------------------------------------------------
 (append new entries below)
