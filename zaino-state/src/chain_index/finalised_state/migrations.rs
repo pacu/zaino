@@ -19,6 +19,10 @@
 //!   - holds the router, config, current and target versions, and a `BlockchainSource`,
 //!   - repeatedly selects and runs the next migration via `get_migration()`.
 //!
+//! - [`MigrationStep`]:
+//!   - enum-based dispatch wrapper used by `MigrationManager` to select between multiple concrete
+//!     `Migration<T>` implementations (Rust cannot return different `impl Trait` types from a `match`).
+//!
 //! - [`capability::MigrationStatus`]:
 //!   - stored in `DbMetadata` and used to resume work safely after shutdown.
 //!
@@ -62,10 +66,24 @@
 //! - Promote shadow to primary via `router.promote_shadow()`.
 //! - Delete the old v0 directory asynchronously once all strong references are dropped.
 //!
+//! ## v1.0.0 → v1.1.0
+//!
+//! `Migration1_0_0To1_1_0` is a **minor version bump** with **no schema changes**, but does include
+//! changes to the external ZainoDB API.
+//!
+//! It updates the stored `DbMetadata` version to reflect the v1.1.0 API contract:
+//! - `CompactBlockExt` now includes `get_compact_block_stream(...)`.
+//! - compact block transaction materialization is now selected via `PoolTypeFilter` (including
+//!   optional transparent data).
+//!
+//! This release also introduces [`MigrationStep`], the enum-based migration dispatcher used by
+//! [`MigrationManager`], to allow selecting between multiple concrete migration implementations.
+//!
 //! # Development: adding a new migration step
 //!
 //! 1. Introduce a new `struct MigrationX_Y_ZToA_B_C;` and implement `Migration<T>`.
-//! 2. Register it in `MigrationManager::get_migration()` by matching on the *current* version.
+//! 2. Add a new `MigrationStep` variant and register it in `MigrationManager::get_migration()` by
+//!    matching on the *current* version.
 //! 3. Ensure the migration is:
 //!    - deterministic,
 //!    - resumable (use `DbMetadata::migration_status` and/or shadow tip),
@@ -115,7 +133,9 @@ use super::{
 };
 
 use crate::{
-    chain_index::{source::BlockchainSource, types::GENESIS_HEIGHT},
+    chain_index::{
+        finalised_state::capability::DbMetadata, source::BlockchainSource, types::GENESIS_HEIGHT,
+    },
     config::BlockCacheConfig,
     error::FinalisedStateError,
     BlockHash, BlockMetadata, BlockWithMetadata, ChainWork, Height, IndexedBlock,
@@ -245,7 +265,7 @@ impl<T: BlockchainSource> MigrationManager<T> {
                     self.source.clone(),
                 )
                 .await?;
-            self.current_version = migration.to_version();
+            self.current_version = migration.to_version::<T>();
         }
 
         Ok(())
@@ -255,17 +275,53 @@ impl<T: BlockchainSource> MigrationManager<T> {
     ///
     /// This must be updated whenever a new supported DB version is introduced. The match is strict:
     /// if a step is missing, migration is aborted rather than attempting an unsafe fallback.
-    fn get_migration(&self) -> Result<impl Migration<T>, FinalisedStateError> {
+    fn get_migration(&self) -> Result<MigrationStep, FinalisedStateError> {
         match (
             self.current_version.major,
             self.current_version.minor,
             self.current_version.patch,
         ) {
-            (0, 0, 0) => Ok(Migration0_0_0To1_0_0),
+            (0, 0, 0) => Ok(MigrationStep::Migration0_0_0To1_0_0(Migration0_0_0To1_0_0)),
+            (1, 0, 0) => Ok(MigrationStep::Migration1_0_0To1_1_0(Migration1_0_0To1_1_0)),
             (_, _, _) => Err(FinalisedStateError::Custom(format!(
                 "Missing migration from version {}",
                 self.current_version
             ))),
+        }
+    }
+}
+
+/// Concrete migration step selector.
+///
+/// Rust cannot return `impl Migration<T>` from a `match` that selects between multiple concrete
+/// migration types. `MigrationStep` is the enum-based dispatch wrapper used by [`MigrationManager`]
+/// to select a step and call `migrate(...)`, and to read the step’s `TO_VERSION`.
+enum MigrationStep {
+    Migration0_0_0To1_0_0(Migration0_0_0To1_0_0),
+    Migration1_0_0To1_1_0(Migration1_0_0To1_1_0),
+}
+
+impl MigrationStep {
+    fn to_version<T: BlockchainSource>(&self) -> DbVersion {
+        match self {
+            MigrationStep::Migration0_0_0To1_0_0(_step) => {
+                <Migration0_0_0To1_0_0 as Migration<T>>::TO_VERSION
+            }
+            MigrationStep::Migration1_0_0To1_1_0(_step) => {
+                <Migration1_0_0To1_1_0 as Migration<T>>::TO_VERSION
+            }
+        }
+    }
+
+    async fn migrate<T: BlockchainSource>(
+        &self,
+        router: Arc<Router>,
+        cfg: BlockCacheConfig,
+        source: T,
+    ) -> Result<(), FinalisedStateError> {
+        match self {
+            MigrationStep::Migration0_0_0To1_0_0(step) => step.migrate(router, cfg, source).await,
+            MigrationStep::Migration1_0_0To1_1_0(step) => step.migrate(router, cfg, source).await,
         }
     }
 }
@@ -465,6 +521,66 @@ impl<T: BlockchainSource> Migration<T> for Migration0_0_0To1_0_0 {
 
         info!("v0.0.0 to v1.0.0 migration complete.");
 
+        Ok(())
+    }
+}
+
+/// Minor migration: v1.0.0 → v1.1.0.
+///
+/// There are **no on-disk schema changes** in this step.
+///
+/// This release updates the *API contract* for compact blocks:
+/// - [`CompactBlockExt`] adds `get_compact_block_stream(...)`.
+/// - Compact block transaction materialization is selected via [`PoolTypeFilter`], which may include
+///   transparent data.
+///
+/// This release also introduces [`MigrationStep`], the enum-based migration dispatcher used by
+/// [`MigrationManager`], to allow selecting between multiple concrete migration implementations.
+///
+/// Because the persisted schema contract is unchanged, this migration only updates the stored
+/// [`DbMetadata::version`] from `1.0.0` to `1.1.0`.
+///
+/// Safety and resumability:
+/// - Idempotent: if run more than once, it will re-write the same metadata.
+/// - No shadow database and no table rebuild.
+/// - Clears any stale in-progress migration status.
+struct Migration1_0_0To1_1_0;
+
+#[async_trait]
+impl<T: BlockchainSource> Migration<T> for Migration1_0_0To1_1_0 {
+    const CURRENT_VERSION: DbVersion = DbVersion {
+        major: 1,
+        minor: 0,
+        patch: 0,
+    };
+
+    const TO_VERSION: DbVersion = DbVersion {
+        major: 1,
+        minor: 1,
+        patch: 0,
+    };
+
+    async fn migrate(
+        &self,
+        router: Arc<Router>,
+        _cfg: BlockCacheConfig,
+        _source: T,
+    ) -> Result<(), FinalisedStateError> {
+        info!("Starting v1.0.0 → v1.1.0 migration (metadata-only).");
+
+        let mut metadata: DbMetadata = router.get_metadata().await?;
+
+        // Preserve the schema hash because there are no schema changes in v1.1.0.
+        // Only advance the version marker to reflect the new API contract.
+        metadata.version = <Self as Migration<T>>::TO_VERSION;
+
+        // Outside of migrations this should be `Empty`. This step performs no build phases, so we
+        // ensure we do not leave a stale in-progress status behind.
+        metadata.migration_status = MigrationStatus::Empty;
+
+        router.update_metadata(metadata).await?;
+
+        info!("v1.0.0 to v1.1.0 migration complete.");
         Ok(())
     }
 }

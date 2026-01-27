@@ -452,7 +452,7 @@ impl DbVersion {
             }
 
             // V1: Adds chainblockv1 and transparent transaction history data.
-            (1, 0) => {
+            (1, 0) | (1, 1) => {
                 Capability::READ_CORE
                     | Capability::WRITE_CORE
                     | Capability::BLOCK_CORE_EXT
