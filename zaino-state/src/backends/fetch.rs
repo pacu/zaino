@@ -840,7 +840,7 @@ impl LightWalletIndexer for FetchServiceSubscriber {
                             height.to_string(),
                         ).await {
                             Ok(mut block) => {
-                                block = compact_block_with_pool_types(block, validated_request.pool_types());
+                                block = compact_block_with_pool_types(block, &validated_request.pool_types());
                                 if channel_tx.send(Ok(block)).await.is_err() {
                                     break;
                                 }
