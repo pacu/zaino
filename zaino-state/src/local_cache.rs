@@ -383,7 +383,7 @@ pub(crate) fn display_txids_to_server(txids: Vec<String>) -> Result<Vec<Vec<u8>>
 /// Note: for backwards compatibility an empty vector will return Sapling and Orchard Tx info.
 pub(crate) fn compact_block_with_pool_types(
     mut block: CompactBlock,
-    pool_types: Vec<PoolType>,
+    pool_types: &[PoolType],
 ) -> CompactBlock {
     if pool_types.is_empty() {
         for compact_tx in &mut block.vtx {

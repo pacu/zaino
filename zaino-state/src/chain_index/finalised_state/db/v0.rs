@@ -833,10 +833,9 @@ impl DbV0 {
 
             let block_bytes: &[u8] = txn.get(self.hashes_to_blocks, &hash_key)?;
             let block: DbCompactBlock = serde_json::from_slice(block_bytes)?;
-            // Ok(block.0)
             Ok(compact_block_with_pool_types(
                 block.0,
-                pool_types.to_pool_types_vector(),
+                &pool_types.to_pool_types_vector(),
             ))
         })
     }
@@ -944,7 +943,7 @@ impl DbV0 {
 
                     Ok(compact_block_with_pool_types(
                         db_compact_block.0,
-                        pool_types_vector.clone(),
+                        &pool_types_vector,
                     ))
                 })();
 

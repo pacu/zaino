@@ -599,7 +599,7 @@ impl StateServiceSubscriber {
                                     if trim_non_nullifier {
                                         block = compact_block_to_nullifiers(block);
                                     } else {
-                                        block = compact_block_with_pool_types(block, pool_types.clone());
+                                        block = compact_block_with_pool_types(block, &pool_types);
                                     }
                                     Ok(block)
                             }
@@ -637,7 +637,7 @@ impl StateServiceSubscriber {
                                     if trim_non_nullifier {
                                         block = compact_block_to_nullifiers(block);
                                     } else {
-                                        block = compact_block_with_pool_types(block, pool_types.clone());
+                                        block = compact_block_with_pool_types(block, &pool_types);
                                     }
                                     Ok(block)
                                 }

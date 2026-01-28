@@ -445,7 +445,7 @@ async fn get_compact_blocks() {
             .unwrap();
         let default_compact_block = compact_block_with_pool_types(
             compact_block.clone(),
-            PoolTypeFilter::default().to_pool_types_vector(),
+            &PoolTypeFilter::default().to_pool_types_vector(),
         );
         assert_eq!(default_compact_block, reader_compact_block_default);
 
@@ -455,7 +455,7 @@ async fn get_compact_blocks() {
             .unwrap();
         let all_data_compact_block = compact_block_with_pool_types(
             compact_block,
-            PoolTypeFilter::includes_all().to_pool_types_vector(),
+            &PoolTypeFilter::includes_all().to_pool_types_vector(),
         );
         assert_eq!(all_data_compact_block, reader_compact_block_all_data);
 
