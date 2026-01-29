@@ -21,6 +21,7 @@ use crate::{
     chain_index::{
         source::{BlockchainSourceResult, GetTransactionLocation},
         tests::{init_tracing, proptest_blockgen::proptest_helpers::add_segment},
+        types::BestChainLocation,
         NonFinalizedSnapshot,
     },
     BlockCacheConfig, BlockHash, BlockchainSource, ChainIndex, NodeBackedChainIndex,
@@ -126,6 +127,54 @@ fn passthrough_find_fork_point() {
                 } else {
                     assert!(fork_point.is_none());
                 }
+            })
+        }
+        while let Some(_success) = parallel.next().await {}
+    });
+}
+
+#[test]
+fn passthrough_get_transaction_status() {
+    passthrough_test(async |mockchain, index_reader, snapshot| {
+        // We use a futures-unordered instead of only a for loop
+        // as this lets us call all the get_raw_transaction requests
+        // at the same time and wait for them in parallel
+        //
+        // This allows the artificial delays to happen in parallel
+        let mut parallel = FuturesUnordered::new();
+        // As we only have one branch, arbitrary branch order is fine
+        for (height, txid) in mockchain
+            .all_blocks_arb_branch_order()
+            .map(|block| {
+                block
+                    .transactions
+                    .iter()
+                    .map(|transaction| (block.coinbase_height().unwrap(), transaction.hash()))
+                    .collect::<Vec<_>>()
+            })
+            .flatten()
+        {
+            let index_reader = index_reader.clone();
+            let snapshot = snapshot.clone();
+            parallel.push(async move {
+                let transaction_status = index_reader
+                    .get_transaction_status(&snapshot, &txid.into())
+                    .await
+                    .unwrap();
+
+                if height <= snapshot.validator_finalized_height {
+                    // passthrough transaction status can only ever be on the best
+                    // chain as we don't passthrough to nonfinalized state
+                    let Some(BestChainLocation::Block(_block_hash, transaction_height)) =
+                        transaction_status.0
+                    else {
+                        panic!("expected best chain location")
+                    };
+                    assert_eq!(height, transaction_height);
+                } else {
+                    assert!(transaction_status.0.is_none());
+                }
+                assert!(transaction_status.1.is_empty());
             })
         }
         while let Some(_success) = parallel.next().await {}
