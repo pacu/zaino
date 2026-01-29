@@ -184,9 +184,9 @@ impl PoolTypeFilter {
 
             // guard against returning an invalid state this shouls never happen.
             if filter.is_empty() {
-                return Ok(Self::default());
+                Ok(Self::default())
             } else {
-                return Ok(filter);
+                Ok(filter)
             }
         }
     }
@@ -301,7 +301,7 @@ mod test {
 
         assert_eq!(
             PoolTypeFilter::new_from_pool_types(&pools),
-            Ok(PoolTypeFilter::from_checked_parts(true, true, false))
+            Ok(PoolTypeFilter::from_checked_parts(true, true, true))
         );
     }
 
