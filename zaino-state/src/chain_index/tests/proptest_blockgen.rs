@@ -27,10 +27,15 @@ use crate::{
     NodeBackedChainIndexSubscriber, NonfinalizedBlockCacheSnapshot, TransactionHash,
 };
 
+/// Handle all the boilerplate for a passthrough
 fn passthrough_test(
+    // The actual assertions. Takes as args:
     test: impl AsyncFn(
+        // The mockchain, to use a a source of truth
         &ProptestMockchain,
+        // The subscriber to test against
         NodeBackedChainIndexSubscriber<ProptestMockchain>,
+        // A snapshot, which will have only the genesis block
         Arc<NonfinalizedBlockCacheSnapshot>,
     ),
 ) {
