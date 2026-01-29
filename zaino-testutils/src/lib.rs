@@ -77,7 +77,7 @@ pub async fn poll_until_ready(
         let mut interval = tokio::time::interval(poll_interval);
         loop {
             interval.tick().await;
-            if dbg!(component.is_ready()) {
+            if component.is_ready() {
                 return;
             }
         }
