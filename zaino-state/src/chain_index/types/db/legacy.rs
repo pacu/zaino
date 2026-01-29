@@ -125,6 +125,18 @@ impl From<BlockHash> for [u8; 32] {
     }
 }
 
+impl PartialEq<BlockHash> for zebra_chain::block::Hash {
+    fn eq(&self, other: &BlockHash) -> bool {
+        self.0 == other.0
+    }
+}
+
+impl PartialEq<zebra_chain::block::Hash> for BlockHash {
+    fn eq(&self, other: &zebra_chain::block::Hash) -> bool {
+        self.0 == other.0
+    }
+}
+
 impl From<BlockHash> for zebra_chain::block::Hash {
     fn from(hash: BlockHash) -> Self {
         zebra_chain::block::Hash(hash.0)
@@ -296,6 +308,30 @@ impl FixedEncodedLen for TransactionHash {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[cfg_attr(test, derive(serde::Serialize, serde::Deserialize))]
 pub struct Height(pub(crate) u32);
+
+impl PartialOrd<zebra_chain::block::Height> for Height {
+    fn partial_cmp(&self, other: &zebra_chain::block::Height) -> Option<std::cmp::Ordering> {
+        Some(self.0.cmp(&other.0))
+    }
+}
+
+impl PartialOrd<Height> for zebra_chain::block::Height {
+    fn partial_cmp(&self, other: &Height) -> Option<std::cmp::Ordering> {
+        Some(self.0.cmp(&other.0))
+    }
+}
+
+impl PartialEq<zebra_chain::block::Height> for Height {
+    fn eq(&self, other: &zebra_chain::block::Height) -> bool {
+        self.0 == other.0
+    }
+}
+
+impl PartialEq<Height> for zebra_chain::block::Height {
+    fn eq(&self, other: &Height) -> bool {
+        self.0 == other.0
+    }
+}
 
 /// The first block
 pub const GENESIS_HEIGHT: Height = Height(0);

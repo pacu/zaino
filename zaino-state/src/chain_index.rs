@@ -802,7 +802,7 @@ impl<Source: BlockchainSource> ChainIndex for NodeBackedChainIndexSubscriber<Sou
                     // We don't have the block in our non-finalized state
                     // we can only passthrough assuming the block is finalized
                     if block.coinbase_height().unwrap()
-                        <= snapshot.validator_finalized_height.into() =>
+                        <= snapshot.validator_finalized_height =>
                 {
                     Ok(Some((
                         types::BlockHash::from(block.hash()),
@@ -878,7 +878,7 @@ impl<Source: BlockchainSource> ChainIndex for NodeBackedChainIndexSubscriber<Sou
             // Passthrough, if the transaction is finalized
             // on the best chain
             if let source::GetTransactionLocation::BestChain(height) = location {
-                if height <= snapshot.validator_finalized_height.into() {
+                if height <= snapshot.validator_finalized_height {
                     return Ok(Some((
                         zebra_chain::transaction::SerializedTransaction::from(transaction)
                             .as_ref()
@@ -1007,7 +1007,7 @@ impl<Source: BlockchainSource> ChainIndex for NodeBackedChainIndexSubscriber<Sou
                 .map_err(|e| ChainIndexError::backing_validator(e))?
             {
                 if let GetTransactionLocation::BestChain(height) = location {
-                    if height <= snapshot.validator_finalized_height.into() {
+                    if height <= snapshot.validator_finalized_height {
                         if let Some(block) = self
                             .blockchain_source
                             .get_block(HashOrHeight::Height(height))

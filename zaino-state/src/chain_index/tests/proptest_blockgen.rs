@@ -1,4 +1,4 @@
-use std::{future::Future, pin::Pin, sync::Arc, time::Duration};
+use std::{sync::Arc, time::Duration};
 
 use futures::stream::FuturesUnordered;
 use proptest::{
@@ -94,6 +94,42 @@ fn passthrough_test(
 
         });
     })
+}
+
+#[test]
+fn passthrough_find_fork_point() {
+    passthrough_test(async |mockchain, index_reader, snapshot| {
+        // We use a futures-unordered instead of only a for loop
+        // as this lets us call all the get_raw_transaction requests
+        // at the same time and wait for them in parallel
+        //
+        // This allows the artificial delays to happen in parallel
+        let mut parallel = FuturesUnordered::new();
+        // As we only have one branch, arbitrary branch order is fine
+        for (height, hash) in mockchain
+            .all_blocks_arb_branch_order()
+            .map(|block| (block.coinbase_height().unwrap(), block.hash()))
+        {
+            let index_reader = index_reader.clone();
+            let snapshot = snapshot.clone();
+            parallel.push(async move {
+                let fork_point = index_reader
+                    .find_fork_point(&snapshot, &hash.into())
+                    .await
+                    .unwrap();
+
+                if height <= snapshot.validator_finalized_height {
+                    // passthrough fork point can only ever be the requested block
+                    // as we don't passthrough to nonfinalized state
+                    assert_eq!(hash, fork_point.unwrap().0);
+                    assert_eq!(height, fork_point.unwrap().1);
+                } else {
+                    assert!(fork_point.is_none());
+                }
+            })
+        }
+        while let Some(_success) = parallel.next().await {}
+    });
 }
 
 #[test]
