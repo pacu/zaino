@@ -13,3 +13,4 @@ and this library adheres to Rust's notion of
   `GetBlockRange` RPC request
 - utils submodule to handle `PoolType` conversions
 - `PoolTypeError` defines conversion errors between i32 and known `PoolType` variants
+- `PoolTypeFilter` indicates which pools need to be returned in a compact block.

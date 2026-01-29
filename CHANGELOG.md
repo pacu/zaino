@@ -6,7 +6,18 @@ and this library adheres to Rust's notion of
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## Unreleased
+- [808] Adopt lightclient-protocol v0.4.0
 
+### Added 
+### Changed
+- zaino-proto now references v0.4.0 files
+### Removed
+- `
+
+### Deprecated
+- `zaino-fetch::chain:to_compact` in favor of `to_compact_tx` which takes an 
+  optional height and a `PoolTypeFilter` (see zaino-proto changes)
+- 
 ## [v0.4.0] - 2025-12-03
 
 ### Added
