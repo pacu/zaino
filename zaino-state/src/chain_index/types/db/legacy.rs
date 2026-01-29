@@ -33,7 +33,6 @@ use core2::io::{self, Read, Write};
 use hex::{FromHex, ToHex};
 use primitive_types::U256;
 use std::{fmt, io::Cursor};
-use zaino_proto::proto::compact_formats::{CompactTxIn, TxOut};
 use zebra_chain::serialization::BytesInDisplayOrder as _;
 
 use crate::chain_index::encoding::{
