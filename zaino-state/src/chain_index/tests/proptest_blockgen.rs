@@ -114,7 +114,7 @@ fn passthrough_get_raw_transaction() {
         {
             let index_reader = index_reader.clone();
             let snapshot = snapshot.clone();
-            parallel.push(Box::pin(async move {
+            parallel.push(async move {
                 let actual_transaction = index_reader
                     .get_raw_transaction(
                         &snapshot,
@@ -133,10 +133,42 @@ fn passthrough_get_raw_transaction() {
                 } else {
                     assert!(actual_transaction.is_none())
                 }
-            }))
+            })
         }
         while let Some(_success) = parallel.next().await {}
     });
+}
+
+#[test]
+fn passthrough_get_block_height() {
+    passthrough_test(async |mockchain, index_reader, snapshot| {
+        // We use a futures-unordered instead of only a for loop
+        // as this lets us call all the get_raw_transaction requests
+        // at the same time and wait for them in parallel
+        //
+        // This allows the artificial delays to happen in parallel
+        let mut parallel = FuturesUnordered::new();
+
+        for (expected_height, hash) in mockchain
+            .all_blocks_arb_branch_order()
+            .map(|block| (block.coinbase_height().unwrap(), block.hash()))
+        {
+            let index_reader = index_reader.clone();
+            let snapshot = snapshot.clone();
+            parallel.push(async move {
+                let height = index_reader
+                    .get_block_height(&snapshot, hash.into())
+                    .await
+                    .unwrap();
+                if expected_height.0 <= snapshot.validator_finalized_height.0 {
+                    assert_eq!(height, Some(expected_height.into()));
+                } else {
+                    assert_eq!(height, None);
+                }
+            });
+        }
+        while let Some(_success) = parallel.next().await {}
+    })
 }
 
 #[test]
