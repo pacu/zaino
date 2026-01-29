@@ -47,7 +47,10 @@ use zaino_proto::proto::{
         GetAddressUtxosReplyList, GetMempoolTxRequest, LightdInfo, PingResponse, RawTransaction,
         SendResponse, TransparentAddressBlockFilter, TreeState, TxFilter,
     },
-    utils::{blockid_to_hashorheight, pool_types_from_vector, PoolTypeError, PoolTypeFilter, ValidatedBlockRangeRequest},
+    utils::{
+        blockid_to_hashorheight, pool_types_from_vector, PoolTypeError, PoolTypeFilter,
+        ValidatedBlockRangeRequest,
+    },
 };
 
 use zcash_protocol::consensus::NetworkType;

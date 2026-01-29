@@ -1,6 +1,6 @@
-use zebra_state::HashOrHeight;
-use zebra_chain::block::Height;
 use crate::proto::service::{BlockId, BlockRange, PoolType};
+use zebra_chain::block::Height;
+use zebra_state::HashOrHeight;
 
 #[derive(Debug, PartialEq, Eq)]
 /// Errors that can arise when mapping `PoolType` from an `i32` value.
