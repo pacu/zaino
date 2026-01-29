@@ -391,6 +391,13 @@ pub(crate) fn compact_block_with_pool_types(
             compact_tx.vin.clear();
             compact_tx.vout.clear();
         }
+
+        // Omit transactions that have no Sapling/Orchard elements.
+        block.vtx.retain(|compact_tx| {
+            !compact_tx.spends.is_empty()
+                || !compact_tx.outputs.is_empty()
+                || !compact_tx.actions.is_empty()
+        });
     } else {
         for compact_tx in &mut block.vtx {
             // strip out transparent inputs if not Requested
@@ -408,6 +415,15 @@ pub(crate) fn compact_block_with_pool_types(
                 compact_tx.actions.clear();
             }
         }
+
+        // Omit transactions that have no elements in any requested pool type.
+        block.vtx.retain(|compact_tx| {
+            !compact_tx.vin.is_empty()
+                || !compact_tx.vout.is_empty()
+                || !compact_tx.spends.is_empty()
+                || !compact_tx.outputs.is_empty()
+                || !compact_tx.actions.is_empty()
+        });
     }
 
     block

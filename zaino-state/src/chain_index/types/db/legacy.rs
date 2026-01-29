@@ -1467,35 +1467,13 @@ impl CompactTxData {
             )
             .collect();
 
-        let vout = self
-            .transparent
-            .vout
-            .iter()
-            .map(|tx_out| TxOut {
-                value: tx_out.value,
-                script_pub_key: tx_out.script_hash.to_vec(),
-            })
-            .collect();
+        let vout = self.transparent().compact_vout();
 
-        let vin = self
-            .transparent
-            .vin
-            .iter()
-            .filter_map(|t_in| {
-                if t_in.is_null_prevout() {
-                    None
-                } else {
-                    Some(CompactTxIn {
-                        prevout_txid: t_in.prevout_txid.to_vec(),
-                        prevout_index: t_in.prevout_index,
-                    })
-                }
-            })
-            .collect();
+        let vin = self.transparent().compact_vin();
 
         zaino_proto::proto::compact_formats::CompactTx {
             index: self.index(),
-            txid: self.txid().bytes_in_display_order().to_vec(),
+            txid: self.txid().0.to_vec(),
             fee,
             spends,
             outputs,
@@ -1760,7 +1738,7 @@ impl TxInCompact {
         self.prevout_index
     }
 
-    /// `true` iff this input is the special “null” out-point used by a
+    /// `true` if this input is the special “null” out-point used by a
     /// coinbase transaction (all-zero txid, index 0xffff_ffff).
     pub fn is_null_prevout(&self) -> bool {
         self.prevout_txid == [0u8; 32] && self.prevout_index == u32::MAX
