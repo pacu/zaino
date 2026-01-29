@@ -2440,7 +2440,7 @@ mod zebra {
                 max_entries: 0,
             };
             let fetch_service_sapling_subtree_roots = fetch_service_subscriber
-                .get_subtree_roots(sapling_subtree_roots_request.clone())
+                .get_subtree_roots(sapling_subtree_roots_request)
                 .await
                 .unwrap()
                 .map(Result::unwrap)
@@ -2859,7 +2859,7 @@ mod zebra {
         }
 
         #[tokio::test(flavor = "multi_thread")]
-        async fn gat_transparent_data_from_compact_block_when_requested() {
+        async fn get_transparent_data_from_compact_block_when_requested() {
             let (
                 mut test_manager,
                 _fetch_service,
@@ -2902,10 +2902,22 @@ mod zebra {
                 state_service_taddress_balance
             );
 
+            let chain_height = state_service_subscriber
+                .get_latest_block()
+                .await
+                .unwrap()
+                .height;
+
             let compact_block_range = state_service_subscriber
                 .get_block_range(BlockRange {
-                    start: None,
-                    end: None,
+                    start: Some(BlockId {
+                        height: 0,
+                        hash: Vec::new(),
+                    }),
+                    end: Some(BlockId {
+                        height: chain_height,
+                        hash: Vec::new(),
+                    }),
                     pool_types: pool_types_into_i32_vec(
                         [PoolType::Transparent, PoolType::Sapling, PoolType::Orchard].to_vec(),
                     ),
