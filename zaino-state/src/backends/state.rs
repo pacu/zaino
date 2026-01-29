@@ -2244,9 +2244,7 @@ impl LightWalletIndexer for StateServiceSubscriber {
             Ok(pool_type_filter) => pool_type_filter,
             Err(PoolTypeError::InvalidPoolType) => {
                 return Err(StateServiceError::TonicStatusError(
-                    tonic::Status::invalid_argument(format!(
-                        "Error: An invalid `PoolType' was found"
-                    )),
+                    tonic::Status::invalid_argument("Error: An invalid `PoolType' was found".to_string()),
                 ))
             }
             Err(PoolTypeError::UnknownPoolType(unknown_pool_type)) => {
