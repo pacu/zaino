@@ -20,7 +20,7 @@ use crate::{
         AddressStream, CompactBlockStream, CompactTransactionStream, RawTransactionStream,
         UtxoReplyStream,
     },
-    utils::{blockid_to_hashorheight, get_build_info, ServiceMetadata},
+    utils::{get_build_info, ServiceMetadata},
     BackendType, MempoolKey,
 };
 use nonempty::NonEmpty;
@@ -47,7 +47,7 @@ use zaino_proto::proto::{
         GetAddressUtxosReplyList, GetMempoolTxRequest, LightdInfo, PingResponse, RawTransaction,
         SendResponse, TransparentAddressBlockFilter, TreeState, TxFilter,
     },
-    utils::{pool_types_from_vector, PoolTypeError, PoolTypeFilter, ValidatedBlockRangeRequest},
+    utils::{blockid_to_hashorheight, pool_types_from_vector, PoolTypeError, PoolTypeFilter, ValidatedBlockRangeRequest},
 };
 
 use zcash_protocol::consensus::NetworkType;

@@ -45,7 +45,7 @@ use zaino_proto::proto::{
         PingResponse, RawTransaction, SendResponse, TransparentAddressBlockFilter, TreeState,
         TxFilter,
     },
-    utils::ValidatedBlockRangeRequest,
+    utils::{ValidatedBlockRangeRequest, blockid_to_hashorheight},
 };
 
 use crate::TransactionHash;
@@ -66,7 +66,7 @@ use crate::{
         AddressStream, CompactBlockStream, CompactTransactionStream, RawTransactionStream,
         UtxoReplyStream,
     },
-    utils::{blockid_to_hashorheight, get_build_info, ServiceMetadata},
+    utils::{get_build_info, ServiceMetadata},
     BackendType,
 };
 

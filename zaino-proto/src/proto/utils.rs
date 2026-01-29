@@ -1,4 +1,6 @@
-use crate::proto::service::{BlockRange, PoolType};
+use zebra_state::HashOrHeight;
+use zebra_chain::block::Height;
+use crate::proto::service::{BlockId, BlockRange, PoolType};
 
 #[derive(Debug, PartialEq, Eq)]
 /// Errors that can arise when mapping `PoolType` from an `i32` value.
@@ -119,6 +121,7 @@ impl ValidatedBlockRangeRequest {
         (self.start, self.end) = (self.end, self.start);
     }
 }
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PoolTypeFilter {
     include_transparent: bool,
@@ -330,4 +333,18 @@ mod test {
             PoolTypeFilter::includes_all()
         );
     }
+}
+
+/// Converts [`BlockId`] into [`HashOrHeight`] Zebra type
+pub fn blockid_to_hashorheight(block_id: BlockId) -> Option<HashOrHeight> {
+    <[u8; 32]>::try_from(block_id.hash)
+        .map(zebra_chain::block::Hash)
+        .map(HashOrHeight::from)
+        .or_else(|_| {
+            block_id
+                .height
+                .try_into()
+                .map(|height| HashOrHeight::Height(Height(height)))
+        })
+        .ok()
 }
