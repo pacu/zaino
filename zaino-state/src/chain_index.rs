@@ -189,6 +189,7 @@ pub trait ChainIndex {
     /// between the given heights.
     /// Returns None if the specified end height
     /// is greater than the snapshot's tip
+    // TO-TEST
     #[allow(clippy::type_complexity)]
     fn get_block_range(
         &self,
@@ -226,10 +227,10 @@ pub trait ChainIndex {
     ) -> impl std::future::Future<Output = Result<Option<(Vec<u8>, Option<u32>)>, Self::Error>>;
 
     /// Given a transaction ID, returns all known hashes and heights of blocks
-    /// containing that transaction. Height is None for blocks not on the best chain.
+    /// containing that transaction.
     ///
-    /// Also returns a bool representing whether the transaction is *currently* in the mempool.
-    /// This is not currently tied to the given snapshot but rather uses the live mempool.
+    /// Also returns if the transaction is in the mempool (and whether that mempool is
+    /// in-sync with the provided snapshot)
     #[allow(clippy::type_complexity)]
     fn get_transaction_status(
         &self,
@@ -718,7 +719,7 @@ impl<Source: BlockchainSource> ChainIndex for NodeBackedChainIndexSubscriber<Sou
 
     /// Given inclusive start and end heights, stream all blocks
     /// between the given heights.
-    /// Returns None if the specified end height
+    /// Returns None if the specified start height
     /// is greater than the snapshot's tip and greater
     /// than the validator's finalized height (100 blocks below tip)
     fn get_block_range(
@@ -730,8 +731,10 @@ impl<Source: BlockchainSource> ChainIndex for NodeBackedChainIndexSubscriber<Sou
         let max_servable_height = nonfinalized_snapshot
             .validator_finalized_height
             .max(nonfinalized_snapshot.best_tip.height);
-        let end = end.unwrap_or(nonfinalized_snapshot.best_tip.height);
-        if end <= max_servable_height {
+        let end = end
+            .unwrap_or(nonfinalized_snapshot.best_tip.height)
+            .min(max_servable_height);
+        if start <= max_servable_height.min(end) {
             Some(
                 futures::stream::iter((start.0)..=(end.0)).then(move |height| async move {
                     match self

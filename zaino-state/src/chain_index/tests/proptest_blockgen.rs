@@ -12,6 +12,7 @@ use zaino_common::{network::ActivationHeights, DatabaseConfig, Network, StorageC
 use zebra_chain::{
     block::arbitrary::{self, LedgerStateOverride},
     fmt::SummaryDebug,
+    serialization::ZcashSerialize,
     transaction::SerializedTransaction,
     LedgerState,
 };
@@ -99,6 +100,9 @@ fn passthrough_test(
 
 #[test]
 fn passthrough_find_fork_point() {
+    // TODO: passthrough_test handles a good chunck of boilerplate, but there's
+    // still a lot more inside of the closures being passed to passthrough_test.
+    // Can we DRY out more of it?
     passthrough_test(async |mockchain, index_reader, snapshot| {
         // We use a futures-unordered instead of only a for loop
         // as this lets us call all the get_raw_transaction requests
@@ -250,12 +254,73 @@ fn passthrough_get_block_height() {
                     .get_block_height(&snapshot, hash.into())
                     .await
                     .unwrap();
-                if expected_height.0 <= snapshot.validator_finalized_height.0 {
+                if expected_height <= snapshot.validator_finalized_height {
                     assert_eq!(height, Some(expected_height.into()));
                 } else {
                     assert_eq!(height, None);
                 }
             });
+        }
+        while let Some(_success) = parallel.next().await {}
+    })
+}
+
+#[test]
+fn passthrough_get_block_range() {
+    passthrough_test(async |mockchain, index_reader, snapshot| {
+        // We use a futures-unordered instead of only a for loop
+        // as this lets us call all the get_raw_transaction requests
+        // at the same time and wait for them in parallel
+        //
+        // This allows the artificial delays to happen in parallel
+        let mut parallel = FuturesUnordered::new();
+
+        for expected_start_height in mockchain
+            .all_blocks_arb_branch_order()
+            .map(|block| block.coinbase_height().unwrap())
+        {
+            let expected_end_height = (expected_start_height + 9).unwrap();
+            if expected_end_height.0 as usize <= mockchain.all_blocks_arb_branch_order().count() {
+                let index_reader = index_reader.clone();
+                let snapshot = snapshot.clone();
+                parallel.push(async move {
+                    let block_range_stream = index_reader.get_block_range(
+                        &snapshot,
+                        expected_start_height.into(),
+                        Some(expected_end_height.into()),
+                    );
+                    if expected_start_height <= snapshot.validator_finalized_height {
+                        let mut block_range_stream = Box::pin(block_range_stream.unwrap());
+                        let mut num_blocks_in_stream = 0;
+                        while let Some(block) = block_range_stream.next().await {
+                            let expected_block = mockchain
+                                .all_blocks_arb_branch_order()
+                                .nth(expected_start_height.0 as usize + num_blocks_in_stream)
+                                .unwrap()
+                                .zcash_serialize_to_vec()
+                                .unwrap();
+                            assert_eq!(block.unwrap(), expected_block);
+                            num_blocks_in_stream += 1;
+                        }
+                        assert_eq!(
+                            num_blocks_in_stream,
+                            // expect 10 blocks
+                            10.min(
+                                // unless the provided range overlaps the finalized boundary.
+                                // in that case, expect all blocks between start height
+                                // and finalized height, (+1 for inclusive range)
+                                snapshot
+                                    .validator_finalized_height
+                                    .0
+                                    .saturating_sub(expected_start_height.0)
+                                    + 1
+                            ) as usize
+                        );
+                    } else {
+                        assert!(block_range_stream.is_none())
+                    }
+                });
+            }
         }
         while let Some(_success) = parallel.next().await {}
     })
