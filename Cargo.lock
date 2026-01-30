@@ -8426,6 +8426,8 @@ dependencies = [
  "tonic 0.12.3",
  "tonic-build 0.12.3",
  "which 4.4.2",
+ "zebra-chain 3.1.0",
+ "zebra-state",
 ]
 
 [[package]]

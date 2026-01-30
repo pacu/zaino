@@ -49,11 +49,12 @@ use crate::{
     },
     config::BlockCacheConfig,
     error::FinalisedStateError,
+    local_cache::compact_block_with_pool_types,
     status::{AtomicStatus, StatusType},
-    Height, IndexedBlock,
+    CompactBlockStream, Height, IndexedBlock,
 };
 
-use zaino_proto::proto::compact_formats::CompactBlock;
+use zaino_proto::proto::{compact_formats::CompactBlock, service::PoolType, utils::PoolTypeFilter};
 
 use zebra_chain::{
     block::{Hash as ZebraHash, Height as ZebraHeight},
@@ -193,17 +194,28 @@ impl DbCore for DbV0 {
     }
 }
 
-/// `CompactBlockExt` implementation for v0.
+/// [`CompactBlockExt`] capability implementation for [`DbV0`].
 ///
-/// v0’s primary purpose is serving compact blocks (as used by lightwallet protocols).
+/// Exposes `zcash_client_backend`-compatible compact blocks derived from stored header +
+/// transaction data.
 #[async_trait]
 impl CompactBlockExt for DbV0 {
-    /// Fetches the compact block at the given height.
     async fn get_compact_block(
         &self,
         height: Height,
+        pool_types: PoolTypeFilter,
     ) -> Result<zaino_proto::proto::compact_formats::CompactBlock, FinalisedStateError> {
-        self.get_compact_block(height).await
+        self.get_compact_block(height, pool_types).await
+    }
+
+    async fn get_compact_block_stream(
+        &self,
+        start_height: Height,
+        end_height: Height,
+        pool_types: PoolTypeFilter,
+    ) -> Result<CompactBlockStream, FinalisedStateError> {
+        self.get_compact_block_stream(start_height, end_height, pool_types)
+            .await
     }
 }
 
@@ -810,6 +822,7 @@ impl DbV0 {
     async fn get_compact_block(
         &self,
         height: crate::Height,
+        pool_types: PoolTypeFilter,
     ) -> Result<zaino_proto::proto::compact_formats::CompactBlock, FinalisedStateError> {
         let zebra_hash =
             zebra_chain::block::Hash::from(self.get_block_hash_by_height(height).await?);
@@ -820,8 +833,155 @@ impl DbV0 {
 
             let block_bytes: &[u8] = txn.get(self.hashes_to_blocks, &hash_key)?;
             let block: DbCompactBlock = serde_json::from_slice(block_bytes)?;
-            Ok(block.0)
+            Ok(compact_block_with_pool_types(
+                block.0,
+                &pool_types.to_pool_types_vector(),
+            ))
         })
+    }
+
+    /// Streams `CompactBlock` messages for an inclusive height range.
+    ///
+    /// Legacy implementation for backwards compatibility.
+    ///
+    /// Behaviour:
+    /// - The stream covers the inclusive range `[start_height, end_height]`.
+    /// - If `start_height <= end_height` the stream is ascending; otherwise it is descending.
+    /// - Blocks are fetched one-by-one by calling `get_compact_block(height, pool_types)` for
+    ///   each height in the range.
+    ///
+    /// Pool filtering:
+    /// - `pool_types` controls which per-transaction components are populated.
+    /// - Transactions that have no elements in any requested pool type are omitted from `vtx`,
+    ///   and `CompactTx.index` preserves the original transaction index within the block.
+    ///
+    /// Notes:
+    /// - This is intentionally not optimised (no LMDB cursor walk, no batch/range reads).
+    /// - Any fetch/deserialize error terminates the stream after emitting a single `tonic::Status`.
+    async fn get_compact_block_stream(
+        &self,
+        start_height: Height,
+        end_height: Height,
+        pool_types: PoolTypeFilter,
+    ) -> Result<CompactBlockStream, FinalisedStateError> {
+        let is_ascending: bool = start_height <= end_height;
+
+        let (sender, receiver) =
+            tokio::sync::mpsc::channel::<Result<CompactBlock, tonic::Status>>(128);
+
+        let env = self.env.clone();
+        let heights_to_hashes_database: lmdb::Database = self.heights_to_hashes;
+        let hashes_to_blocks_database: lmdb::Database = self.hashes_to_blocks;
+
+        let pool_types_vector: Vec<PoolType> = pool_types.to_pool_types_vector();
+
+        tokio::task::spawn_blocking(move || {
+            fn lmdb_get_status(
+                database_name: &'static str,
+                height: Height,
+                error: lmdb::Error,
+            ) -> tonic::Status {
+                match error {
+                    lmdb::Error::NotFound => tonic::Status::not_found(format!(
+                        "missing db entry in {database_name} at height {}",
+                        height.0
+                    )),
+                    other_error => tonic::Status::internal(format!(
+                        "lmdb get({database_name}) failed at height {}: {other_error}",
+                        height.0
+                    )),
+                }
+            }
+
+            let mut current_height: Height = start_height;
+
+            loop {
+                let result: Result<CompactBlock, tonic::Status> = (|| {
+                    let txn = env.begin_ro_txn().map_err(|error| {
+                        tonic::Status::internal(format!("lmdb begin_ro_txn failed: {error}"))
+                    })?;
+
+                    // height -> hash (heights_to_hashes)
+                    let zebra_height: ZebraHeight = current_height.into();
+                    let height_key: [u8; 4] = DbHeight(zebra_height).to_be_bytes();
+
+                    let hash_bytes: &[u8] = txn
+                        .get(heights_to_hashes_database, &height_key)
+                        .map_err(|error| {
+                            lmdb_get_status("heights_to_hashes", current_height, error)
+                        })?;
+
+                    let db_hash: DbHash = serde_json::from_slice(hash_bytes).map_err(|error| {
+                        tonic::Status::internal(format!(
+                            "height->hash decode failed at height {}: {error}",
+                            current_height.0
+                        ))
+                    })?;
+
+                    // hash -> block (hashes_to_blocks)
+                    let hash_key: Vec<u8> =
+                        serde_json::to_vec(&DbHash(db_hash.0)).map_err(|error| {
+                            tonic::Status::internal(format!(
+                                "hash key encode failed at height {}: {error}",
+                                current_height.0
+                            ))
+                        })?;
+
+                    let block_bytes: &[u8] = txn
+                        .get(hashes_to_blocks_database, &hash_key)
+                        .map_err(|error| {
+                            lmdb_get_status("hashes_to_blocks", current_height, error)
+                        })?;
+
+                    let db_compact_block: DbCompactBlock = serde_json::from_slice(block_bytes)
+                        .map_err(|error| {
+                            tonic::Status::internal(format!(
+                                "block decode failed at height {}: {error}",
+                                current_height.0
+                            ))
+                        })?;
+
+                    Ok(compact_block_with_pool_types(
+                        db_compact_block.0,
+                        &pool_types_vector,
+                    ))
+                })();
+
+                if sender.blocking_send(result).is_err() {
+                    return;
+                }
+
+                if current_height == end_height {
+                    return;
+                }
+
+                if is_ascending {
+                    let next_value = match current_height.0.checked_add(1) {
+                        Some(value) => value,
+                        None => {
+                            let _ = sender.blocking_send(Err(tonic::Status::internal(
+                                "height overflow while iterating ascending".to_string(),
+                            )));
+                            return;
+                        }
+                    };
+                    current_height = Height(next_value);
+                } else {
+                    let next_value = match current_height.0.checked_sub(1) {
+                        Some(value) => value,
+                        None => {
+                            let _ = sender.blocking_send(Err(tonic::Status::internal(
+                                "height underflow while iterating descending".to_string(),
+                            )));
+                            return;
+                        }
+                    };
+                    current_height = Height(next_value);
+                }
+            }
+        });
+
+        Ok(CompactBlockStream::new(receiver))
     }
 }
 
