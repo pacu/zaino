@@ -583,11 +583,11 @@ impl<Source: BlockchainSource> NodeBackedChainIndexSubscriber<Source> {
 
     async fn get_indexed_block_height(
         &self,
-        nonfinalized_snapshot: &NonfinalizedBlockCacheSnapshot,
+        snapshot: &NonfinalizedBlockCacheSnapshot,
         hash: types::BlockHash,
     ) -> Result<Option<types::Height>, ChainIndexError> {
-        match nonfinalized_snapshot.blocks.get(&hash).cloned() {
-            Some(block) => Ok(nonfinalized_snapshot
+        match snapshot.blocks.get(&hash).cloned() {
+            Some(block) => Ok(snapshot
                 .heights_to_hashes
                 .values()
                 .find(|h| **h == hash)
@@ -646,7 +646,7 @@ impl<Source: BlockchainSource> NodeBackedChainIndexSubscriber<Source> {
 
     async fn get_block_height_passthrough(
         &self,
-        nonfinalized_snapshot: &NonfinalizedBlockCacheSnapshot,
+        snapshot: &NonfinalizedBlockCacheSnapshot,
         hash: types::BlockHash,
     ) -> Result<Option<types::Height>, ChainIndexError> {
         match self
