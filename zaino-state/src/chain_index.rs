@@ -184,7 +184,7 @@ pub trait ChainIndex {
     /// Returns None if the specified block is not in the best chain or is not found.
     fn get_block_height(
         &self,
-        nonfinalized_snapshot: &Self::Snapshot,
+        snapshot: &Self::Snapshot,
         hash: types::BlockHash,
     ) -> impl std::future::Future<Output = Result<Option<types::Height>, Self::Error>>;
 
@@ -196,7 +196,7 @@ pub trait ChainIndex {
     #[allow(clippy::type_complexity)]
     fn get_block_range(
         &self,
-        nonfinalized_snapshot: &Self::Snapshot,
+        snapshot: &Self::Snapshot,
         start: types::Height,
         end: Option<types::Height>,
     ) -> Option<impl futures::Stream<Item = Result<Vec<u8>, Self::Error>>>;
@@ -206,7 +206,7 @@ pub trait ChainIndex {
     fn find_fork_point(
         &self,
         snapshot: &Self::Snapshot,
-        block_hash: &types::BlockHash,
+        hash: &types::BlockHash,
     ) -> impl std::future::Future<Output = Result<Option<(types::BlockHash, types::Height)>, Self::Error>>;
 
     /// Returns the block commitment tree data by hash
