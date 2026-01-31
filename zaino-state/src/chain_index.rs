@@ -654,13 +654,25 @@ impl<Source: BlockchainSource> NodeBackedChainIndexSubscriber<Source> {
             .get_block(HashOrHeight::Hash(hash.into()))
             .await
         {
-            Ok(Some(block))
-                if types::Height::from(block.coinbase_height().expect("block to have height"))
-                    <= nonfinalized_snapshot.validator_finalized_height =>
-            {
-                Ok(Some(block.coinbase_height().unwrap().into()))
+            Ok(Some(block)) => {
+                // At this point, we know that
+                // the block is in the VALIDATOR.
+                match block.coinbase_height() {
+                    None => {
+                        // the block is in the VALIDATOR. but doesnt have a height.
+                        // Therefore, it's non-best chain!
+                        Ok(None)
+                    }
+                    Some(height) => {
+                        // The validator returned a block with a height, implying that this block is on the best chain.
+                        Ok(Some(types::Height::from(height)))
+                    }
+                }
             }
-            Ok(_) => Ok(None),
+            Ok(None) => {
+                // the block is neither in the INDEXER nor VALIDATOR
+                Ok(None)
+            }
             Err(e) => Err(ChainIndexError::backing_validator(e)),
         }
     }
