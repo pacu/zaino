@@ -975,7 +975,9 @@ impl<Source: BlockchainSource> ChainIndex for NodeBackedChainIndexSubscriber<Sou
             .blocks_containing_transaction(snapshot, txid.0)
             .await?
             .collect::<Vec<_>>();
-        let start_of_nonfinalized = snapshot.heights_to_hashes.keys().min().unwrap();
+        let Some(start_of_nonfinalized) = snapshot.heights_to_hashes.keys().min() else {
+            return Err(ChainIndexError::database_hole("no blocks"));
+        };
         let mut best_chain_block = blocks_containing_transaction
             .iter()
             .find(|block| {
