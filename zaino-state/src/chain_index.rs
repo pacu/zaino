@@ -709,10 +709,10 @@ impl<Source: BlockchainSource> ChainIndex for NodeBackedChainIndexSubscriber<Sou
         nonfinalized_snapshot: &Self::Snapshot,
         hash: types::BlockHash,
     ) -> Result<Option<types::Height>, Self::Error> {
-        let snapshot_block_height = self
+        match self
             .get_snapshot_block_height(nonfinalized_snapshot, hash)
-            .await?;
-        match snapshot_block_height {
+            .await?
+        {
             Some(h) => Ok(Some(h)),
             None => {
                 self.get_block_height_passthrough(nonfinalized_snapshot, hash)
