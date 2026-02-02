@@ -47,7 +47,10 @@ use zaino_proto::proto::{
         PingResponse, RawTransaction, SendResponse, TransparentAddressBlockFilter, TreeState,
         TxFilter,
     },
-    utils::{blockid_to_hashorheight, compact_block_to_nullifiers, ValidatedBlockRangeRequest},
+    utils::{
+        blockid_to_hashorheight, compact_block_to_nullifiers, GetBlockRangeError, PoolTypeFilter,
+        ValidatedBlockRangeRequest,
+    },
 };
 
 #[allow(deprecated)]
@@ -726,7 +729,11 @@ impl LightWalletIndexer for FetchServiceSubscriber {
 
         match self
             .indexer
-            .get_compact_block(&snapshot, types::Height(height))
+            .get_compact_block(
+                &snapshot,
+                types::Height(height),
+                PoolTypeFilter::includes_all(),
+            )
             .await
         {
             Ok(Some(block)) => Ok(block),
@@ -815,7 +822,7 @@ impl LightWalletIndexer for FetchServiceSubscriber {
         };
         match self
             .indexer
-            .get_compact_block(&snapshot, types::Height(height))
+            .get_compact_block(&snapshot, types::Height(height), PoolTypeFilter::default())
             .await
         {
             Ok(Some(block)) => Ok(compact_block_to_nullifiers(block)),
@@ -883,6 +890,10 @@ impl LightWalletIndexer for FetchServiceSubscriber {
         let mut validated_request = ValidatedBlockRangeRequest::new_from_block_range(&request)
             .map_err(FetchServiceError::from)?;
 
+        let pool_type_filter = PoolTypeFilter::new_from_pool_types(&validated_request.pool_types())
+            .map_err(GetBlockRangeError::PoolTypeArgumentError)
+            .map_err(FetchServiceError::from)?;
+
         // FIXME: this should be changed but this logic is hard to understand and we lack tests.
         // we will maintain the behaviour with less smelly code
         let rev_order = if validated_request.is_reverse_ordered() {
@@ -911,6 +922,7 @@ impl LightWalletIndexer for FetchServiceSubscriber {
                         match fetch_service_clone.indexer.get_compact_block(
                             &snapshot,
                             types::Height(height),
+                            pool_type_filter.clone(),
                         ).await {
                             Ok(Some(mut block)) => {
                                 block = compact_block_with_pool_types(block, &validated_request.pool_types());
@@ -1023,6 +1035,7 @@ impl LightWalletIndexer for FetchServiceSubscriber {
                         match fetch_service_clone.indexer.get_compact_block(
                             &snapshot,
                             types::Height(height),
+                            PoolTypeFilter::default(),
                         ).await {
                             Ok(Some(block)) => {
                                 if channel_tx.send(Ok(compact_block_to_nullifiers(block))).await.is_err() {

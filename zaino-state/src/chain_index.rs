@@ -15,6 +15,7 @@ use crate::chain_index::non_finalised_state::BestTip;
 use crate::chain_index::types::db::metadata::MempoolInfo;
 use crate::chain_index::types::{BestChainLocation, NonBestChainLocation};
 use crate::error::{ChainIndexError, ChainIndexErrorKind, FinalisedStateError};
+use crate::local_cache::compact_block_with_pool_types;
 use crate::{AtomicStatus, StatusType, SyncError};
 use crate::{IndexedBlock, TransactionHash};
 use std::collections::HashSet;
@@ -201,15 +202,21 @@ pub trait ChainIndex {
 
     /// Returns the *compact* block for the given height.
     ///
-    /// Returns None if the specified height
-    /// is greater than the snapshot's tip
+    /// Returns `None` if the specified `height` is greater than the snapshot's tip.
     ///
-    /// TODO: Add range fetch method or update this?
+    /// ## Pool filtering
+    ///
+    /// - `pool_types` controls which per-transaction components are populated.
+    /// - Transactions that contain no elements in any requested pool are omitted from `vtx`.
+    ///   The original transaction index is preserved in `CompactTx.index`.
+    /// - `PoolTypeFilter::default()` preserves the legacy behaviour (only Sapling and Orchard
+    ///   components are populated).
     #[allow(clippy::type_complexity)]
     fn get_compact_block(
         &self,
         nonfinalized_snapshot: &Self::Snapshot,
         height: types::Height,
+        pool_types: PoolTypeFilter,
     ) -> impl std::future::Future<
         Output = Result<Option<zaino_proto::proto::compact_formats::CompactBlock>, Self::Error>,
     >;
@@ -740,20 +747,34 @@ impl<Source: BlockchainSource> ChainIndex for NodeBackedChainIndexSubscriber<Sou
 
     /// Returns the *compact* block for the given height.
     ///
+    /// Returns `None` if the specified `height` is greater than the snapshot's tip.
+    ///
+    /// ## Pool filtering
+    ///
+    /// - `pool_types` controls which per-transaction components are populated.
+    /// - Transactions that contain no elements in any requested pool are omitted from `vtx`.
+    ///   The original transaction index is preserved in `CompactTx.index`.
+    /// - `PoolTypeFilter::default()` preserves the legacy behaviour (only Sapling and Orchard
+    ///   components are populated).
+    ///
     /// Returns None if the specified height
     /// is greater than the snapshot's tip
     async fn get_compact_block(
         &self,
         nonfinalized_snapshot: &Self::Snapshot,
         height: types::Height,
+        pool_types: PoolTypeFilter,
     ) -> Result<Option<zaino_proto::proto::compact_formats::CompactBlock>, Self::Error> {
         if height <= nonfinalized_snapshot.best_tip.height {
             Ok(Some(
                 match nonfinalized_snapshot.get_chainblock_by_height(&height) {
-                    Some(block) => block.to_compact_block(),
+                    Some(block) => compact_block_with_pool_types(
+                        block.to_compact_block(),
+                        &pool_types.to_pool_types_vector(),
+                    ),
                     None => match self
                         .finalized_state
-                        .get_compact_block(height, PoolTypeFilter::default())
+                        .get_compact_block(height, pool_types)
                         .await
                     {
                         Ok(block) => block,
