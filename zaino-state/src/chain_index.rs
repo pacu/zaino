@@ -728,12 +728,13 @@ impl<Source: BlockchainSource> ChainIndex for NodeBackedChainIndexSubscriber<Sou
         start: types::Height,
         end: std::option::Option<types::Height>,
     ) -> Option<impl Stream<Item = Result<Vec<u8>, Self::Error>>> {
+        // We can serve blocks above where the validator has finalized
+        // only if we have those blocks in our nonfinalized snapshot
         let max_servable_height = nonfinalized_snapshot
             .validator_finalized_height
             .max(nonfinalized_snapshot.best_tip.height);
-        let end = end
-            .unwrap_or(nonfinalized_snapshot.best_tip.height)
-            .min(max_servable_height);
+        let end = end.unwrap_or(max_servable_height);
+        // Serve as high as we can, or to the provided end if it's lower
         if start <= max_servable_height.min(end) {
             Some(
                 futures::stream::iter((start.0)..=(end.0)).then(move |height| async move {
