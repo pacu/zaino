@@ -53,6 +53,10 @@ use zaino_proto::proto::{
     },
 };
 
+use crate::{
+    chain_index::NonFinalizedSnapshot as _, ChainIndex, NodeBackedChainIndex,
+    NodeBackedChainIndexSubscriber,
+};
 #[allow(deprecated)]
 use crate::{
     chain_index::{source::ValidatorConnector, types},
@@ -61,7 +65,6 @@ use crate::{
     indexer::{
         handle_raw_transaction, IndexerSubscriber, LightWalletIndexer, ZcashIndexer, ZcashService,
     },
-    local_cache::compact_block_with_pool_types,
     status::StatusType,
     stream::{
         AddressStream, CompactBlockStream, CompactTransactionStream, RawTransactionStream,
@@ -70,7 +73,6 @@ use crate::{
     utils::{get_build_info, ServiceMetadata},
     BackendType,
 };
-use crate::{ChainIndex, NodeBackedChainIndex, NodeBackedChainIndexSubscriber};
 
 /// Chain fetch service backed by Zcashd's JsonRPC engine.
 ///
@@ -887,21 +889,13 @@ impl LightWalletIndexer for FetchServiceSubscriber {
         &self,
         request: BlockRange,
     ) -> Result<CompactBlockStream, Self::Error> {
-        let mut validated_request = ValidatedBlockRangeRequest::new_from_block_range(&request)
+        let validated_request = ValidatedBlockRangeRequest::new_from_block_range(&request)
             .map_err(FetchServiceError::from)?;
 
         let pool_type_filter = PoolTypeFilter::new_from_pool_types(&validated_request.pool_types())
             .map_err(GetBlockRangeError::PoolTypeArgumentError)
             .map_err(FetchServiceError::from)?;
 
-        // FIXME: this should be changed but this logic is hard to understand and we lack tests.
-        // we will maintain the behaviour with less smelly code
-        let rev_order = if validated_request.is_reverse_ordered() {
-            validated_request.reverse();
-            true
-        } else {
-            false
-        };
         // Note conversion here is safe due to the use of [`ValidatedBlockRangeRequest::new_from_block_range`]
         let start = validated_request.start() as u32;
         let end = validated_request.end() as u32;
@@ -909,90 +903,90 @@ impl LightWalletIndexer for FetchServiceSubscriber {
         let fetch_service_clone = self.clone();
         let service_timeout = self.config.service.timeout;
         let (channel_tx, channel_rx) = mpsc::channel(self.config.service.channel_size as usize);
+
         tokio::spawn(async move {
-            let timeout = timeout(time::Duration::from_secs((service_timeout*4) as u64), async {
+            let timeout_result = timeout(
+            time::Duration::from_secs((service_timeout * 4) as u64),
+            async {
                 let snapshot = fetch_service_clone.indexer.snapshot_nonfinalized_state();
-                let chain_height = snapshot.best_tip.height.0;
-                    for height in start..=end {
-                        let height = if rev_order {
-                            end - (height - start)
-                        } else {
-                            height
-                        };
-                        match fetch_service_clone.indexer.get_compact_block(
-                            &snapshot,
-                            types::Height(height),
-                            pool_type_filter.clone(),
-                        ).await {
-                            Ok(Some(mut block)) => {
-                                block = compact_block_with_pool_types(block, &validated_request.pool_types());
-                                if channel_tx.send(Ok(block)).await.is_err() {
-                                    break;
-                                }
-                            }
-                            Ok(None) => if height >= chain_height {
-                                    match channel_tx
-                                        .send(Err(tonic::Status::out_of_range(format!(
-                                            "Error: Height out of range [{height}]. Height requested is greater than the best chain tip [{chain_height}].",
-                                        ))))
-                                        .await
+                let chain_height = snapshot.best_chaintip().height.0;
 
-                                    {
-                                        Ok(_) => break,
-                                        Err(e) => {
-                                            warn!("GetBlockRange channel closed unexpectedly: {}", e);
-                                            break;
-                                        }
-                                    }
-                                } else if channel_tx
-                                        .send(Err(tonic::Status::unknown("Internal error, Failed to fetch block.")))
-                                        .await
-                                        .is_err()
-                                    {
-                                        break;
-                                    }
-                            Err(e) => {
-                                if height >= chain_height {
-                                    match channel_tx
-                                        .send(Err(tonic::Status::out_of_range(format!(
-                                            "Error: Height out of range [{height}]. Height requested is greater than the best chain tip [{chain_height}].",
-                                        ))))
-                                        .await
-
-                                    {
-                                        Ok(_) => break,
-                                        Err(e) => {
-                                            warn!("GetBlockRange channel closed unexpectedly: {}", e);
-                                            break;
-                                        }
-                                    }
-                                } else {
-                                    // TODO: Hide server error from clients before release. Currently useful for dev purposes.
-                                    if channel_tx
-                                        .send(Err(tonic::Status::unknown(e.to_string())))
-                                        .await
-                                        .is_err()
-                                    {
-                                        break;
-                                    }
-                                }
+                match fetch_service_clone
+                    .indexer
+                    .get_compact_block_stream(
+                        &snapshot,
+                        types::Height(start),
+                        types::Height(end),
+                        pool_type_filter.clone(),
+                    )
+                    .await
+                {
+                    Ok(Some(mut compact_block_stream)) => {
+                        while let Some(stream_item) = compact_block_stream.next().await {
+                            if channel_tx.send(stream_item).await.is_err() {
+                                break;
                             }
                         }
                     }
-                })
-                .await;
-            match timeout {
-                Ok(_) => {}
-                Err(_) => {
-                    channel_tx
-                        .send(Err(tonic::Status::deadline_exceeded(
-                            "Error: get_block_range gRPC request timed out.",
-                        )))
-                        .await
-                        .ok();
+                    Ok(None) => {
+                        // Per `get_compact_block_stream` semantics: `None` means at least one bound is above the tip.
+                        let offending_height = if start > chain_height { start } else { end };
+
+                        match channel_tx
+                            .send(Err(tonic::Status::out_of_range(format!(
+                                "Error: Height out of range [{offending_height}]. Height requested is greater than the best chain tip [{chain_height}].",
+                            ))))
+                            .await
+                        {
+                            Ok(_) => {}
+                            Err(e) => {
+                                warn!("GetBlockRange channel closed unexpectedly: {}", e);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        // Preserve previous behaviour: if the request is above tip, surface OutOfRange;
+                        // otherwise return the error (currently exposed for dev).
+                        if start > chain_height || end > chain_height {
+                            let offending_height = if start > chain_height { start } else { end };
+
+                            match channel_tx
+                                .send(Err(tonic::Status::out_of_range(format!(
+                                    "Error: Height out of range [{offending_height}]. Height requested is greater than the best chain tip [{chain_height}].",
+                                ))))
+                                .await
+                            {
+                                Ok(_) => {}
+                                Err(e) => {
+                                    warn!("GetBlockRange channel closed unexpectedly: {}", e);
+                                }
+                            }
+                        } else {
+                            // TODO: Hide server error from clients before release. Currently useful for dev purposes.
+                            if channel_tx
+                                .send(Err(tonic::Status::unknown(e.to_string())))
+                                .await
+                                .is_err()
+                            {
+                                warn!("GetBlockRangeStream closed unexpectedly: {}", e);
+                            }
+                        }
+                    }
                 }
+            },
+        )
+        .await;
+
+            if timeout_result.is_err() {
+                channel_tx
+                    .send(Err(tonic::Status::deadline_exceeded(
+                        "Error: get_block_range gRPC request timed out.",
+                    )))
+                    .await
+                    .ok();
             }
         });
+
         Ok(CompactBlockStream::new(channel_rx))
     }
 
@@ -1004,106 +998,117 @@ impl LightWalletIndexer for FetchServiceSubscriber {
         &self,
         request: BlockRange,
     ) -> Result<CompactBlockStream, Self::Error> {
-        let mut validated_request = ValidatedBlockRangeRequest::new_from_block_range(&request)
+        let validated_request = ValidatedBlockRangeRequest::new_from_block_range(&request)
             .map_err(FetchServiceError::from)?;
 
-        // FIXME: this should be changed but this logic is hard to understand and we lack tests.
-        // we will maintain the behaviour with less smelly code
-        let rev_order = if validated_request.is_reverse_ordered() {
-            validated_request.reverse();
-            true
-        } else {
-            false
-        };
+        let pool_type_filter = PoolTypeFilter::new_from_pool_types(&validated_request.pool_types())
+            .map_err(GetBlockRangeError::PoolTypeArgumentError)
+            .map_err(FetchServiceError::from)?;
 
         // Note conversion here is safe due to the use of [`ValidatedBlockRangeRequest::new_from_block_range`]
         let start = validated_request.start() as u32;
         let end = validated_request.end() as u32;
+
         let fetch_service_clone = self.clone();
         let service_timeout = self.config.service.timeout;
         let (channel_tx, channel_rx) = mpsc::channel(self.config.service.channel_size as usize);
+
         tokio::spawn(async move {
-            let timeout = timeout(time::Duration::from_secs((service_timeout*4) as u64), async {
+            let timeout_result = timeout(
+            time::Duration::from_secs((service_timeout * 4) as u64),
+            async {
                 let snapshot = fetch_service_clone.indexer.snapshot_nonfinalized_state();
-                let chain_height = snapshot.best_tip.height.0;
-                    for height in start..=end {
-                        let height = if rev_order {
-                            end - (height - start)
-                        } else {
-                            height
-                        };
-                        match fetch_service_clone.indexer.get_compact_block(
-                            &snapshot,
-                            types::Height(height),
-                            PoolTypeFilter::default(),
-                        ).await {
-                            Ok(Some(block)) => {
-                                if channel_tx.send(Ok(compact_block_to_nullifiers(block))).await.is_err() {
-                                    break;
-                                }
-                            }
-                            Ok(None) => if height >= chain_height {
-                                match channel_tx
-                                    .send(Err(tonic::Status::out_of_range(format!(
-                                        "Error: Height out of range [{height}]. Height requested is greater than the best chain tip [{chain_height}].",
-                                    ))))
-                                    .await
-                                    {
-                                        Ok(_) => break,
-                                        Err(e) => {
-                                            warn!("GetBlockRange channel closed unexpectedly: {}", e);
-                                            break;
-                                        }
-                                    }
-                                } else if channel_tx
-                                        .send(Err(tonic::Status::unknown("Internal error, Failed to fetch block.")))
+                let chain_height = snapshot.best_chaintip().height.0;
+
+                match fetch_service_clone
+                    .indexer
+                    .get_compact_block_stream(
+                        &snapshot,
+                        types::Height(start),
+                        types::Height(end),
+                        pool_type_filter.clone(),
+                    )
+                    .await
+                {
+                    Ok(Some(mut compact_block_stream)) => {
+                        while let Some(stream_item) = compact_block_stream.next().await {
+                             match stream_item {
+                                Ok(block) => {
+                                    if channel_tx
+                                        .send(Ok(compact_block_to_nullifiers(block)))
                                         .await
                                         .is_err()
                                     {
                                         break;
                                     }
-                            Err(e) => {
-                                if height >= chain_height {
-                                    match channel_tx
-                                        .send(Err(tonic::Status::out_of_range(format!(
-                                            "Error: Height out of range [{height}]. Height requested is greater than the best chain tip [{chain_height}].",
-                                        ))))
-                                        .await
-
-                                    {
-                                        Ok(_) => break,
-                                        Err(e) => {
-                                            warn!("GetBlockRange channel closed unexpectedly: {}", e);
-                                            break;
-                                        }
-                                    }
-                                } else {
-                                    // TODO: Hide server error from clients before release. Currently useful for dev purposes.
-                                    if channel_tx
-                                        .send(Err(tonic::Status::unknown(e.to_string())))
-                                        .await
-                                        .is_err()
-                                    {
+                                }
+                                Err(status) => {
+                                    if channel_tx.send(Err(status)).await.is_err() {
                                         break;
                                     }
                                 }
                             }
                         }
                     }
-                })
-                .await;
-            match timeout {
-                Ok(_) => {}
-                Err(_) => {
-                    channel_tx
-                        .send(Err(tonic::Status::deadline_exceeded(
-                            "Error: get_block_range gRPC request timed out.",
-                        )))
-                        .await
-                        .ok();
+                    Ok(None) => {
+                        // Per `get_compact_block_stream` semantics: `None` means at least one bound is above the tip.
+                        let offending_height = if start > chain_height { start } else { end };
+
+                        match channel_tx
+                            .send(Err(tonic::Status::out_of_range(format!(
+                                "Error: Height out of range [{offending_height}]. Height requested is greater than the best chain tip [{chain_height}].",
+                            ))))
+                            .await
+                        {
+                            Ok(_) => {}
+                            Err(e) => {
+                                warn!("GetBlockRange channel closed unexpectedly: {}", e);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        // Preserve previous behaviour: if the request is above tip, surface OutOfRange;
+                        // otherwise return the error (currently exposed for dev).
+                        if start > chain_height || end > chain_height {
+                            let offending_height = if start > chain_height { start } else { end };
+
+                            match channel_tx
+                                .send(Err(tonic::Status::out_of_range(format!(
+                                    "Error: Height out of range [{offending_height}]. Height requested is greater than the best chain tip [{chain_height}].",
+                                ))))
+                                .await
+                            {
+                                Ok(_) => {}
+                                Err(e) => {
+                                    warn!("GetBlockRange channel closed unexpectedly: {}", e);
+                                }
+                            }
+                        } else {
+                            // TODO: Hide server error from clients before release. Currently useful for dev purposes.
+                            if channel_tx
+                                .send(Err(tonic::Status::unknown(e.to_string())))
+                                .await
+                                .is_err()
+                            {
+                                warn!("GetBlockRangeStream closed unexpectedly: {}", e);
+                            }
+                        }
+                    }
                 }
+            },
+        )
+        .await;
+
+            if timeout_result.is_err() {
+                channel_tx
+                    .send(Err(tonic::Status::deadline_exceeded(
+                        "Error: get_block_range gRPC request timed out.",
+                    )))
+                    .await
+                    .ok();
             }
         });
+
         Ok(CompactBlockStream::new(channel_rx))
     }
 

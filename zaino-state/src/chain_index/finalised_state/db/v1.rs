@@ -3394,6 +3394,8 @@ impl DbV1 {
 
         // Bounded channel provides backpressure so the blocking task cannot run unbounded ahead of
         // the gRPC consumer.
+        //
+        // TODO: Investigate whether channel size should be changed, added to config, or set dynamically base on resources.
         let (sender, receiver) =
             tokio::sync::mpsc::channel::<Result<CompactBlock, tonic::Status>>(128);
 
