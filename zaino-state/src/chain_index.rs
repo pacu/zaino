@@ -26,6 +26,7 @@ use non_finalised_state::NonfinalizedBlockCacheSnapshot;
 use source::{BlockchainSource, ValidatorConnector};
 use tokio_stream::StreamExt;
 use tracing::info;
+use zaino_proto::proto::utils::PoolTypeFilter;
 use zebra_chain::parameters::ConsensusBranchId;
 pub use zebra_chain::parameters::Network as ZebraNetwork;
 use zebra_chain::serialization::ZcashSerialize;
@@ -750,7 +751,11 @@ impl<Source: BlockchainSource> ChainIndex for NodeBackedChainIndexSubscriber<Sou
             Ok(Some(
                 match nonfinalized_snapshot.get_chainblock_by_height(&height) {
                     Some(block) => block.to_compact_block(),
-                    None => match self.finalized_state.get_compact_block(height).await {
+                    None => match self
+                        .finalized_state
+                        .get_compact_block(height, PoolTypeFilter::default())
+                        .await
+                    {
                         Ok(block) => block,
                         Err(_e) => return Err(ChainIndexError::database_hole(height)),
                     },

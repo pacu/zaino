@@ -42,10 +42,12 @@ use zaino_fetch::{
 use zaino_proto::proto::{
     compact_formats::CompactBlock,
     service::{
-        AddressList, Balance, BlockId, BlockRange, Duration, Exclude, GetAddressUtxosArg,
-        GetAddressUtxosReply, GetAddressUtxosReplyList, LightdInfo, PingResponse, RawTransaction,
-        SendResponse, TransparentAddressBlockFilter, TreeState, TxFilter,
+        AddressList, Balance, BlockId, BlockRange, Duration, GetAddressUtxosArg,
+        GetAddressUtxosReply, GetAddressUtxosReplyList, GetMempoolTxRequest, LightdInfo,
+        PingResponse, RawTransaction, SendResponse, TransparentAddressBlockFilter, TreeState,
+        TxFilter,
     },
+    utils::{blockid_to_hashorheight, compact_block_to_nullifiers, ValidatedBlockRangeRequest},
 };
 
 #[allow(deprecated)]
@@ -56,18 +58,16 @@ use crate::{
     indexer::{
         handle_raw_transaction, IndexerSubscriber, LightWalletIndexer, ZcashIndexer, ZcashService,
     },
+    local_cache::compact_block_with_pool_types,
     status::StatusType,
     stream::{
         AddressStream, CompactBlockStream, CompactTransactionStream, RawTransactionStream,
         UtxoReplyStream,
     },
-    utils::{blockid_to_hashorheight, get_build_info, ServiceMetadata},
+    utils::{get_build_info, ServiceMetadata},
     BackendType,
 };
-use crate::{
-    utils::compact_block_to_nullifiers, ChainIndex, NodeBackedChainIndex,
-    NodeBackedChainIndexSubscriber,
-};
+use crate::{ChainIndex, NodeBackedChainIndex, NodeBackedChainIndexSubscriber};
 
 /// Chain fetch service backed by Zcashd's JsonRPC engine.
 ///
@@ -880,46 +880,21 @@ impl LightWalletIndexer for FetchServiceSubscriber {
         &self,
         request: BlockRange,
     ) -> Result<CompactBlockStream, Self::Error> {
-        let mut start: u32 = match request.start {
-            Some(block_id) => match block_id.height.try_into() {
-                Ok(height) => height,
-                Err(_) => {
-                    return Err(FetchServiceError::TonicStatusError(
-                        tonic::Status::invalid_argument(
-                            "Error: Start height out of range. Failed to convert to u32.",
-                        ),
-                    ));
-                }
-            },
-            None => {
-                return Err(FetchServiceError::TonicStatusError(
-                    tonic::Status::invalid_argument("Error: No start height given."),
-                ));
-            }
-        };
-        let mut end: u32 = match request.end {
-            Some(block_id) => match block_id.height.try_into() {
-                Ok(height) => height,
-                Err(_) => {
-                    return Err(FetchServiceError::TonicStatusError(
-                        tonic::Status::invalid_argument(
-                            "Error: End height out of range. Failed to convert to u32.",
-                        ),
-                    ));
-                }
-            },
-            None => {
-                return Err(FetchServiceError::TonicStatusError(
-                    tonic::Status::invalid_argument("Error: No start height given."),
-                ));
-            }
-        };
-        let rev_order = if start > end {
-            (start, end) = (end, start);
+        let mut validated_request = ValidatedBlockRangeRequest::new_from_block_range(&request)
+            .map_err(FetchServiceError::from)?;
+
+        // FIXME: this should be changed but this logic is hard to understand and we lack tests.
+        // we will maintain the behaviour with less smelly code
+        let rev_order = if validated_request.is_reverse_ordered() {
+            validated_request.reverse();
             true
         } else {
             false
         };
+        // Note conversion here is safe due to the use of [`ValidatedBlockRangeRequest::new_from_block_range`]
+        let start = validated_request.start() as u32;
+        let end = validated_request.end() as u32;
+
         let fetch_service_clone = self.clone();
         let service_timeout = self.config.service.timeout;
         let (channel_tx, channel_rx) = mpsc::channel(self.config.service.channel_size as usize);
@@ -937,7 +912,8 @@ impl LightWalletIndexer for FetchServiceSubscriber {
                             &snapshot,
                             types::Height(height),
                         ).await {
-                            Ok(Some(block)) => {
+                            Ok(Some(mut block)) => {
+                                block = compact_block_with_pool_types(block, &validated_request.pool_types());
                                 if channel_tx.send(Ok(block)).await.is_err() {
                                     break;
                                 }
@@ -1016,46 +992,21 @@ impl LightWalletIndexer for FetchServiceSubscriber {
         &self,
         request: BlockRange,
     ) -> Result<CompactBlockStream, Self::Error> {
-        let mut start: u32 = match request.start {
-            Some(block_id) => match block_id.height.try_into() {
-                Ok(height) => height,
-                Err(_) => {
-                    return Err(FetchServiceError::TonicStatusError(
-                        tonic::Status::invalid_argument(
-                            "Error: Start height out of range. Failed to convert to u32.",
-                        ),
-                    ));
-                }
-            },
-            None => {
-                return Err(FetchServiceError::TonicStatusError(
-                    tonic::Status::invalid_argument("Error: No start height given."),
-                ));
-            }
-        };
-        let mut end: u32 = match request.end {
-            Some(block_id) => match block_id.height.try_into() {
-                Ok(height) => height,
-                Err(_) => {
-                    return Err(FetchServiceError::TonicStatusError(
-                        tonic::Status::invalid_argument(
-                            "Error: End height out of range. Failed to convert to u32.",
-                        ),
-                    ));
-                }
-            },
-            None => {
-                return Err(FetchServiceError::TonicStatusError(
-                    tonic::Status::invalid_argument("Error: No start height given."),
-                ));
-            }
-        };
-        let rev_order = if start > end {
-            (start, end) = (end, start);
+        let mut validated_request = ValidatedBlockRangeRequest::new_from_block_range(&request)
+            .map_err(FetchServiceError::from)?;
+
+        // FIXME: this should be changed but this logic is hard to understand and we lack tests.
+        // we will maintain the behaviour with less smelly code
+        let rev_order = if validated_request.is_reverse_ordered() {
+            validated_request.reverse();
             true
         } else {
             false
         };
+
+        // Note conversion here is safe due to the use of [`ValidatedBlockRangeRequest::new_from_block_range`]
+        let start = validated_request.start() as u32;
+        let end = validated_request.end() as u32;
         let fetch_service_clone = self.clone();
         let service_timeout = self.config.service.timeout;
         let (channel_tx, channel_rx) = mpsc::channel(self.config.service.channel_size as usize);
@@ -1186,9 +1137,8 @@ impl LightWalletIndexer for FetchServiceSubscriber {
         })
     }
 
-    /// Return the txids corresponding to the given t-address within the given block range
-    #[allow(deprecated)]
-    async fn get_taddress_txids(
+    // Return the transactions corresponding to the given t-address within the given block range
+    async fn get_taddress_transactions(
         &self,
         request: TransparentAddressBlockFilter,
     ) -> Result<RawTransactionStream, Self::Error> {
@@ -1231,6 +1181,16 @@ impl LightWalletIndexer for FetchServiceSubscriber {
             }
         });
         Ok(RawTransactionStream::new(receiver))
+    }
+
+    /// Return the txids corresponding to the given t-address within the given block range
+    /// this function is deprecated: use `get_taddress_transactions`
+    #[allow(deprecated)]
+    async fn get_taddress_txids(
+        &self,
+        request: TransparentAddressBlockFilter,
+    ) -> Result<RawTransactionStream, Self::Error> {
+        self.get_taddress_transactions(request).await
     }
 
     /// Returns the total balance for a list of taddrs
@@ -1348,29 +1308,40 @@ impl LightWalletIndexer for FetchServiceSubscriber {
         }
     }
 
-    /// Return the compact transactions currently in the mempool; the results
-    /// can be a few seconds out of date. If the Exclude list is empty, return
-    /// all transactions; otherwise return all *except* those in the Exclude list
-    /// (if any); this allows the client to avoid receiving transactions that it
-    /// already has (from an earlier call to this rpc). The transaction IDs in the
-    /// Exclude list can be shortened to any number of bytes to make the request
-    /// more bandwidth-efficient; if two or more transactions in the mempool
-    /// match a shortened txid, they are all sent (none is excluded). Transactions
-    /// in the exclude list that don't exist in the mempool are ignored.
+    /// Returns a stream of the compact transaction representation for transactions
+    /// currently in the mempool. The results of this operation may be a few
+    /// seconds out of date. If the `exclude_txid_suffixes` list is empty,
+    /// return all transactions; otherwise return all *except* those in the
+    /// `exclude_txid_suffixes` list (if any); this allows the client to avoid
+    /// receiving transactions that it already has (from an earlier call to this
+    /// RPC). The transaction IDs in the `exclude_txid_suffixes` list can be
+    /// shortened to any number of bytes to make the request more
+    /// bandwidth-efficient; if two or more transactions in the mempool match a
+    /// txid suffix, none of the matching transactions are excluded. Txid
+    /// suffixes in the exclude list that don't match any transactions in the
+    /// mempool are ignored.
     #[allow(deprecated)]
     async fn get_mempool_tx(
         &self,
-        request: Exclude,
+        request: GetMempoolTxRequest,
     ) -> Result<CompactTransactionStream, Self::Error> {
-        let exclude_txids: Vec<String> = request
-            .txid
-            .iter()
-            .map(|txid_bytes| {
-                // NOTE: the TransactionHash methods cannot be used for this hex encoding as exclusions could be truncated to less than 32 bytes
-                let reversed_txid_bytes: Vec<u8> = txid_bytes.iter().cloned().rev().collect();
-                hex::encode(&reversed_txid_bytes)
-            })
-            .collect();
+        let mut exclude_txids: Vec<String> = vec![];
+
+        for (i, excluded_id) in request.exclude_txid_suffixes.iter().enumerate() {
+            if excluded_id.len() > 32 {
+                return Err(FetchServiceError::TonicStatusError(
+                    tonic::Status::invalid_argument(format!(
+                        "Error: excluded txid {} is larger than 32 bytes",
+                        i
+                    )),
+                ));
+            }
+
+            // NOTE: the TransactionHash methods cannot be used for this hex encoding as exclusions could be truncated to less than 32 bytes
+            let reversed_txid_bytes: Vec<u8> = excluded_id.iter().cloned().rev().collect();
+            let hex_string_txid: String = hex::encode(&reversed_txid_bytes);
+            exclude_txids.push(hex_string_txid);
+        }
 
         let mempool = self.indexer.clone();
         let service_timeout = self.config.service.timeout;
@@ -1758,6 +1729,7 @@ impl LightWalletIndexer for FetchServiceSubscriber {
                 })?
                 .into(),
         );
+
         let sapling_activation_height = blockchain_info
             .upgrades()
             .get(&sapling_id)
@@ -1767,6 +1739,16 @@ impl LightWalletIndexer for FetchServiceSubscriber {
             blockchain_info.consensus().into_parts().0,
         )
         .to_string();
+
+        let nu_info = blockchain_info
+            .upgrades()
+            .last()
+            .expect("Expected validator to have a consenus activated.")
+            .1
+            .into_parts();
+
+        let nu_name = nu_info.0;
+        let nu_height = nu_info.1;
 
         Ok(LightdInfo {
             version: self.data.build_info().version(),
@@ -1783,6 +1765,10 @@ impl LightWalletIndexer for FetchServiceSubscriber {
             estimated_height: blockchain_info.estimated_height().0 as u64,
             zcashd_build: self.data.zebra_build(),
             zcashd_subversion: self.data.zebra_subversion(),
+            donation_address: "".to_string(),
+            upgrade_name: nu_name.to_string(),
+            upgrade_height: nu_height.0 as u64,
+            lightwallet_protocol_version: "v0.4.0".to_string(),
         })
     }
 
