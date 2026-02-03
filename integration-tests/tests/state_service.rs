@@ -901,8 +901,8 @@ async fn state_service_get_block_range_returns_all_pools<V: ValidatorExt>(
 
     assert_eq!(compact_block.height, end_height);
 
-    // the compact block has 3 transactions
-    assert_eq!(compact_block.vtx.len(), 3);
+    // the compact block has 4 transactions (3 sent + coinbase)
+    assert_eq!(compact_block.vtx.len(), 4);
 
     // transaction order is not guaranteed so it's necessary to look up for them by TXID
     let deshielding_tx = compact_block

@@ -1178,11 +1178,10 @@ async fn fetch_service_get_block_range_returns_all_pools<V: ValidatorExt>(
 
     assert_eq!(compact_block.height, end_height);
 
-    let expected_transaction_count = if matches!(validator, ValidatorKind::Zebrad) {
-        3
-    } else {
-        4 // zcashd uses shielded coinbase which will add an extra compact tx
-    };
+    // Transparent tx are now included in compact blocks unless specified so the
+    // expected block count should be 4 (3 sent tx + coinbase)
+    let expected_transaction_count = 4;
+
     // the compact block has the right number of transactions
     assert_eq!(compact_block.vtx.len(), expected_transaction_count);
 

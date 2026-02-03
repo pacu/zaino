@@ -731,11 +731,7 @@ impl LightWalletIndexer for FetchServiceSubscriber {
 
         match self
             .indexer
-            .get_compact_block(
-                &snapshot,
-                types::Height(height),
-                PoolTypeFilter::includes_all(),
-            )
+            .get_compact_block(&snapshot, types::Height(height), PoolTypeFilter::default())
             .await
         {
             Ok(Some(block)) => Ok(block),

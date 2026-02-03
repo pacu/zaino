@@ -1952,7 +1952,10 @@ impl LightWalletIndexer for StateServiceSubscriber {
             .get_compact_block(hash_or_height.to_string())
             .await
         {
-            Ok(block) => Ok(block),
+            Ok(block) => Ok(compact_block_with_pool_types(
+                block,
+                &PoolTypeFilter::default().to_pool_types_vector(),
+            )),
             Err(e) => {
                 self.error_get_block(BlockCacheError::Custom(e.to_string()), height as u32)
                     .await
@@ -2244,7 +2247,9 @@ impl LightWalletIndexer for StateServiceSubscriber {
             Ok(pool_type_filter) => pool_type_filter,
             Err(PoolTypeError::InvalidPoolType) => {
                 return Err(StateServiceError::TonicStatusError(
-                    tonic::Status::invalid_argument("Error: An invalid `PoolType' was found".to_string()),
+                    tonic::Status::invalid_argument(
+                        "Error: An invalid `PoolType' was found".to_string(),
+                    ),
                 ))
             }
             Err(PoolTypeError::UnknownPoolType(unknown_pool_type)) => {
