@@ -8,6 +8,7 @@ use crate::BlockHash;
 use std::{any::type_name, fmt::Display};
 
 use zaino_fetch::jsonrpsee::connector::RpcRequestError;
+use zaino_proto::proto::utils::GetBlockRangeError;
 
 /// Errors related to the `StateService`.
 // #[deprecated]
@@ -77,6 +78,32 @@ pub enum StateServiceError {
         /// information if applicable
         connected_zebrad_version: String,
     },
+}
+
+impl From<GetBlockRangeError> for StateServiceError {
+    fn from(value: GetBlockRangeError) -> Self {
+        match value {
+            GetBlockRangeError::StartHeightOutOfRange => {
+                Self::TonicStatusError(tonic::Status::out_of_range(
+                    "Error: Start height out of range. Failed to convert to u32.",
+                ))
+            }
+            GetBlockRangeError::NoStartHeightProvided => {
+                Self::TonicStatusError(tonic::Status::out_of_range("Error: No start height given"))
+            }
+            GetBlockRangeError::EndHeightOutOfRange => {
+                Self::TonicStatusError(tonic::Status::out_of_range(
+                    "Error: End height out of range. Failed to convert to u32.",
+                ))
+            }
+            GetBlockRangeError::NoEndHeightProvided => {
+                Self::TonicStatusError(tonic::Status::out_of_range("Error: No end height given."))
+            }
+            GetBlockRangeError::PoolTypeArgumentError(_) => {
+                Self::TonicStatusError(tonic::Status::invalid_argument("Error: invalid pool type"))
+            }
+        }
+    }
 }
 
 #[allow(deprecated)]
@@ -229,95 +256,62 @@ impl<T: ToString> From<RpcRequestError<T>> for FetchServiceError {
     }
 }
 
-// /// Errors related to the `FetchService`.
-// #[deprecated]
-// #[derive(Debug, thiserror::Error)]
-// pub enum FetchServiceError {
-//     /// Critical Errors, Restart Zaino.
-//     #[error("Critical error: {0}")]
-//     Critical(String),
+impl From<GetBlockRangeError> for FetchServiceError {
+    fn from(value: GetBlockRangeError) -> Self {
+        match value {
+            GetBlockRangeError::StartHeightOutOfRange => {
+                FetchServiceError::TonicStatusError(tonic::Status::out_of_range(
+                    "Error: Start height out of range. Failed to convert to u32.",
+                ))
+            }
+            GetBlockRangeError::NoStartHeightProvided => FetchServiceError::TonicStatusError(
+                tonic::Status::out_of_range("Error: No start height given"),
+            ),
+            GetBlockRangeError::EndHeightOutOfRange => {
+                FetchServiceError::TonicStatusError(tonic::Status::out_of_range(
+                    "Error: End height out of range. Failed to convert to u32.",
+                ))
+            }
+            GetBlockRangeError::NoEndHeightProvided => FetchServiceError::TonicStatusError(
+                tonic::Status::out_of_range("Error: No end height given."),
+            ),
+            GetBlockRangeError::PoolTypeArgumentError(_) => FetchServiceError::TonicStatusError(
+                tonic::Status::invalid_argument("Error: invalid pool type"),
+            ),
+        }
+    }
+}
 
-//     /// Error from JsonRpcConnector.
-//     #[error("JsonRpcConnector error: {0}")]
-//     JsonRpcConnectorError(#[from] zaino_fetch::jsonrpsee::error::TransportError),
-
-//     /// Error from the block cache.
-//     #[error("Mempool error: {0}")]
-//     BlockCacheError(#[from] BlockCacheError),
-
-//     /// Error from the mempool.
-//     #[error("Mempool error: {0}")]
-//     MempoolError(#[from] MempoolError),
-
-//     /// RPC error in compatibility with zcashd.
-//     #[error("RPC error: {0:?}")]
-//     RpcError(#[from] zaino_fetch::jsonrpsee::connector::RpcError),
-
-//     /// Tonic gRPC error.
-//     #[error("Tonic status error: {0}")]
-//     TonicStatusError(#[from] tonic::Status),
-
-//     /// Serialization error.
-//     #[error("Serialization error: {0}")]
-//     SerializationError(#[from] zebra_chain::serialization::SerializationError),
-// }
-
-// #[allow(deprecated)]
-// impl From<FetchServiceError> for tonic::Status {
-//     fn from(error: FetchServiceError) -> Self {
-//         match error {
-//             FetchServiceError::Critical(message) => tonic::Status::internal(message),
-//             FetchServiceError::JsonRpcConnectorError(err) => {
-//                 tonic::Status::internal(format!("JsonRpcConnector error: {err}"))
-//             }
-//             FetchServiceError::BlockCacheError(err) => {
-//                 tonic::Status::internal(format!("BlockCache error: {err}"))
-//             }
-//             FetchServiceError::MempoolError(err) => {
-//                 tonic::Status::internal(format!("Mempool error: {err}"))
-//             }
-//             FetchServiceError::RpcError(err) => {
-//                 tonic::Status::internal(format!("RPC error: {err:?}"))
-//             }
-//             FetchServiceError::TonicStatusError(err) => err,
-//             FetchServiceError::SerializationError(err) => {
-//                 tonic::Status::internal(format!("Serialization error: {err}"))
-//             }
-//         }
-//     }
-// }
-// /// These aren't the best conversions, but the MempoolError should go away
-// /// in favor of a new type with the new chain cache is complete
-// impl<T: ToString> From<RpcRequestError<T>> for MempoolError {
-//     fn from(value: RpcRequestError<T>) -> Self {
-//         match value {
-//             RpcRequestError::Transport(transport_error) => {
-//                 MempoolError::JsonRpcConnectorError(transport_error)
-//             }
-//             RpcRequestError::JsonRpc(error) => {
-//                 MempoolError::Critical(format!("argument failed to serialze: {error}"))
-//             }
-//             RpcRequestError::InternalUnrecoverable(e) => {
-//                 MempoolError::Critical(format!("Internal unrecoverable error: {e}"))
-//             }
-//             RpcRequestError::ServerWorkQueueFull => MempoolError::Critical(
-//                 "Server queue full. Handling for this not yet implemented".to_string(),
-//             ),
-//             RpcRequestError::Method(e) => MempoolError::Critical(format!(
-//                 "unhandled rpc-specific {} error: {}",
-//                 type_name::<T>(),
-//                 e.to_string()
-//             )),
-//             RpcRequestError::UnexpectedErrorResponse(error) => MempoolError::Critical(format!(
-//                 "unhandled rpc-specific {} error: {}",
-//                 type_name::<T>(),
-//                 error
-//             )),
-//         }
-//     }
-// }
-
-// >>>>>>> replace_block_generation_delay_with_polling
+/// These aren't the best conversions, but the MempoolError should go away
+/// in favor of a new type with the new chain cache is complete
+impl<T: ToString> From<RpcRequestError<T>> for MempoolError {
+    fn from(value: RpcRequestError<T>) -> Self {
+        match value {
+            RpcRequestError::Transport(transport_error) => {
+                MempoolError::JsonRpcConnectorError(transport_error)
+            }
+            RpcRequestError::JsonRpc(error) => {
+                MempoolError::Critical(format!("argument failed to serialze: {error}"))
+            }
+            RpcRequestError::InternalUnrecoverable(e) => {
+                MempoolError::Critical(format!("Internal unrecoverable error: {e}"))
+            }
+            RpcRequestError::ServerWorkQueueFull => MempoolError::Critical(
+                "Server queue full. Handling for this not yet implemented".to_string(),
+            ),
+            RpcRequestError::Method(e) => MempoolError::Critical(format!(
+                "unhandled rpc-specific {} error: {}",
+                type_name::<T>(),
+                e.to_string()
+            )),
+            RpcRequestError::UnexpectedErrorResponse(error) => MempoolError::Critical(format!(
+                "unhandled rpc-specific {} error: {}",
+                type_name::<T>(),
+                error
+            )),
+        }
+    }
+}
 
 /// Errors related to the `Mempool`.
 #[derive(Debug, thiserror::Error)]
@@ -350,37 +344,6 @@ pub enum MempoolError {
     /// Unexpected status-related error.
     #[error("Status error: {0:?}")]
     StatusError(StatusError),
-}
-
-/// These aren't the best conversions, but the MempoolError should go away
-/// in favor of a new type with the new chain cache is complete
-impl<T: ToString> From<RpcRequestError<T>> for MempoolError {
-    fn from(value: RpcRequestError<T>) -> Self {
-        match value {
-            RpcRequestError::Transport(transport_error) => {
-                MempoolError::JsonRpcConnectorError(transport_error)
-            }
-            RpcRequestError::JsonRpc(error) => {
-                MempoolError::Critical(format!("argument failed to serialze: {error}"))
-            }
-            RpcRequestError::InternalUnrecoverable(e) => {
-                MempoolError::Critical(format!("Internal unrecoverable error: {e}"))
-            }
-            RpcRequestError::ServerWorkQueueFull => MempoolError::Critical(
-                "Server queue full. Handling for this not yet implemented".to_string(),
-            ),
-            RpcRequestError::Method(e) => MempoolError::Critical(format!(
-                "unhandled rpc-specific {} error: {}",
-                type_name::<T>(),
-                e.to_string()
-            )),
-            RpcRequestError::UnexpectedErrorResponse(error) => MempoolError::Critical(format!(
-                "unhandled rpc-specific {} error: {}",
-                type_name::<T>(),
-                error
-            )),
-        }
-    }
 }
 
 /// Errors related to the `BlockCache`.
