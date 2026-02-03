@@ -2947,8 +2947,6 @@ mod zebra {
 
             for cb in compact_block_range.into_iter() {
                 for tx in cb.vtx {
-                    // first transaction of a block is coinbase
-                    assert!(tx.vin.first().unwrap().prevout_txid.is_empty());
                     // script pub key of this transaction is not empty
                     assert!(!tx.vout.first().unwrap().script_pub_key.is_empty());
                 }
