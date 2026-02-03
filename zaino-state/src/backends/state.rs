@@ -1,8 +1,8 @@
 //! Zcash chain fetch and tx submission service backed by Zebras [`ReadStateService`].
 
 use crate::{
-    chain_index::NonFinalizedSnapshot, error::ChainIndexError, ChainIndex as _,
-    NodeBackedChainIndex, NodeBackedChainIndexSubscriber, State,
+    chain_index::NonFinalizedSnapshot, error::ChainIndexError, NodeBackedChainIndex,
+    NodeBackedChainIndexSubscriber, State,
 };
 #[allow(deprecated)]
 use crate::{
