@@ -659,9 +659,8 @@ impl<Source: BlockchainSource> NodeBackedChainIndexSubscriber<Source> {
                 // the block is in the VALIDATOR.
                 match block.coinbase_height() {
                     None => {
-                        // the block is in the VALIDATOR. but doesnt have a height.
-                        // Therefore, it's non-best chain!
-                        Ok(None)
+                        // the block is in the VALIDATOR. but doesnt have a height. That would imply a bug.
+                        Err(ChainIndexError::validator_data_error_block_coinbase_height_missing())
                     }
                     Some(height) => {
                         // The validator returned a block with a height, implying that this block is on the best chain.
@@ -840,9 +839,8 @@ impl<Source: BlockchainSource> ChainIndex for NodeBackedChainIndexSubscriber<Sou
                                 // the block is in the VALIDATOR.
                                 match block.coinbase_height() {
                                     None => {
-                                        // the block is in the VALIDATOR. but doesnt have a height.
-                                        // Therefore, it's non-best chain! However, we do not know its parent. Instead of trying to track it down further, we give up here and return None.
-                                        Ok(None)
+                                        // the block is in the VALIDATOR. but doesnt have a height. That would imply a bug.
+                                        Err(ChainIndexError::validator_data_error_block_coinbase_height_missing())
                                     }
                                     Some(height) => {
                                         // The validator returned a block with a height, implying that this block is on the best chain.
