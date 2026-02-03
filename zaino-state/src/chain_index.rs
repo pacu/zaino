@@ -15,8 +15,9 @@ use crate::chain_index::non_finalised_state::BestTip;
 use crate::chain_index::types::db::metadata::MempoolInfo;
 use crate::chain_index::types::{BestChainLocation, NonBestChainLocation};
 use crate::error::{ChainIndexError, ChainIndexErrorKind, FinalisedStateError};
+use crate::local_cache::compact_block_with_pool_types;
 use crate::status::Status;
-use crate::{AtomicStatus, StatusType, SyncError};
+use crate::{AtomicStatus, CompactBlockStream, StatusType, SyncError};
 use crate::{IndexedBlock, TransactionHash};
 use std::collections::HashSet;
 use std::{sync::Arc, time::Duration};
@@ -27,6 +28,7 @@ use non_finalised_state::NonfinalizedBlockCacheSnapshot;
 use source::{BlockchainSource, ValidatorConnector};
 use tokio_stream::StreamExt;
 use tracing::info;
+use zaino_proto::proto::utils::PoolTypeFilter;
 use zebra_chain::parameters::ConsensusBranchId;
 pub use zebra_chain::parameters::Network as ZebraNetwork;
 use zebra_chain::serialization::ZcashSerialize;
@@ -201,18 +203,47 @@ pub trait ChainIndex {
 
     /// Returns the *compact* block for the given height.
     ///
-    /// Returns None if the specified height
-    /// is greater than the snapshot's tip
+    /// Returns `None` if the specified `height` is greater than the snapshot's tip.
     ///
-    /// TODO: Add range fetch method or update this?
+    /// ## Pool filtering
+    ///
+    /// - `pool_types` controls which per-transaction components are populated.
+    /// - Transactions that contain no elements in any requested pool are omitted from `vtx`.
+    ///   The original transaction index is preserved in `CompactTx.index`.
+    /// - `PoolTypeFilter::default()` preserves the legacy behaviour (only Sapling and Orchard
+    ///   components are populated).
     #[allow(clippy::type_complexity)]
     fn get_compact_block(
         &self,
         nonfinalized_snapshot: &Self::Snapshot,
         height: types::Height,
+        pool_types: PoolTypeFilter,
     ) -> impl std::future::Future<
         Output = Result<Option<zaino_proto::proto::compact_formats::CompactBlock>, Self::Error>,
     >;
+
+    /// Streams *compact* blocks for an inclusive height range.
+    ///
+    /// Returns `None` if the requested range is entirely above the snapshot's tip.
+    ///
+    /// - The stream covers `[start_height, end_height]` (inclusive).
+    /// - If `start_height <= end_height` the stream is ascending; otherwise it is descending.
+    ///
+    /// ## Pool filtering
+    ///
+    /// - `pool_types` controls which per-transaction components are populated.
+    /// - Transactions that contain no elements in any requested pool are omitted from `vtx`.
+    ///   The original transaction index is preserved in `CompactTx.index`.
+    /// - `PoolTypeFilter::default()` preserves the legacy behaviour (only Sapling and Orchard
+    ///   components are populated).
+    #[allow(clippy::type_complexity)]
+    fn get_compact_block_stream(
+        &self,
+        nonfinalized_snapshot: &Self::Snapshot,
+        start_height: types::Height,
+        end_height: types::Height,
+        pool_types: PoolTypeFilter,
+    ) -> impl std::future::Future<Output = Result<Option<CompactBlockStream>, Self::Error>>;
 
     /// Finds the newest ancestor of the given block on the main
     /// chain, or the block itself if it is on the main chain.
@@ -507,10 +538,15 @@ impl<Source: BlockchainSource> NodeBackedChainIndex<Source> {
                 if status.load() == StatusType::Closing {
                     break;
                 }
+                let handle_error = |e| {
+                    tracing::error!("Sync failure: {e:?}. Shutting down.");
+                    status.store(StatusType::CriticalError);
+                    e
+                };
 
                 status.store(StatusType::Syncing);
                 // Sync nfs to chain tip, trimming blocks to finalized tip.
-                nfs.sync(fs.clone()).await?;
+                nfs.sync(fs.clone()).await.map_err(handle_error)?;
 
                 // Sync fs to chain tip - 100.
                 {
@@ -520,7 +556,7 @@ impl<Source: BlockchainSource> NodeBackedChainIndex<Source> {
                             .to_reader()
                             .db_height()
                             .await
-                            .map_err(|_e| SyncError::CannotReadFinalizedState)?
+                            .map_err(|_e| handle_error(SyncError::CannotReadFinalizedState))?
                             .unwrap_or(types::Height(0))
                             .0
                             + 100)
@@ -529,7 +565,7 @@ impl<Source: BlockchainSource> NodeBackedChainIndex<Source> {
                             .to_reader()
                             .db_height()
                             .await
-                            .map_err(|_e| SyncError::CannotReadFinalizedState)?
+                            .map_err(|_e| handle_error(SyncError::CannotReadFinalizedState))?
                             .map(|height| height + 1)
                             .unwrap_or(types::Height(0));
                         let next_finalized_block = snapshot
@@ -540,11 +576,11 @@ impl<Source: BlockchainSource> NodeBackedChainIndex<Source> {
                                     .get(&(next_finalized_height))
                                     .ok_or(SyncError::CompetingSyncProcess)?,
                             )
-                            .ok_or(SyncError::CompetingSyncProcess)?;
+                            .ok_or_else(|| handle_error(SyncError::CompetingSyncProcess))?;
                         // TODO: Handle write errors better (fix db and continue)
                         fs.write_block(next_finalized_block.clone())
                             .await
-                            .map_err(|_e| SyncError::CompetingSyncProcess)?;
+                            .map_err(|_e| handle_error(SyncError::CompetingSyncProcess))?;
                     }
                 }
                 status.store(StatusType::Ready);
@@ -601,6 +637,12 @@ impl<Source: BlockchainSource> NodeBackedChainIndexSubscriber<Source> {
             .transpose()
     }
 
+    /**
+    Searches finalized and non-finalized chains for any blocks containing the transaction.
+    Ordered with finalized blocks first.
+
+    WARNING: there might be multiple chains, each containing a block with the transaction.
+    */
     async fn blocks_containing_transaction<'snapshot, 'self_lt, 'iter>(
         &'self_lt self,
         snapshot: &'snapshot NonfinalizedBlockCacheSnapshot,
@@ -610,35 +652,32 @@ impl<Source: BlockchainSource> NodeBackedChainIndexSubscriber<Source> {
         'snapshot: 'iter,
         'self_lt: 'iter,
     {
-        Ok(snapshot
-            .blocks
-            .values()
-            .filter_map(move |block| {
+        let finalized_blocks_containing_transaction = match self
+            .finalized_state
+            .get_tx_location(&types::TransactionHash(txid))
+            .await?
+        {
+            Some(tx_location) => {
+                self.finalized_state
+                    .get_chain_block(crate::Height(tx_location.block_height()))
+                    .await?
+            }
+
+            None => None,
+        }
+        .into_iter();
+        let non_finalized_blocks_containing_transaction =
+            snapshot.blocks.values().filter_map(move |block| {
                 block.transactions().iter().find_map(|transaction| {
                     if transaction.txid().0 == txid {
-                        Some(block)
+                        Some(block.clone())
                     } else {
                         None
                     }
                 })
-            })
-            .cloned()
-            .chain(
-                match self
-                    .finalized_state
-                    .get_tx_location(&types::TransactionHash(txid))
-                    .await?
-                {
-                    Some(tx_location) => {
-                        self.finalized_state
-                            .get_chain_block(crate::Height(tx_location.block_height()))
-                            .await?
-                    }
-
-                    None => None,
-                }
-                .into_iter(),
-            ))
+            });
+        Ok(finalized_blocks_containing_transaction
+            .chain(non_finalized_blocks_containing_transaction))
     }
 }
 
@@ -670,7 +709,12 @@ impl<Source: BlockchainSource> ChainIndex for NodeBackedChainIndexSubscriber<Sou
         hash: types::BlockHash,
     ) -> Result<Option<types::Height>, Self::Error> {
         match nonfinalized_snapshot.blocks.get(&hash).cloned() {
-            Some(block) => Ok(block.index().height()),
+            Some(block) => Ok(nonfinalized_snapshot
+                .heights_to_hashes
+                .values()
+                .find(|h| **h == hash)
+                // Canonical height is None for blocks not on the best chain
+                .map(|_| block.index().height())),
             None => match self.finalized_state.get_block_height(hash).await {
                 Ok(height) => Ok(height),
                 Err(_e) => Err(ChainIndexError::database_hole(hash)),
@@ -733,18 +777,36 @@ impl<Source: BlockchainSource> ChainIndex for NodeBackedChainIndexSubscriber<Sou
 
     /// Returns the *compact* block for the given height.
     ///
+    /// Returns `None` if the specified `height` is greater than the snapshot's tip.
+    ///
+    /// ## Pool filtering
+    ///
+    /// - `pool_types` controls which per-transaction components are populated.
+    /// - Transactions that contain no elements in any requested pool are omitted from `vtx`.
+    ///   The original transaction index is preserved in `CompactTx.index`.
+    /// - `PoolTypeFilter::default()` preserves the legacy behaviour (only Sapling and Orchard
+    ///   components are populated).
+    ///
     /// Returns None if the specified height
     /// is greater than the snapshot's tip
     async fn get_compact_block(
         &self,
         nonfinalized_snapshot: &Self::Snapshot,
         height: types::Height,
+        pool_types: PoolTypeFilter,
     ) -> Result<Option<zaino_proto::proto::compact_formats::CompactBlock>, Self::Error> {
         if height <= nonfinalized_snapshot.best_tip.height {
             Ok(Some(
                 match nonfinalized_snapshot.get_chainblock_by_height(&height) {
-                    Some(block) => block.to_compact_block(),
-                    None => match self.finalized_state.get_compact_block(height).await {
+                    Some(block) => compact_block_with_pool_types(
+                        block.to_compact_block(),
+                        &pool_types.to_pool_types_vector(),
+                    ),
+                    None => match self
+                        .finalized_state
+                        .get_compact_block(height, pool_types)
+                        .await
+                    {
                         Ok(block) => block,
                         Err(_e) => return Err(ChainIndexError::database_hole(height)),
                     },
@@ -753,6 +815,169 @@ impl<Source: BlockchainSource> ChainIndex for NodeBackedChainIndexSubscriber<Sou
         } else {
             Ok(None)
         }
+    }
+
+    /// Streams *compact* blocks for an inclusive height range.
+    ///
+    /// Returns `None` if either requested height is greater than the snapshot's tip.
+    ///
+    /// - The stream covers `[start_height, end_height]` (inclusive).
+    /// - If `start_height <= end_height` the stream is ascending; otherwise it is descending.
+    ///
+    /// ## Pool filtering
+    ///
+    /// - `pool_types` controls which per-transaction components are populated.
+    /// - Transactions that contain no elements in any requested pool are omitted from `vtx`.
+    ///   The original transaction index is preserved in `CompactTx.index`.
+    /// - `PoolTypeFilter::default()` preserves the legacy behaviour (only Sapling and Orchard
+    ///   components are populated).
+    #[allow(clippy::type_complexity)]
+    async fn get_compact_block_stream(
+        &self,
+        nonfinalized_snapshot: &Self::Snapshot,
+        start_height: types::Height,
+        end_height: types::Height,
+        pool_types: PoolTypeFilter,
+    ) -> Result<Option<CompactBlockStream>, Self::Error> {
+        let chain_tip_height = nonfinalized_snapshot.best_chaintip().height;
+
+        if start_height > chain_tip_height || end_height > chain_tip_height {
+            return Ok(None);
+        }
+
+        // The nonfinalized cache holds the tip block plus the previous 99 blocks (100 total),
+        // so the lowest possible cached height is `tip - 99` (saturating at 0).
+        let lowest_nonfinalized_height = types::Height(chain_tip_height.0.saturating_sub(99));
+
+        let is_ascending = start_height <= end_height;
+
+        let pool_types_vector = pool_types.to_pool_types_vector();
+
+        // Pre-create any finalized-state stream(s) we will need so that errors are returned
+        // from this method (not deferred into the spawned task).
+        let finalized_stream: Option<CompactBlockStream> = if is_ascending {
+            if start_height < lowest_nonfinalized_height {
+                let finalized_end_height = types::Height(std::cmp::min(
+                    end_height.0,
+                    lowest_nonfinalized_height.0.saturating_sub(1),
+                ));
+
+                if start_height <= finalized_end_height {
+                    Some(
+                        self.finalized_state
+                            .get_compact_block_stream(
+                                start_height,
+                                finalized_end_height,
+                                pool_types.clone(),
+                            )
+                            .await
+                            .map_err(ChainIndexError::from)?,
+                    )
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        // Serve in reverse order.
+        } else if end_height < lowest_nonfinalized_height {
+            let finalized_start_height = if start_height < lowest_nonfinalized_height {
+                start_height
+            } else {
+                types::Height(lowest_nonfinalized_height.0.saturating_sub(1))
+            };
+
+            Some(
+                self.finalized_state
+                    .get_compact_block_stream(
+                        finalized_start_height,
+                        end_height,
+                        pool_types.clone(),
+                    )
+                    .await
+                    .map_err(ChainIndexError::from)?,
+            )
+        } else {
+            None
+        };
+
+        let nonfinalized_snapshot = nonfinalized_snapshot.clone();
+        // TODO: Investigate whether channel size should be changed, added to config, or set dynamically base on resources.
+        let (channel_sender, channel_receiver) = tokio::sync::mpsc::channel(128);
+
+        tokio::spawn(async move {
+            if is_ascending {
+                // 1) Finalized segment (if any), ascending.
+                if let Some(mut finalized_stream) = finalized_stream {
+                    while let Some(stream_item) = finalized_stream.next().await {
+                        if channel_sender.send(stream_item).await.is_err() {
+                            return;
+                        }
+                    }
+                }
+
+                // 2) Nonfinalized segment, ascending.
+                let nonfinalized_start_height =
+                    types::Height(std::cmp::max(start_height.0, lowest_nonfinalized_height.0));
+
+                for height_value in nonfinalized_start_height.0..=end_height.0 {
+                    let Some(indexed_block) = nonfinalized_snapshot
+                        .get_chainblock_by_height(&types::Height(height_value))
+                    else {
+                        let _ = channel_sender
+                        .send(Err(tonic::Status::internal(format!(
+                            "Internal error, missing nonfinalized block at height [{height_value}].",
+                        ))))
+                        .await;
+                        return;
+                    };
+                    let compact_block = compact_block_with_pool_types(
+                        indexed_block.to_compact_block(),
+                        &pool_types_vector,
+                    );
+                    if channel_sender.send(Ok(compact_block)).await.is_err() {
+                        return;
+                    }
+                }
+            } else {
+                // 1) Nonfinalized segment, descending.
+                if start_height >= lowest_nonfinalized_height {
+                    let nonfinalized_end_height =
+                        types::Height(std::cmp::max(end_height.0, lowest_nonfinalized_height.0));
+
+                    for height_value in (nonfinalized_end_height.0..=start_height.0).rev() {
+                        let Some(indexed_block) = nonfinalized_snapshot
+                            .get_chainblock_by_height(&types::Height(height_value))
+                        else {
+                            let _ = channel_sender
+                            .send(Err(tonic::Status::internal(format!(
+                                "Internal error, missing nonfinalized block at height [{height_value}].",
+                            ))))
+                            .await;
+                            return;
+                        };
+                        let compact_block = compact_block_with_pool_types(
+                            indexed_block.to_compact_block(),
+                            &pool_types_vector,
+                        );
+                        if channel_sender.send(Ok(compact_block)).await.is_err() {
+                            return;
+                        }
+                    }
+                }
+
+                // 2) Finalized segment (if any), descending.
+                if let Some(mut finalized_stream) = finalized_stream {
+                    while let Some(stream_item) = finalized_stream.next().await {
+                        if channel_sender.send(stream_item).await.is_err() {
+                            return;
+                        }
+                    }
+                }
+            }
+        });
+
+        Ok(Some(CompactBlockStream::new(channel_receiver)))
     }
 
     /// Finds the newest ancestor of the given block on the main
@@ -767,8 +992,8 @@ impl<Source: BlockchainSource> ChainIndex for NodeBackedChainIndexSubscriber<Sou
             // as zaino does not guarentee knowledge of all sidechain data.
             return Ok(None);
         };
-        if let Some(height) = block.height() {
-            Ok(Some((*block.hash(), height)))
+        if snapshot.heights_to_hashes.get(&block.height()) == Some(block.hash()) {
+            Ok(Some((*block.hash(), block.height())))
         } else {
             self.find_fork_point(snapshot, block.index().parent_hash())
         }
@@ -811,7 +1036,7 @@ impl<Source: BlockchainSource> ChainIndex for NodeBackedChainIndexSubscriber<Sou
                 .blocks
                 .iter()
                 .find(|(hash, _block)| **hash == self.mempool.mempool_chain_tip())
-                .and_then(|(_hash, block)| block.height());
+                .map(|(_hash, block)| block.height());
             let mempool_branch_id = mempool_height.and_then(|height| {
                 ConsensusBranchId::current(
                     &self.non_finalized_state.network,
@@ -846,10 +1071,8 @@ impl<Source: BlockchainSource> ChainIndex for NodeBackedChainIndexSubscriber<Sou
             .map_err(ChainIndexError::backing_validator)?
             .ok_or_else(|| ChainIndexError::database_hole(block.index().hash()))?;
         let block_consensus_branch_id = full_block.coinbase_height().and_then(|height| {
-            ConsensusBranchId::current(&self.non_finalized_state.network, dbg!(height))
-                .map(u32::from)
+            ConsensusBranchId::current(&self.non_finalized_state.network, height).map(u32::from)
         });
-        dbg!(block_consensus_branch_id);
         full_block
             .transactions
             .iter()
@@ -866,8 +1089,8 @@ impl<Source: BlockchainSource> ChainIndex for NodeBackedChainIndexSubscriber<Sou
 
     /// Given a transaction ID, returns all known blocks containing this transaction
     ///
-    /// If the transaction is in the mempool, it will be in the BestChainLocation
-    /// if the mempool and snapshot are up-to-date, and the NonBestChainLocation set
+    /// If the transaction is in the mempool, it will be in the `BestChainLocation`
+    /// if the mempool and snapshot are up-to-date, and the `NonBestChainLocation` set
     /// if the snapshot is out-of-date compared to the mempool
     async fn get_transaction_status(
         &self,
@@ -878,13 +1101,23 @@ impl<Source: BlockchainSource> ChainIndex for NodeBackedChainIndexSubscriber<Sou
             .blocks_containing_transaction(snapshot, txid.0)
             .await?
             .collect::<Vec<_>>();
+        let start_of_nonfinalized = snapshot.heights_to_hashes.keys().min().unwrap();
         let mut best_chain_block = blocks_containing_transaction
             .iter()
-            .find_map(|block| BestChainLocation::try_from(block).ok());
+            .find(|block| {
+                snapshot.heights_to_hashes.get(&block.height()) == Some(block.hash())
+                    || block.height() < *start_of_nonfinalized
+                // this block is either in the best chain ``heights_to_hashes`` or finalized.
+            })
+            .map(|block| BestChainLocation::Block(*block.hash(), block.height()));
         let mut non_best_chain_blocks: HashSet<NonBestChainLocation> =
             blocks_containing_transaction
                 .iter()
-                .filter_map(|block| NonBestChainLocation::try_from(block).ok())
+                .filter(|block| {
+                    snapshot.heights_to_hashes.get(&block.height()) != Some(block.hash())
+                        && block.height() >= *start_of_nonfinalized
+                })
+                .map(|block| NonBestChainLocation::Block(*block.hash(), block.height()))
                 .collect();
         let in_mempool = self
             .mempool
@@ -908,6 +1141,8 @@ impl<Source: BlockchainSource> ChainIndex for NodeBackedChainIndexSubscriber<Sou
                         Some(BestChainLocation::Mempool(snapshot.best_tip.height + 1));
                 }
             } else {
+                // the best chain and the mempool have divergent tip hashes
+                // get a new snapshot and use it to find the height of the mempool
                 let target_height = self
                     .non_finalized_state
                     .get_snapshot()
@@ -915,12 +1150,12 @@ impl<Source: BlockchainSource> ChainIndex for NodeBackedChainIndexSubscriber<Sou
                     .iter()
                     .find_map(|(hash, block)| {
                         if *hash == mempool_tip_hash {
-                            Some(block.height().map(|height| height + 1))
+                            Some(block.height() + 1)
+                            // found the block that is the tip that the mempool is hanging on to
                         } else {
                             None
                         }
-                    })
-                    .flatten();
+                    });
                 non_best_chain_blocks.insert(NonBestChainLocation::Mempool(target_height));
             }
         }
