@@ -1,9 +1,5 @@
 //! Zcash chain fetch and tx submission service backed by Zebras [`ReadStateService`].
 
-use crate::{
-    chain_index::NonFinalizedSnapshot, error::ChainIndexError, ChainIndex as _,
-    NodeBackedChainIndex, NodeBackedChainIndexSubscriber, State,
-};
 #[allow(deprecated)]
 use crate::{
     chain_index::{
@@ -16,18 +12,19 @@ use crate::{
     indexer::{
         handle_raw_transaction, IndexerSubscriber, LightWalletIndexer, ZcashIndexer, ZcashService,
     },
-    local_cache::{compact_block_to_nullifiers, BlockCache, BlockCacheSubscriber},
-    status::{AtomicStatus, StatusType},
+    local_cache::{
+        compact_block_to_nullifiers, compact_block_with_pool_types, BlockCache,
+        BlockCacheSubscriber,
+    },
+    status::{AtomicStatus, Status, StatusType},
     stream::{
         AddressStream, CompactBlockStream, CompactTransactionStream, RawTransactionStream,
         UtxoReplyStream,
     },
-    utils::{blockid_to_hashorheight, get_build_info, ServiceMetadata},
+    utils::{get_build_info, ServiceMetadata},
     BackendType, MempoolKey,
 };
-use crate::{error::ChainIndexError, ChainIndex, NodeBackedChainIndex, NodeBackedChainIndexSubscriber, State};
-
-use nonempty::NonEmpty;
+use crate::{error::ChainIndexError, NodeBackedChainIndex, NodeBackedChainIndexSubscriber, State};
 use tokio_stream::StreamExt as _;
 use zaino_fetch::{
     chain::{transaction::FullTransaction, utils::ParseFromSlice},
@@ -47,9 +44,13 @@ use zaino_fetch::{
 use zaino_proto::proto::{
     compact_formats::CompactBlock,
     service::{
-        AddressList, Balance, BlockId, BlockRange, Exclude, GetAddressUtxosArg,
-        GetAddressUtxosReply, GetAddressUtxosReplyList, LightdInfo, PingResponse, RawTransaction,
+        AddressList, Balance, BlockId, BlockRange, GetAddressUtxosArg, GetAddressUtxosReply,
+        GetAddressUtxosReplyList, GetMempoolTxRequest, LightdInfo, PingResponse, RawTransaction,
         SendResponse, TransparentAddressBlockFilter, TreeState, TxFilter,
+    },
+    utils::{
+        blockid_to_hashorheight, GetBlockRangeError, PoolTypeError, PoolTypeFilter,
+        ValidatedBlockRangeRequest,
     },
 };
 
@@ -87,7 +88,7 @@ use chrono::{DateTime, Utc};
 use futures::{TryFutureExt as _, TryStreamExt as _};
 use hex::{FromHex as _, ToHex};
 use indexmap::IndexMap;
-use std::{collections::HashSet, error::Error, fmt, future::poll_fn, str::FromStr, sync::Arc};
+use std::{collections::HashSet, error::Error, fmt, str::FromStr, sync::Arc};
 use tokio::{
     sync::mpsc,
     time::{self, timeout},
@@ -151,33 +152,22 @@ pub struct StateService {
     status: AtomicStatus,
 }
 
-// #[allow(deprecated)]
 impl StateService {
-    /// Uses poll_ready to update the status of the `ReadStateService`.
-    async fn fetch_status_from_validator(&self) -> StatusType {
-        let mut read_state_service = self.read_state_service.clone();
-        poll_fn(|cx| match read_state_service.poll_ready(cx) {
-            std::task::Poll::Ready(Ok(())) => {
-                self.status.store(StatusType::Ready);
-                std::task::Poll::Ready(StatusType::Ready)
-            }
-            std::task::Poll::Ready(Err(e)) => {
-                eprintln!("Service readiness error: {e:?}");
-                self.status.store(StatusType::CriticalError);
-                std::task::Poll::Ready(StatusType::CriticalError)
-            }
-            std::task::Poll::Pending => {
-                self.status.store(StatusType::Busy);
-                std::task::Poll::Pending
-            }
-        })
-        .await
-    }
-
     #[cfg(feature = "test_dependencies")]
     /// Helper for tests
     pub fn read_state_service(&self) -> &ReadStateService {
         &self.read_state_service
+    }
+}
+
+impl Status for StateService {
+    fn status(&self) -> StatusType {
+        let current_status = self.status.load();
+        if current_status == StatusType::Closing {
+            current_status
+        } else {
+            self.indexer.status()
+        }
     }
 }
 
@@ -193,15 +183,15 @@ impl ZcashService for StateService {
     async fn spawn(config: StateServiceConfig) -> Result<Self, StateServiceError> {
         info!("Spawning State Service..");
 
-        let json_rpc_connector = JsonRpSeeConnector::new_from_config_parts(
-            config.validator_rpc_address,
+        let rpc_client = JsonRpSeeConnector::new_from_config_parts(
+            &config.validator_rpc_address,
             config.validator_rpc_user.clone(),
             config.validator_rpc_password.clone(),
             config.validator_cookie_path.clone(),
         )
         .await?;
 
-        let zebra_build_data = json_rpc_connector.get_info().await?;
+        let zebra_build_data = rpc_client.get_info().await?;
 
         // This const is optional, as the build script can only
         // generate it from hash-based dependencies.
@@ -252,7 +242,7 @@ impl ZcashService for StateService {
 
         // Wait for ReadStateService to catch up to primary database:
         loop {
-            let server_height = json_rpc_connector.get_blockchain_info().await?.blocks;
+            let server_height = rpc_client.get_blockchain_info().await?.blocks;
             info!("got blockchain info!");
 
             let syncer_response = read_state_service
@@ -277,7 +267,7 @@ impl ZcashService for StateService {
         }
 
         let block_cache = BlockCache::spawn(
-            &json_rpc_connector,
+            &rpc_client,
             Some(&read_state_service),
             config.clone().into(),
         )
@@ -285,7 +275,7 @@ impl ZcashService for StateService {
 
         let mempool_source = ValidatorConnector::State(crate::chain_index::source::State {
             read_state_service: read_state_service.clone(),
-            mempool_fetcher: json_rpc_connector.clone(),
+            mempool_fetcher: rpc_client.clone(),
             network: config.network,
         });
 
@@ -294,7 +284,7 @@ impl ZcashService for StateService {
         let chain_index = NodeBackedChainIndex::new(
             ValidatorConnector::State(State {
                 read_state_service: read_state_service.clone(),
-                mempool_fetcher: json_rpc_connector.clone(),
+                mempool_fetcher: rpc_client.clone(),
                 network: config.network,
             }),
             config.clone().into(),
@@ -306,7 +296,7 @@ impl ZcashService for StateService {
             chain_tip_change,
             read_state_service,
             sync_task_handle: Some(Arc::new(sync_task_handle)),
-            rpc_client: json_rpc_connector.clone(),
+            rpc_client: rpc_client.clone(),
             block_cache,
             mempool,
             indexer: chain_index,
@@ -331,19 +321,6 @@ impl ZcashService for StateService {
             config: self.config.clone(),
             chain_tip_change: self.chain_tip_change.clone(),
         })
-    }
-
-    /// Returns the StateService's Status.
-    ///
-    /// We first check for `status = StatusType::Closing` as this signifies a shutdown order
-    /// from an external process.
-    async fn status(&self) -> StatusType {
-        let current_status = self.status.load();
-        if current_status == StatusType::Closing {
-            current_status
-        } else {
-            self.fetch_status_from_validator().await
-        }
     }
 
     /// Shuts down the StateService.
@@ -394,6 +371,12 @@ pub struct StateServiceSubscriber {
 
     /// Service metadata.
     pub data: ServiceMetadata,
+}
+
+impl Status for StateServiceSubscriber {
+    fn status(&self) -> StatusType {
+        self.indexer.status()
+    }
 }
 
 /// A subscriber to any chaintip updates
@@ -577,88 +560,122 @@ impl StateServiceSubscriber {
         request: BlockRange,
         nullifiers_only: bool,
     ) -> Result<CompactBlockStream, StateServiceError> {
-        let mut start: u32 = request
-            .start
-            .ok_or_else(|| {
-                StateServiceError::TonicStatusError(tonic::Status::invalid_argument(
-                    "Error: No start height given.",
-                ))
-            })?
-            .height
-            .try_into()
-            .map_err(|_| {
-                StateServiceError::TonicStatusError(tonic::Status::invalid_argument(
-                    "Error: Start height out of range. Failed to convert to u32.",
-                ))
-            })?;
+        let validated_request = ValidatedBlockRangeRequest::new_from_block_range(&request)
+            .map_err(StateServiceError::from)?;
 
-        let mut end: u32 = request
-            .end
-            .ok_or_else(|| {
-                StateServiceError::TonicStatusError(tonic::Status::invalid_argument(
-                    "Error: No end height given.",
-                ))
-            })?
-            .height
-            .try_into()
-            .map_err(|_| {
-                StateServiceError::TonicStatusError(tonic::Status::invalid_argument(
-                    "Error: End height out of range. Failed to convert to u32.",
-                ))
-            })?;
+        let pool_type_filter = PoolTypeFilter::new_from_pool_types(&validated_request.pool_types())
+            .map_err(GetBlockRangeError::PoolTypeArgumentError)
+            .map_err(StateServiceError::from)?;
 
-        // Ensure start <= end
-        if start > end {
-            (start, end) = (end, start);
-        }
+        // Note conversion here is safe due to the use of [`ValidatedBlockRangeRequest::new_from_block_range`]
+        let start = validated_request.start() as u32;
+        let end = validated_request.end() as u32;
 
-        let indexer = self.indexer.clone();
+        let state_service_clone = self.clone();
         let service_timeout = self.config.service.timeout;
         let (channel_tx, channel_rx) = mpsc::channel(self.config.service.channel_size as usize);
 
         tokio::spawn(async move {
-            let result = timeout(
-                time::Duration::from_secs((service_timeout * 4) as u64),
-                async {
-                    let snapshot = indexer.snapshot_nonfinalized_state();
-                    let chain_height = snapshot.best_chaintip().height.0;
+            let timeout_result = timeout(
+            time::Duration::from_secs((service_timeout * 4) as u64),
+            async {
+                let snapshot = state_service_clone.indexer.snapshot_nonfinalized_state();
+                let chain_height = snapshot.best_chaintip().height.0;
 
-                    for height in start..=end {
-                        let block_result = indexer
-                            .get_compact_block(&snapshot, chain_types::Height(height))
-                            .await;
-
-                        let block = match block_result {
-                            Ok(Some(mut block)) => {
-                                if nullifiers_only {
-                                    block = compact_block_to_nullifiers(block);
+                match state_service_clone
+                    .indexer
+                    .get_compact_block_stream(
+                        &snapshot,
+                        chain_types::Height(start),
+                        chain_types::Height(end),
+                        pool_type_filter.clone(),
+                    )
+                    .await
+                {
+                    Ok(Some(mut compact_block_stream)) => {
+                        if nullifiers_only {
+                            while let Some(stream_item) = compact_block_stream.next().await {
+                                match stream_item {
+                                    Ok(block) => {
+                                        if channel_tx
+                                            .send(Ok(compact_block_to_nullifiers(block)))
+                                            .await
+                                            .is_err()
+                                        {
+                                            break;
+                                        }
+                                    }
+                                    Err(status) => {
+                                        if channel_tx.send(Err(status)).await.is_err() {
+                                            break;
+                                        }
+                                    }
                                 }
-                                Ok(block)
                             }
-                            Ok(None) => Err(tonic::Status::out_of_range(format!(
-                                "Error: Height out of range [{height}]. Height requested \
-                                 is greater than the best chain tip [{chain_height}].",
-                            ))),
-                            Err(e) => Err(tonic::Status::internal(format!(
-                                "Error fetching block at height {height}: {e}"
-                            ))),
-                        };
-
-                        if channel_tx.send(block).await.is_err() {
-                            warn!("GetBlockRange channel closed unexpectedly");
-                            break;
+                        } else {
+                            while let Some(stream_item) = compact_block_stream.next().await {
+                                if channel_tx.send(stream_item).await.is_err() {
+                                    break;
+                                }
+                            }
                         }
                     }
-                },
-            )
-            .await;
+                    Ok(None) => {
+                        // Per `get_compact_block_stream` semantics: `None` means at least one bound is above the tip.
+                        let offending_height = if start > chain_height { start } else { end };
 
-            if result.is_err() {
-                let _ = channel_tx
+                        match channel_tx
+                            .send(Err(tonic::Status::out_of_range(format!(
+                                "Error: Height out of range [{offending_height}]. Height requested is greater than the best chain tip [{chain_height}].",
+                            ))))
+                            .await
+                        {
+                            Ok(_) => {}
+                            Err(e) => {
+                                warn!("GetBlockRange channel closed unexpectedly: {}", e);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        // Preserve previous behaviour: if the request is above tip, surface OutOfRange;
+                        // otherwise return the error (currently exposed for dev).
+                        if start > chain_height || end > chain_height {
+                            let offending_height = if start > chain_height { start } else { end };
+
+                            match channel_tx
+                                .send(Err(tonic::Status::out_of_range(format!(
+                                    "Error: Height out of range [{offending_height}]. Height requested is greater than the best chain tip [{chain_height}].",
+                                ))))
+                                .await
+                            {
+                                Ok(_) => {}
+                                Err(e) => {
+                                    warn!("GetBlockRange channel closed unexpectedly: {}", e);
+                                }
+                            }
+                        } else {
+                            // TODO: Hide server error from clients before release. Currently useful for dev purposes.
+                            if channel_tx
+                                .send(Err(tonic::Status::unknown(e.to_string())))
+                                .await
+                                .is_err()
+                            {
+                                warn!("GetBlockRangeStream closed unexpectedly: {}", e);
+                            }
+                        }
+                    }
+                }
+            },
+        )
+        .await;
+
+            if timeout_result.is_err() {
+                channel_tx
                     .send(Err(tonic::Status::deadline_exceeded(
                         "Error: get_block_range gRPC request timed out.",
                     )))
-                    .await;
+                    .await
+                    .ok();
             }
         });
 
@@ -1733,7 +1750,11 @@ impl ZcashIndexer for StateServiceSubscriber {
                             let snapshot = self.indexer.snapshot_nonfinalized_state();
                             let compact_block = self
                                 .indexer
-                                .get_compact_block(&snapshot, chain_types::Height(tx.height.0))
+                                .get_compact_block(
+                                    &snapshot,
+                                    chain_types::Height(tx.height.0),
+                                    PoolTypeFilter::includes_all(),
+                                )
                                 .await?
                                 .ok_or_else(|| ChainIndexError::database_hole(tx.height.0))?;
                             let tx_object = TransactionObject::from_transaction(
@@ -1904,17 +1925,10 @@ impl ZcashIndexer for StateServiceSubscriber {
 impl LightWalletIndexer for StateServiceSubscriber {
     /// Return the height of the tip of the best chain
     async fn get_latest_block(&self) -> Result<BlockId, Self::Error> {
-        let mut state = self.read_state_service.clone();
-        let response = state
-            .ready()
-            .and_then(|service| service.call(ReadRequest::Tip))
-            .await?;
-        let (chain_height, chain_hash) = expected_read_response!(response, Tip).ok_or(
-            RpcError::new_from_legacycode(LegacyCode::Misc, "no blocks in chain"),
-        )?;
+        let tip = self.indexer.snapshot_nonfinalized_state().best_tip;
         Ok(BlockId {
-            height: chain_height.as_usize() as u64,
-            hash: chain_hash.0.to_vec(),
+            height: tip.height.0 as u64,
+            hash: tip.blockhash.0.to_vec(),
         })
     }
 
@@ -1931,7 +1945,10 @@ impl LightWalletIndexer for StateServiceSubscriber {
             .get_compact_block(hash_or_height.to_string())
             .await
         {
-            Ok(block) => Ok(block),
+            Ok(block) => Ok(compact_block_with_pool_types(
+                block,
+                &PoolTypeFilter::default().to_pool_types_vector(),
+            )),
             Err(e) => {
                 self.error_get_block(BlockCacheError::Custom(e.to_string()), height as u32)
                     .await
@@ -1942,26 +1959,29 @@ impl LightWalletIndexer for StateServiceSubscriber {
     /// Same as GetBlock except actions contain only nullifiers,
     /// and saling outputs are not returned (Sapling spends still are)
     async fn get_block_nullifiers(&self, request: BlockId) -> Result<CompactBlock, Self::Error> {
-        let height: u32 = match request.height.try_into() {
-            Ok(height) => height,
-            Err(_) => {
-                return Err(StateServiceError::TonicStatusError(
-                    tonic::Status::invalid_argument(
-                        "Error: Height out of range. Failed to convert to u32.",
-                    ),
-                ));
-            }
-        };
+        let height: u32 = request.height.try_into().map_err(|_| {
+            StateServiceError::TonicStatusError(tonic::Status::invalid_argument(
+                "Error: Height out of range. Failed to convert to u32.",
+            ))
+        })?;
+
+        let snapshot = self.indexer.snapshot_nonfinalized_state();
+        let block_height = chain_types::Height(height);
+
         match self
-            .block_cache
-            .get_compact_block_nullifiers(height.to_string())
+            .indexer
+            .get_compact_block(&snapshot, block_height, PoolTypeFilter::default())
             .await
         {
-            Ok(block) => Ok(block),
-            Err(e) => {
-                self.error_get_block(BlockCacheError::Custom(e.to_string()), height)
-                    .await
+            Ok(Some(block)) => Ok(compact_block_to_nullifiers(block)),
+            Ok(None) => {
+                self.error_get_block(
+                    BlockCacheError::Custom("Block not found".to_string()),
+                    height,
+                )
+                .await
             }
+            Err(e) => Err(StateServiceError::ChainIndexError(e)),
         }
     }
 
@@ -2016,8 +2036,8 @@ impl LightWalletIndexer for StateServiceSubscriber {
         })
     }
 
-    /// Return the txids corresponding to the given t-address within the given block range
-    async fn get_taddress_txids(
+    /// Return the transactions corresponding to the given t-address within the given block range
+    async fn get_taddress_transactions(
         &self,
         request: TransparentAddressBlockFilter,
     ) -> Result<RawTransactionStream, Self::Error> {
@@ -2059,6 +2079,15 @@ impl LightWalletIndexer for StateServiceSubscriber {
             }
         });
         Ok(RawTransactionStream::new(receiver))
+    }
+
+    /// Return the txids corresponding to the given t-address within the given block range
+    /// This function is deprecated. Use `get_taddress_transactions`.
+    async fn get_taddress_txids(
+        &self,
+        request: TransparentAddressBlockFilter,
+    ) -> Result<RawTransactionStream, Self::Error> {
+        self.get_taddress_transactions(request).await
     }
 
     /// Returns the total balance for a list of taddrs
@@ -2190,16 +2219,44 @@ impl LightWalletIndexer for StateServiceSubscriber {
     /// in the exclude list that don't exist in the mempool are ignored.
     async fn get_mempool_tx(
         &self,
-        request: Exclude,
+        request: GetMempoolTxRequest,
     ) -> Result<CompactTransactionStream, Self::Error> {
-        let exclude_txids: Vec<String> = request
-            .txid
-            .iter()
-            .map(|txid_bytes| {
-                let reversed_txid_bytes: Vec<u8> = txid_bytes.iter().cloned().rev().collect();
-                hex::encode(&reversed_txid_bytes)
-            })
-            .collect();
+        let mut exclude_txids: Vec<String> = vec![];
+
+        for (i, excluded_id) in request.exclude_txid_suffixes.iter().enumerate() {
+            if excluded_id.len() > 32 {
+                return Err(StateServiceError::TonicStatusError(
+                    tonic::Status::invalid_argument(format!(
+                        "Error: excluded txid {} is larger than 32 bytes",
+                        i
+                    )),
+                ));
+            }
+
+            // NOTE: the TransactionHash methods cannot be used for this hex encoding as exclusions could be truncated to less than 32 bytes
+            let reversed_txid_bytes: Vec<u8> = excluded_id.iter().cloned().rev().collect();
+            let hex_string_txid: String = hex::encode(&reversed_txid_bytes);
+            exclude_txids.push(hex_string_txid);
+        }
+
+        let pool_types = match PoolTypeFilter::new_from_slice(&request.pool_types) {
+            Ok(pool_type_filter) => pool_type_filter,
+            Err(PoolTypeError::InvalidPoolType) => {
+                return Err(StateServiceError::TonicStatusError(
+                    tonic::Status::invalid_argument(
+                        "Error: An invalid `PoolType' was found".to_string(),
+                    ),
+                ))
+            }
+            Err(PoolTypeError::UnknownPoolType(unknown_pool_type)) => {
+                return Err(StateServiceError::TonicStatusError(
+                    tonic::Status::invalid_argument(format!(
+                        "Error: Unknown `PoolType' {} was found",
+                        unknown_pool_type
+                    )),
+                ))
+            }
+        };
 
         let mempool = self.mempool.clone();
         let service_timeout = self.config.service.timeout;
@@ -2238,7 +2295,7 @@ impl LightWalletIndexer for StateServiceSubscriber {
                                         .send(
                                             transaction
                                                 .1
-                                                .to_compact(0)
+                                                .to_compact_tx(None, &pool_types)
                                                 .map_err(|e| tonic::Status::unknown(e.to_string())),
                                         )
                                         .await
@@ -2502,6 +2559,16 @@ impl LightWalletIndexer for StateServiceSubscriber {
         )
         .to_string();
 
+        let nu_info = blockchain_info
+            .upgrades()
+            .last()
+            .expect("Expected validator to have a consenus activated.")
+            .1
+            .into_parts();
+
+        let nu_name = nu_info.0;
+        let nu_height = nu_info.1;
+
         Ok(LightdInfo {
             version: self.data.build_info().version(),
             vendor: "ZingoLabs ZainoD".to_string(),
@@ -2517,6 +2584,10 @@ impl LightWalletIndexer for StateServiceSubscriber {
             estimated_height: blockchain_info.estimated_height().0 as u64,
             zcashd_build: self.data.zebra_build(),
             zcashd_subversion: self.data.zebra_subversion(),
+            donation_address: "".to_string(),
+            upgrade_name: nu_name.to_string(),
+            upgrade_height: nu_height.0 as u64,
+            lightwallet_protocol_version: "v0.4.0".to_string(),
         })
     }
 
