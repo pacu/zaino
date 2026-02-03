@@ -81,14 +81,16 @@ use crate::{
     chain_index::types::{AddrEventBytes, TransactionHash},
     error::FinalisedStateError,
     read_fixed_le, read_u32_le, read_u8, version, write_fixed_le, write_u32_le, write_u8,
-    AddrScript, BlockHash, BlockHeaderData, CommitmentTreeData, FixedEncodedLen, Height,
-    IndexedBlock, OrchardCompactTx, OrchardTxList, Outpoint, SaplingCompactTx, SaplingTxList,
-    StatusType, TransparentCompactTx, TransparentTxList, TxLocation, TxidList, ZainoVersionedSerde,
+    AddrScript, BlockHash, BlockHeaderData, CommitmentTreeData, CompactBlockStream,
+    FixedEncodedLen, Height, IndexedBlock, OrchardCompactTx, OrchardTxList, Outpoint,
+    SaplingCompactTx, SaplingTxList, StatusType, TransparentCompactTx, TransparentTxList,
+    TxLocation, TxidList, ZainoVersionedSerde,
 };
 
 use async_trait::async_trait;
 use bitflags::bitflags;
 use core2::io::{self, Read, Write};
+use zaino_proto::proto::utils::PoolTypeFilter;
 
 // ***** Capability definition structs *****
 
@@ -450,7 +452,7 @@ impl DbVersion {
             }
 
             // V1: Adds chainblockv1 and transparent transaction history data.
-            (1, 0) => {
+            (1, 0) | (1, 1) => {
                 Capability::READ_CORE
                     | Capability::WRITE_CORE
                     | Capability::BLOCK_CORE_EXT
@@ -846,12 +848,18 @@ pub trait BlockShieldedExt: Send + Sync {
 #[async_trait]
 pub trait CompactBlockExt: Send + Sync {
     /// Returns the CompactBlock for the given Height.
-    ///
-    /// TODO: Add separate range fetch method as this method is slow for fetching large ranges!
     async fn get_compact_block(
         &self,
         height: Height,
+        pool_types: PoolTypeFilter,
     ) -> Result<zaino_proto::proto::compact_formats::CompactBlock, FinalisedStateError>;
+
+    async fn get_compact_block_stream(
+        &self,
+        start_height: Height,
+        end_height: Height,
+        pool_types: PoolTypeFilter,
+    ) -> Result<CompactBlockStream, FinalisedStateError>;
 }
 
 /// `IndexedBlock` materialization extension.

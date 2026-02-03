@@ -6,6 +6,7 @@ use std::path::PathBuf;
 
 /// Validator (full-node) type for Zaino configuration.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[serde(default)]
 pub struct ValidatorConfig {
     /// Full node / validator gprc listen port. Only exists for zebra
     pub validator_grpc_listen_address: Option<String>,
@@ -17,4 +18,17 @@ pub struct ValidatorConfig {
     pub validator_user: Option<String>,
     /// full node / validator Password.
     pub validator_password: Option<String>,
+}
+
+/// Required by `#[serde(default)]` to fill missing fields when deserializing partial TOML configs.
+impl Default for ValidatorConfig {
+    fn default() -> Self {
+        Self {
+            validator_grpc_listen_address: Some("127.0.0.1:18230".to_string()),
+            validator_jsonrpc_listen_address: "127.0.0.1:18232".to_string(),
+            validator_cookie_path: None,
+            validator_user: Some("xxxxxx".to_string()),
+            validator_password: Some("xxxxxx".to_string()),
+        }
+    }
 }
