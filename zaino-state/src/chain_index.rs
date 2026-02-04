@@ -731,6 +731,7 @@ impl<Source: BlockchainSource> ChainIndex for NodeBackedChainIndexSubscriber<Sou
     /// Returns None if the specified start height
     /// is greater than the snapshot's tip and greater
     /// than the validator's finalized height (100 blocks below tip)
+    // Todo: use get_block_range in underlying calls for efficiency.
     fn get_block_range(
         &self,
         snapshot: &Self::Snapshot,
