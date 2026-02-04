@@ -817,7 +817,6 @@ impl<Source: BlockchainSource> ChainIndex for NodeBackedChainIndexSubscriber<Sou
             None => {
                 // At this point, we know that
                 // the block is NOT non-FINALIZED in the INDEXER.
-                // TODO check the INDEXER for finalized block
                 match self.finalized_state.get_block_height(*hash).await {
                     Ok(Some(height)) => {
                         // the block is FINALIZED in the INDEXER
