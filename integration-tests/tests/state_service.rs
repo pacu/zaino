@@ -2931,7 +2931,9 @@ mod zebra {
             //
             // For this reason this test currently does not fetch the genesis block.
             //
-            // Issue:
+            // Issue: https://github.com/zingolabs/zaino/issues/818
+            //
+            // To see bug update start height of get_block_range to 0.
             let compact_block_range = state_service_subscriber
                 .get_block_range(BlockRange {
                     start: Some(BlockId {
