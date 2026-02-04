@@ -117,10 +117,11 @@ impl From<UpdateError> for SyncError {
             UpdateError::DatabaseHole => {
                 SyncError::ReorgFailure(String::from("could not determine best chain"))
             }
-            UpdateError::ValidatorConnectionError => SyncError::ZebradConnectionError(todo!(
-                "don't have a request error. \
-                HELPME: rethink some error types"
-            )),
+            UpdateError::ValidatorConnectionError => {
+                SyncError::ZebradConnectionError(NodeConnectionError::UnrecoverableError(Box::new(
+                    MissingBlockError("todo: what block is missing?".to_string()),
+                )))
+            }
         }
     }
 }
@@ -231,7 +232,9 @@ impl<Source: BlockchainSource> NonFinalizedState<Source> {
             .await
             .map_err(|e| InitError::InvalidNodeData(Box::new(e)))?
             .ok_or_else(|| {
-                InitError::InvalidNodeData(todo!("we need something that implements error"))
+                InitError::InvalidNodeData(Box::new(MissingBlockError(
+                    "Validator has no best block".to_string(),
+                )))
             })?;
 
         // Resolve the initial block (provided or genesis)
