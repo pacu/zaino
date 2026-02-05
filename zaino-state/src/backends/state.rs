@@ -28,6 +28,7 @@ use crate::{
     utils::{get_build_info, ServiceMetadata},
     BackendType, MempoolKey,
 };
+
 use nonempty::NonEmpty;
 use tokio_stream::StreamExt as _;
 use zaino_fetch::{
@@ -699,7 +700,8 @@ impl StateServiceSubscriber {
         e: BlockCacheError,
         height: u32,
     ) -> Result<CompactBlock, StateServiceError> {
-        let chain_height = self.block_cache.get_chain_height().await?.0;
+        let snapshot = self.indexer.snapshot_nonfinalized_state();
+        let chain_height = snapshot.best_chaintip().height.0;
         Err(if height >= chain_height {
             StateServiceError::TonicStatusError(tonic::Status::out_of_range(format!(
                 "Error: Height out of range [{height}]. Height requested \
@@ -1946,24 +1948,65 @@ impl LightWalletIndexer for StateServiceSubscriber {
 
     /// Return the compact block corresponding to the given block identifier
     async fn get_block(&self, request: BlockId) -> Result<CompactBlock, Self::Error> {
-        let height = request.height;
         let hash_or_height = blockid_to_hashorheight(request).ok_or(
             StateServiceError::TonicStatusError(tonic::Status::invalid_argument(
                 "Error: Invalid hash and/or height out of range. Failed to convert to u32.",
             )),
         )?;
+
+        let snapshot = self.indexer.snapshot_nonfinalized_state();
+
+        // Convert HashOrHeight to chain_types::Height
+        let block_height = match hash_or_height {
+            HashOrHeight::Height(h) => chain_types::Height(h.0),
+            HashOrHeight::Hash(h) => self
+                .indexer
+                .get_block_height(&snapshot, chain_types::BlockHash(h.0))
+                .await?
+                .ok_or_else(|| {
+                    StateServiceError::TonicStatusError(tonic::Status::not_found(
+                        "Error: Block not found for given hash.",
+                    ))
+                })?,
+        };
+
         match self
-            .block_cache
-            .get_compact_block(hash_or_height.to_string())
+            .indexer
+            .get_compact_block(&snapshot, block_height, PoolTypeFilter::default())
             .await
         {
-            Ok(block) => Ok(compact_block_with_pool_types(
-                block,
-                &PoolTypeFilter::default().to_pool_types_vector(),
-            )),
+            Ok(Some(block)) => Ok(block),
+            Ok(None) => {
+                let chain_height = snapshot.best_tip.height.0;
+                match hash_or_height {
+                    HashOrHeight::Height(Height(height)) if height >= chain_height => Err(
+                        StateServiceError::TonicStatusError(tonic::Status::out_of_range(format!(
+                            "Error: Height out of range [{hash_or_height}]. Height requested \
+                                is greater than the best chain tip [{chain_height}].",
+                        ))),
+                    ),
+                    _otherwise => Err(StateServiceError::TonicStatusError(tonic::Status::unknown(
+                        "Error: Failed to retrieve block from state.",
+                    ))),
+                }
+            }
             Err(e) => {
-                self.error_get_block(BlockCacheError::Custom(e.to_string()), height as u32)
-                    .await
+                let chain_height = snapshot.best_tip.height.0;
+                match hash_or_height {
+                    HashOrHeight::Height(Height(height)) if height >= chain_height => Err(
+                        StateServiceError::TonicStatusError(tonic::Status::out_of_range(format!(
+                            "Error: Height out of range [{hash_or_height}]. Height requested \
+                                is greater than the best chain tip [{chain_height}].",
+                        ))),
+                    ),
+                    _otherwise =>
+                    // TODO: Hide server error from clients before release. Currently useful for dev purposes.
+                    {
+                        Err(StateServiceError::TonicStatusError(tonic::Status::unknown(
+                            format!("Error: Failed to retrieve block from node. Server Error: {e}",),
+                        )))
+                    }
+                }
             }
         }
     }

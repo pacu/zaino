@@ -753,16 +753,6 @@ impl LightWalletIndexer for FetchServiceSubscriber {
                                 is greater than the best chain tip [{chain_height}].",
                         ))),
                     ),
-                    HashOrHeight::Height(height)
-                        if height > self.data.network().sapling_activation_height() =>
-                    {
-                        Err(FetchServiceError::TonicStatusError(
-                            tonic::Status::out_of_range(format!(
-                                "Error: Height out of range [{hash_or_height}]. Height requested \
-                                is below sapling activation height [{chain_height}].",
-                            )),
-                        ))
-                    }
                     _otherwise => Err(FetchServiceError::TonicStatusError(tonic::Status::unknown(
                         "Error: Failed to retrieve block from state.",
                     ))),
@@ -777,16 +767,6 @@ impl LightWalletIndexer for FetchServiceSubscriber {
                                 is greater than the best chain tip [{chain_height}].",
                         ))),
                     ),
-                    HashOrHeight::Height(height)
-                        if height > self.data.network().sapling_activation_height() =>
-                    {
-                        Err(FetchServiceError::TonicStatusError(
-                            tonic::Status::out_of_range(format!(
-                                "Error: Height out of range [{hash_or_height}]. Height requested \
-                                is below sapling activation height [{chain_height}].",
-                            )),
-                        ))
-                    }
                     _otherwise =>
                     // TODO: Hide server error from clients before release. Currently useful for dev purposes.
                     {
