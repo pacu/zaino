@@ -5,11 +5,10 @@ use tracing::info;
 
 use zaino_fetch::jsonrpsee::connector::test_node_and_return_url;
 use zaino_serve::server::{config::GrpcServerConfig, grpc::TonicServer, jsonrpc::JsonRpcServer};
-
 #[allow(deprecated)]
 use zaino_state::{
-    BackendConfig, FetchService, IndexerService, LightWalletService, StateService, StatusType,
-    ZcashIndexer, ZcashService,
+    BackendType, FetchService, FetchServiceConfig, IndexerService, LightWalletService,
+    StateService, StateServiceConfig, StatusType, ZcashIndexer, ZcashService,
 };
 
 use crate::{config::ZainodConfig, error::IndexerError};
@@ -38,14 +37,13 @@ pub async fn start_indexer(
 }
 
 /// Spawns a new Indexer server.
-#[allow(deprecated)]
 pub async fn spawn_indexer(
     config: ZainodConfig,
 ) -> Result<tokio::task::JoinHandle<Result<(), IndexerError>>, IndexerError> {
     config.check_config()?;
     info!("Checking connection with node..");
     let zebrad_uri = test_node_and_return_url(
-        config.validator_settings.validator_jsonrpc_listen_address,
+        &config.validator_settings.validator_jsonrpc_listen_address,
         config.validator_settings.validator_cookie_path.clone(),
         config.validator_settings.validator_user.clone(),
         config.validator_settings.validator_password.clone(),
@@ -56,18 +54,21 @@ pub async fn spawn_indexer(
         " - Connected to node using JsonRPSee at address {}.",
         zebrad_uri
     );
-    match BackendConfig::try_from(config.clone()) {
-        Ok(BackendConfig::State(state_service_config)) => {
-            Indexer::<StateService>::launch_inner(state_service_config, config)
+
+    #[allow(deprecated)]
+    match config.backend {
+        BackendType::State => {
+            let state_config = StateServiceConfig::try_from(config.clone())?;
+            Indexer::<StateService>::launch_inner(state_config, config)
                 .await
                 .map(|res| res.0)
         }
-        Ok(BackendConfig::Fetch(fetch_service_config)) => {
-            Indexer::<FetchService>::launch_inner(fetch_service_config, config)
+        BackendType::Fetch => {
+            let fetch_config = FetchServiceConfig::try_from(config.clone())?;
+            Indexer::<FetchService>::launch_inner(fetch_config, config)
                 .await
                 .map(|res| res.0)
         }
-        Err(e) => Err(e),
     }
 }
 
@@ -123,18 +124,18 @@ where
             loop {
                 // Log the servers status.
                 if last_log_time.elapsed() >= log_interval {
-                    indexer.log_status().await;
+                    indexer.log_status();
                     last_log_time = Instant::now();
                 }
 
                 // Check for restart signals.
-                if indexer.check_for_critical_errors().await {
+                if indexer.check_for_critical_errors() {
                     indexer.close().await;
                     return Err(IndexerError::Restart);
                 }
 
                 // Check for shutdown signals.
-                if indexer.check_for_shutdown().await {
+                if indexer.check_for_shutdown() {
                     indexer.close().await;
                     return Ok(());
                 }
@@ -147,14 +148,14 @@ where
     }
 
     /// Checks indexers status and servers internal statuses for either offline of critical error signals.
-    async fn check_for_critical_errors(&self) -> bool {
-        let status = self.status_int().await;
+    fn check_for_critical_errors(&self) -> bool {
+        let status = self.status_int();
         status == 5 || status >= 7
     }
 
     /// Checks indexers status and servers internal status for closure signal.
-    async fn check_for_shutdown(&self) -> bool {
-        if self.status_int().await == 4 {
+    fn check_for_shutdown(&self) -> bool {
+        if self.status_int() == 4 {
             return true;
         }
         false
@@ -178,10 +179,10 @@ where
         }
     }
 
-    /// Returns the indexers current status usize, caliculates from internal statuses.
-    async fn status_int(&self) -> usize {
+    /// Returns the indexers current status usize, calculates from internal statuses.
+    fn status_int(&self) -> usize {
         let service_status = match &self.service {
-            Some(service) => service.inner_ref().status().await,
+            Some(service) => service.inner_ref().status(),
             None => return 7,
         };
 
@@ -203,14 +204,14 @@ where
     }
 
     /// Returns the current StatusType of the indexer.
-    pub async fn status(&self) -> StatusType {
-        StatusType::from(self.status_int().await)
+    pub fn status(&self) -> StatusType {
+        StatusType::from(self.status_int())
     }
 
     /// Logs the indexers status.
-    pub async fn log_status(&self) {
+    pub fn log_status(&self) {
         let service_status = match &self.service {
-            Some(service) => service.inner_ref().status().await,
+            Some(service) => service.inner_ref().status(),
             None => StatusType::Offline,
         };
 

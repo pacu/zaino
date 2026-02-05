@@ -18,6 +18,7 @@ use tracing::info;
 use tracing_subscriber::EnvFilter;
 use zaino_common::{
     network::{ActivationHeights, ZEBRAD_DEFAULT_ACTIVATION_HEIGHTS},
+    probing::Readiness,
     validator::ValidatorConfig,
     CacheConfig, DatabaseConfig, Network, ServiceConfig, StorageConfig,
 };
@@ -61,6 +62,28 @@ pub fn make_uri(indexer_port: portpicker::Port) -> http::Uri {
     format!("http://127.0.0.1:{indexer_port}")
         .try_into()
         .unwrap()
+}
+
+/// Polls until the given component reports ready.
+///
+/// Returns `true` if the component became ready within the timeout,
+/// `false` if the timeout was reached.
+pub async fn poll_until_ready(
+    component: &impl Readiness,
+    poll_interval: std::time::Duration,
+    timeout: std::time::Duration,
+) -> bool {
+    tokio::time::timeout(timeout, async {
+        let mut interval = tokio::time::interval(poll_interval);
+        loop {
+            interval.tick().await;
+            if component.is_ready() {
+                return;
+            }
+        }
+    })
+    .await
+    .is_ok()
 }
 
 // temporary until activation heights are unified to zebra-chain type.
@@ -217,13 +240,15 @@ impl ValidatorExt for Zebrad {
     ) -> Result<(Self, ValidatorConfig), LaunchError> {
         let zebrad = Zebrad::launch(config).await?;
         let validator_config = ValidatorConfig {
-            validator_jsonrpc_listen_address: SocketAddr::new(
-                IpAddr::V4(Ipv4Addr::LOCALHOST),
-                zebrad.rpc_listen_port(),
+            validator_jsonrpc_listen_address: format!(
+                "{}:{}",
+                Ipv4Addr::LOCALHOST,
+                zebrad.rpc_listen_port()
             ),
-            validator_grpc_listen_address: Some(SocketAddr::new(
-                IpAddr::V4(Ipv4Addr::LOCALHOST),
-                zebrad.indexer_listen_port(),
+            validator_grpc_listen_address: Some(format!(
+                "{}:{}",
+                Ipv4Addr::LOCALHOST,
+                zebrad.indexer_listen_port()
             )),
             validator_cookie_path: None,
             validator_user: Some("xxxxxx".to_string()),
@@ -239,10 +264,7 @@ impl ValidatorExt for Zcashd {
     ) -> Result<(Self, ValidatorConfig), LaunchError> {
         let zcashd = Zcashd::launch(config).await?;
         let validator_config = ValidatorConfig {
-            validator_jsonrpc_listen_address: SocketAddr::new(
-                IpAddr::V4(Ipv4Addr::LOCALHOST),
-                zcashd.port(),
-            ),
+            validator_jsonrpc_listen_address: format!("{}:{}", Ipv4Addr::LOCALHOST, zcashd.port()),
             validator_grpc_listen_address: None,
             validator_cookie_path: None,
             validator_user: Some("xxxxxx".to_string()),
@@ -256,7 +278,7 @@ impl<C, Service> TestManager<C, Service>
 where
     C: ValidatorExt,
     Service: LightWalletService + Send + Sync + 'static,
-    Service::Config: From<ZainodConfig>,
+    Service::Config: TryFrom<ZainodConfig, Error = IndexerError>,
     IndexerError: From<<<Service as ZcashService>::Subscriber as ZcashIndexer>::Error>,
 {
     /// Launches zcash-local-net<Empty, Validator>.
@@ -378,7 +400,8 @@ where
             };
 
             let (handle, service_subscriber) = Indexer::<Service>::launch_inner(
-                Service::Config::from(indexer_config.clone()),
+                Service::Config::try_from(indexer_config.clone())
+                    .expect("Failed to convert ZainodConfig to service config"),
                 indexer_config,
             )
             .await
@@ -438,6 +461,8 @@ where
             full_node_rpc_listen_address,
             full_node_grpc_listen_address: validator_settings
                 .validator_grpc_listen_address
+                .as_ref()
+                .and_then(|addr| addr.parse().ok())
                 .unwrap_or(SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), 0)),
             zaino_handle,
             zaino_json_rpc_listen_address: zaino_json_listen_address,
@@ -457,8 +482,15 @@ where
             test_manager.local_net.generate_blocks(1).await.unwrap();
         }
 
-        // FIXME: zaino's status can still be syncing instead of ready at this point
-        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        // Wait for zaino to be ready to serve requests
+        if let Some(ref subscriber) = test_manager.service_subscriber {
+            poll_until_ready(
+                subscriber,
+                std::time::Duration::from_millis(100),
+                std::time::Duration::from_secs(30),
+            )
+            .await;
+        }
 
         Ok(test_manager)
     }
@@ -505,11 +537,13 @@ where
     }
 
     /// Generate `n` blocks for the local network and poll zaino's fetch/state subscriber until the chain index is synced to the target height.
-    pub async fn generate_blocks_and_poll_indexer(
+    pub async fn generate_blocks_and_poll_indexer<I>(
         &self,
         n: u32,
-        indexer: &impl LightWalletIndexer,
-    ) {
+        indexer: &I,
+    ) where
+        I: LightWalletIndexer + Readiness,
+    {
         let chain_height = self.local_net.get_chain_height().await;
         let mut next_block_height = u64::from(chain_height) + 1;
         let mut interval = tokio::time::interval(std::time::Duration::from_millis(200));
@@ -531,6 +565,24 @@ where
                     interval.tick().await;
                 }
                 next_block_height += 1;
+            }
+        }
+
+        // After height is reached, wait for readiness and measure if it adds time
+        if !indexer.is_ready() {
+            let start = std::time::Instant::now();
+            poll_until_ready(
+                indexer,
+                std::time::Duration::from_millis(50),
+                std::time::Duration::from_secs(30),
+            )
+            .await;
+            let elapsed = start.elapsed();
+            if elapsed.as_millis() > 0 {
+                info!(
+                    "Readiness wait after height poll took {:?} (height polling alone was insufficient)",
+                    elapsed
+                );
             }
         }
     }
@@ -567,6 +619,24 @@ where
                     interval.tick().await;
                 }
                 next_block_height += 1;
+            }
+        }
+
+        // After height is reached, wait for readiness and measure if it adds time
+        if !chain_index.is_ready() {
+            let start = std::time::Instant::now();
+            poll_until_ready(
+                chain_index,
+                std::time::Duration::from_millis(50),
+                std::time::Duration::from_secs(30),
+            )
+            .await;
+            let elapsed = start.elapsed();
+            if elapsed.as_millis() > 0 {
+                info!(
+                    "Readiness wait after height poll took {:?} (height polling alone was insufficient)",
+                    elapsed
+                );
             }
         }
     }
