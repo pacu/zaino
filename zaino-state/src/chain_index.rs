@@ -164,6 +164,9 @@ mod tests;
 /// 1. Extract the relevant fields from your service config into a `BlockCacheConfig`
 /// 2. Create the appropriate `ValidatorConnector` variant (State or Fetch)
 /// 3. Call `NodeBackedChainIndex::new(source, config).await`
+///
+/// When a call asks for info (e.g. a block), Zaino selects sources in this order:
+#[doc = simple_mermaid::mermaid!("chain_index_passthrough.mmd")]
 pub trait ChainIndex {
     /// A snapshot of the nonfinalized state, needed for atomic access
     type Snapshot: NonFinalizedSnapshot;
@@ -181,7 +184,7 @@ pub trait ChainIndex {
     /// Returns None if the specified block is not in the best chain or is not found.
     fn get_block_height(
         &self,
-        nonfinalized_snapshot: &Self::Snapshot,
+        snapshot: &Self::Snapshot,
         hash: types::BlockHash,
     ) -> impl std::future::Future<Output = Result<Option<types::Height>, Self::Error>>;
 
@@ -193,7 +196,7 @@ pub trait ChainIndex {
     #[allow(clippy::type_complexity)]
     fn get_block_range(
         &self,
-        nonfinalized_snapshot: &Self::Snapshot,
+        snapshot: &Self::Snapshot,
         start: types::Height,
         end: Option<types::Height>,
     ) -> Option<impl futures::Stream<Item = Result<Vec<u8>, Self::Error>>>;
@@ -203,7 +206,7 @@ pub trait ChainIndex {
     fn find_fork_point(
         &self,
         snapshot: &Self::Snapshot,
-        block_hash: &types::BlockHash,
+        hash: &types::BlockHash,
     ) -> impl std::future::Future<Output = Result<Option<(types::BlockHash, types::Height)>, Self::Error>>;
 
     /// Returns the block commitment tree data by hash
@@ -578,22 +581,23 @@ impl<Source: BlockchainSource> NodeBackedChainIndexSubscriber<Source> {
             .transpose()
     }
 
-    async fn get_snapshot_block_height(
+    async fn get_indexed_block_height(
         &self,
-        nonfinalized_snapshot: &NonfinalizedBlockCacheSnapshot,
+        snapshot: &NonfinalizedBlockCacheSnapshot,
         hash: types::BlockHash,
     ) -> Result<Option<types::Height>, ChainIndexError> {
-        match nonfinalized_snapshot.blocks.get(&hash).cloned() {
-            Some(block) => Ok(nonfinalized_snapshot
+        match snapshot.blocks.get(&hash).cloned() {
+            Some(block) => Ok(snapshot
                 .heights_to_hashes
                 .values()
                 .find(|h| **h == hash)
                 // Canonical height is None for blocks not on the best chain
                 .map(|_| block.index().height())),
-            None => match self.finalized_state.get_block_height(hash).await {
-                Ok(height) => Ok(height),
-                Err(_e) => Err(ChainIndexError::database_hole(hash)),
-            },
+            None => self
+                .finalized_state
+                .get_block_height(hash)
+                .await
+                .map_err(|_e| ChainIndexError::database_hole(hash)),
         }
     }
 
@@ -642,7 +646,7 @@ impl<Source: BlockchainSource> NodeBackedChainIndexSubscriber<Source> {
 
     async fn get_block_height_passthrough(
         &self,
-        nonfinalized_snapshot: &NonfinalizedBlockCacheSnapshot,
+        snapshot: &NonfinalizedBlockCacheSnapshot,
         hash: types::BlockHash,
     ) -> Result<Option<types::Height>, ChainIndexError> {
         match self
@@ -650,13 +654,31 @@ impl<Source: BlockchainSource> NodeBackedChainIndexSubscriber<Source> {
             .get_block(HashOrHeight::Hash(hash.into()))
             .await
         {
-            Ok(Some(block))
-                if types::Height::from(block.coinbase_height().expect("block to have height"))
-                    <= nonfinalized_snapshot.validator_finalized_height =>
-            {
-                Ok(Some(block.coinbase_height().unwrap().into()))
+            Ok(Some(block)) => {
+                // At this point, we know that
+                // the block is in the VALIDATOR.
+                match block.coinbase_height() {
+                    None => {
+                        // the block is in the VALIDATOR. but doesnt have a height. That would imply a bug.
+                        Err(ChainIndexError::validator_data_error_block_coinbase_height_missing())
+                    }
+                    Some(height) => {
+                        // The VALIDATOR returned a block with a height.
+                        // However, there is as of yet no guaranteed the Block is FINALIZED
+                        if height <= snapshot.validator_finalized_height {
+                            Ok(Some(types::Height::from(height)))
+                        } else {
+                            // non-finalized block
+                            // no passthrough
+                            Ok(None)
+                        }
+                    }
+                }
             }
-            Ok(_) => Ok(None),
+            Ok(None) => {
+                // the block is neither in the INDEXER nor VALIDATOR
+                Ok(None)
+            }
             Err(e) => Err(ChainIndexError::backing_validator(e)),
         }
     }
@@ -702,18 +724,12 @@ impl<Source: BlockchainSource> ChainIndex for NodeBackedChainIndexSubscriber<Sou
     /// Used for hash based block lookup (random access).
     async fn get_block_height(
         &self,
-        nonfinalized_snapshot: &Self::Snapshot,
+        snapshot: &Self::Snapshot,
         hash: types::BlockHash,
     ) -> Result<Option<types::Height>, Self::Error> {
-        let snapshot_block_height = self
-            .get_snapshot_block_height(nonfinalized_snapshot, hash)
-            .await?;
-        match snapshot_block_height {
+        match self.get_indexed_block_height(snapshot, hash).await? {
             Some(h) => Ok(Some(h)),
-            None => {
-                self.get_block_height_passthrough(nonfinalized_snapshot, hash)
-                    .await
-            }
+            None => self.get_block_height_passthrough(snapshot, hash).await,
         }
     }
 
@@ -722,17 +738,18 @@ impl<Source: BlockchainSource> ChainIndex for NodeBackedChainIndexSubscriber<Sou
     /// Returns None if the specified start height
     /// is greater than the snapshot's tip and greater
     /// than the validator's finalized height (100 blocks below tip)
+    // Todo: use get_block_range in underlying calls for efficiency.
     fn get_block_range(
         &self,
-        nonfinalized_snapshot: &Self::Snapshot,
+        snapshot: &Self::Snapshot,
         start: types::Height,
         end: std::option::Option<types::Height>,
     ) -> Option<impl Stream<Item = Result<Vec<u8>, Self::Error>>> {
         // We can serve blocks above where the validator has finalized
         // only if we have those blocks in our nonfinalized snapshot
-        let max_servable_height = nonfinalized_snapshot
+        let max_servable_height = snapshot
             .validator_finalized_height
-            .max(nonfinalized_snapshot.best_tip.height);
+            .max(snapshot.best_tip.height);
         let end = end.unwrap_or(max_servable_height);
         // Serve as high as we can, or to the provided end if it's lower
         if start <= max_servable_height.min(end) {
@@ -755,9 +772,7 @@ impl<Source: BlockchainSource> ChainIndex for NodeBackedChainIndexSubscriber<Sou
                             source: Some(Box::new(e)),
                         }),
                         Ok(None) => {
-                            match nonfinalized_snapshot
-                                .get_chainblock_by_height(&types::Height(height))
-                            {
+                            match snapshot.get_chainblock_by_height(&types::Height(height)) {
                                 Some(block) => {
                                     return self
                                         .get_fullblock_bytes_from_node(HashOrHeight::Hash(
@@ -782,54 +797,84 @@ impl<Source: BlockchainSource> ChainIndex for NodeBackedChainIndexSubscriber<Sou
         }
     }
 
-    /// Finds the newest ancestor of the given block on the main
-    /// chain, or the block itself if it is on the main chain.
+    /// For a given block,
+    /// find its newest main-chain ancestor,
+    /// or the block itself if it is on the main-chain.
     /// Returns Ok(None) if no fork point found. This is not an error,
     /// as zaino does not guarentee knowledge of all sidechain data.
     async fn find_fork_point(
         &self,
         snapshot: &Self::Snapshot,
-        block_hash: &types::BlockHash,
+        hash: &types::BlockHash,
     ) -> Result<Option<(types::BlockHash, types::Height)>, Self::Error> {
-        let Some(block) = snapshot.as_ref().get_chainblock_by_hash(block_hash) else {
-            // We don't have the block in our non-finalized state,
-            // we'll only be aware of it if it's main-chain.
-            // Find it from the source, and return its height and hash
-            return match self
-                .blockchain_source
-                .get_block(HashOrHeight::Hash(zebra_chain::block::Hash::from(
-                    *block_hash,
-                )))
-                .await
-            {
-                Ok(Some(block))
-                    // We don't have the block in our non-finalized state
-                    // we can only passthrough assuming the block is finalized
-                    if block.coinbase_height().unwrap()
-                        <= snapshot.validator_finalized_height =>
-                {
-                    Ok(Some((
-                        types::BlockHash::from(block.hash()),
-                        types::Height::from(block.coinbase_height().unwrap()),
-                    )))
+        match snapshot.as_ref().get_chainblock_by_hash(hash) {
+            Some(block) => {
+                // At this point, we know that
+                // The block is non-FINALIZED in the INDEXER
+                if snapshot.heights_to_hashes.get(&block.height()) == Some(block.hash()) {
+                    // The block is in the best chain.
+                    Ok(Some((*block.hash(), block.height())))
+                } else {
+                    // Otherwise, it's non-best chain! Grab its parent, and recurse
+                    Box::pin(self.find_fork_point(snapshot, block.index().parent_hash())).await
+                    // gotta pin recursive async functions to prevent infinite-sized
+                    // Future-implementing types
                 }
-                // The block is non-finalized, and we haven't synced it yet.
-                // We can't make any assertions about the best chain
-                // if it's not in our snapshot.
-                // TODO: Should this be an error?
-                Ok(_) => Ok(None),
-                Err(e) => Err(ChainIndexError::backing_validator(e)),
-            };
-        };
-        // If we have the block in our heights_to_hashes set, it's main-chain
-        // Return it's hash and height
-        if snapshot.heights_to_hashes.get(&block.height()) == Some(block.hash()) {
-            Ok(Some((*block.hash(), block.height())))
-            // Otherwise, it's non-best chain! Grab its parent, and recurse
-        } else {
-            // gotta pin recursive async functions to prevent infinite-sized
-            // Future-implementing types
-            Box::pin(self.find_fork_point(snapshot, block.index().parent_hash())).await
+            }
+            None => {
+                // At this point, we know that
+                // the block is NOT non-FINALIZED in the INDEXER.
+                match self.finalized_state.get_block_height(*hash).await {
+                    Ok(Some(height)) => {
+                        // the block is FINALIZED in the INDEXER
+                        Ok(Some((*hash, height)))
+                    }
+                    Err(_e) => Err(ChainIndexError::database_hole(hash)),
+                    Ok(None) => {
+                        // At this point, we know that
+                        // the block is NOT FINALIZED in the INDEXER
+                        // (NEITHER is it non-FINALIZED in the INDEXER)
+
+                        // Now, we ask the VALIDATOR.
+                        match self
+                            .blockchain_source
+                            .get_block(HashOrHeight::Hash(zebra_chain::block::Hash::from(*hash)))
+                            .await
+                        {
+                            Ok(Some(block)) => {
+                                // At this point, we know that
+                                // the block is in the VALIDATOR.
+                                match block.coinbase_height() {
+                                    None => {
+                                        // the block is in the VALIDATOR. but doesnt have a height. That would imply a bug.
+                                        Err(ChainIndexError::validator_data_error_block_coinbase_height_missing())
+                                    }
+                                    Some(height) => {
+                                        // The VALIDATOR returned a block with a height.
+                                        // However, there is as of yet no guaranteed the Block is FINALIZED
+                                        if height <= snapshot.validator_finalized_height {
+                                            types::BlockHash::from(block.hash()),
+                                            types::Height::from(height),
+                                        } else {
+                                            // non-finalized block
+                                            // no passthrough
+                                            Ok(None)
+                                        }
+                                    }
+                                }
+                            }
+
+                            Ok(None) => {
+                                // At this point, we know that
+                                // the block is NOT FINALIZED in the VALIDATOR.
+                                // Return Ok(None) = no block found.
+                                Ok(None)
+                            }
+                            Err(e) => Err(ChainIndexError::backing_validator(e)),
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -942,7 +987,9 @@ impl<Source: BlockchainSource> ChainIndex for NodeBackedChainIndexSubscriber<Sou
             .blocks_containing_transaction(snapshot, txid.0)
             .await?
             .collect::<Vec<_>>();
-        let start_of_nonfinalized = snapshot.heights_to_hashes.keys().min().unwrap();
+        let Some(start_of_nonfinalized) = snapshot.heights_to_hashes.keys().min() else {
+            return Err(ChainIndexError::database_hole("no blocks"));
+        };
         let mut best_chain_block = blocks_containing_transaction
             .iter()
             .find(|block| {
