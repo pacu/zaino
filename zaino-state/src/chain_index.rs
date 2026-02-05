@@ -663,7 +663,8 @@ impl<Source: BlockchainSource> NodeBackedChainIndexSubscriber<Source> {
                         Err(ChainIndexError::validator_data_error_block_coinbase_height_missing())
                     }
                     Some(height) => {
-                        // The validator returned a block with a height, implying that this block is on the best chain.
+                        // The validator returned a block with a height.
+                        // However, there is as of yet no guaranteed the Block is Finalized
                         Ok(Some(types::Height::from(height)))
                     }
                 }
