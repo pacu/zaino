@@ -569,8 +569,7 @@ impl<Source: BlockchainSource> NodeBackedChainIndexSubscriber<Source> {
         &self,
         id: HashOrHeight,
     ) -> Result<Option<Vec<u8>>, ChainIndexError> {
-        self.non_finalized_state
-            .source
+        self.blockchain_source
             .get_block(id)
             .await
             .map_err(ChainIndexError::backing_validator)?
@@ -853,8 +852,10 @@ impl<Source: BlockchainSource> ChainIndex for NodeBackedChainIndexSubscriber<Sou
                                         // The VALIDATOR returned a block with a height.
                                         // However, there is as of yet no guaranteed the Block is FINALIZED
                                         if height <= snapshot.validator_finalized_height {
-                                            types::BlockHash::from(block.hash()),
-                                            types::Height::from(height),
+                                            Ok(Some((
+                                                types::BlockHash::from(block.hash()),
+                                                types::Height::from(height),
+                                            )))
                                         } else {
                                             // non-finalized block
                                             // no passthrough
