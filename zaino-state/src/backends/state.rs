@@ -1,36 +1,28 @@
 //! Zcash chain fetch and tx submission service backed by Zebras [`ReadStateService`].
 
-use crate::{
-    chain_index::NonFinalizedSnapshot, error::ChainIndexError, NodeBackedChainIndex,
-    NodeBackedChainIndexSubscriber, State,
-};
 #[allow(deprecated)]
 use crate::{
     chain_index::{
         mempool::{Mempool, MempoolSubscriber},
         source::ValidatorConnector,
-        types as chain_types, ChainIndex,
+        types as chain_types, ChainIndex, NonFinalizedSnapshot,
     },
     config::StateServiceConfig,
+    error::ChainIndexError,
     error::{BlockCacheError, StateServiceError},
     indexer::{
         handle_raw_transaction, IndexerSubscriber, LightWalletIndexer, ZcashIndexer, ZcashService,
     },
-    local_cache::{
-        compact_block_to_nullifiers, compact_block_with_pool_types, BlockCache,
-        BlockCacheSubscriber,
-    },
+    local_cache::{compact_block_to_nullifiers, BlockCache, BlockCacheSubscriber},
     status::{AtomicStatus, Status, StatusType},
     stream::{
         AddressStream, CompactBlockStream, CompactTransactionStream, RawTransactionStream,
         UtxoReplyStream,
     },
     utils::{get_build_info, ServiceMetadata},
-    BackendType, MempoolKey,
+    BackendType, MempoolKey, NodeBackedChainIndex, NodeBackedChainIndexSubscriber, State,
 };
 
-use nonempty::NonEmpty;
-use tokio_stream::StreamExt as _;
 use zaino_fetch::{
     chain::{transaction::FullTransaction, utils::ParseFromSlice},
     jsonrpsee::{
@@ -54,7 +46,7 @@ use zaino_proto::proto::{
         SendResponse, TransparentAddressBlockFilter, TreeState, TxFilter,
     },
     utils::{
-        blockid_to_hashorheight, pool_types_from_vector, PoolTypeError, PoolTypeFilter,
+        blockid_to_hashorheight, GetBlockRangeError, PoolTypeError, PoolTypeFilter,
         ValidatedBlockRangeRequest,
     },
 };
@@ -98,6 +90,7 @@ use tokio::{
     sync::mpsc,
     time::{self, timeout},
 };
+use tokio_stream::StreamExt as _;
 use tonic::async_trait;
 use tower::{Service, ServiceExt};
 use tracing::{info, warn};
@@ -563,135 +556,127 @@ impl StateServiceSubscriber {
     async fn get_block_range_inner(
         &self,
         request: BlockRange,
-        trim_non_nullifier: bool,
+        nullifiers_only: bool,
     ) -> Result<CompactBlockStream, StateServiceError> {
-        let mut validated_request = ValidatedBlockRangeRequest::new_from_block_range(&request)
+        let validated_request = ValidatedBlockRangeRequest::new_from_block_range(&request)
             .map_err(StateServiceError::from)?;
 
-        // FIXME: this should be changed but this logic is hard to understand and we lack tests.
-        // we will maintain the behaviour with less smelly code
-        let lowest_to_highest = if validated_request.is_reverse_ordered() {
-            validated_request.reverse();
-            false
-        } else {
-            true
-        };
+        let pool_type_filter = PoolTypeFilter::new_from_pool_types(&validated_request.pool_types())
+            .map_err(GetBlockRangeError::PoolTypeArgumentError)
+            .map_err(StateServiceError::from)?;
 
-        let start = validated_request.start();
-        let end = validated_request.end();
-        let chain_height: u64 = self.block_cache.get_chain_height().await?.0 as u64;
-        let fetch_service_clone = self.clone();
+        // Note conversion here is safe due to the use of [`ValidatedBlockRangeRequest::new_from_block_range`]
+        let start = validated_request.start() as u32;
+        let end = validated_request.end() as u32;
+
+        let state_service_clone = self.clone();
         let service_timeout = self.config.service.timeout;
         let (channel_tx, channel_rx) = mpsc::channel(self.config.service.channel_size as usize);
 
-        let pool_types = match pool_types_from_vector(&request.pool_types) {
-            Ok(p) => Ok(p),
-            Err(e) => Err(match e {
-                PoolTypeError::InvalidPoolType => StateServiceError::UnhandledRpcError(
-                    "PoolType::Invalid specified as argument in `BlockRange`.".to_string(),
-                ),
-                PoolTypeError::UnknownPoolType(t) => StateServiceError::UnhandledRpcError(format!(
-                    "Unknown value specified in `BlockRange`. Value '{}' is not a known PoolType.",
-                    t
-                )),
-            }),
-        }?;
-        // FIX: find out why there's repeated code fetching the chain tip and then the rest
         tokio::spawn(async move {
-            let timeout = timeout(
-                time::Duration::from_secs((service_timeout * 4) as u64),
-                async {
-                    let mut blocks = NonEmpty::new(
-                        match fetch_service_clone
-                            .block_cache
-                            .get_compact_block(end.to_string())
-                            .await
-                        {
-                            Ok(mut block) => {
-                                    if trim_non_nullifier {
-                                        block = compact_block_to_nullifiers(block);
-                                    } else {
-                                        block = compact_block_with_pool_types(block, &pool_types);
+            let timeout_result = timeout(
+            time::Duration::from_secs((service_timeout * 4) as u64),
+            async {
+                let snapshot = state_service_clone.indexer.snapshot_nonfinalized_state();
+                let chain_height = snapshot.best_chaintip().height.0;
+
+                match state_service_clone
+                    .indexer
+                    .get_compact_block_stream(
+                        &snapshot,
+                        chain_types::Height(start),
+                        chain_types::Height(end),
+                        pool_type_filter.clone(),
+                    )
+                    .await
+                {
+                    Ok(Some(mut compact_block_stream)) => {
+                        if nullifiers_only {
+                            while let Some(stream_item) = compact_block_stream.next().await {
+                                match stream_item {
+                                    Ok(block) => {
+                                        if channel_tx
+                                            .send(Ok(compact_block_to_nullifiers(block)))
+                                            .await
+                                            .is_err()
+                                        {
+                                            break;
+                                        }
                                     }
-                                    Ok(block)
+                                    Err(status) => {
+                                        if channel_tx.send(Err(status)).await.is_err() {
+                                            break;
+                                        }
+                                    }
+                                }
                             }
-                            Err(e) => {
-                                if end >= chain_height {
-                                    Err(tonic::Status::out_of_range(format!(
-                                        "Error: Height out of range [{end}]. Height \
-                                            requested is greater than the best \
-                                            chain tip [{chain_height}].",
-                                    )))
-                                } else {
-                                    Err(tonic::Status::unknown(e.to_string()))
+                        } else {
+                            while let Some(stream_item) = compact_block_stream.next().await {
+                                if channel_tx.send(stream_item).await.is_err() {
+                                    break;
                                 }
                             }
-                        },
-                    );
-                    for i in start..end {
-                        let Ok(child_block) = blocks.last() else {
-                            break;
-                        };
-                        let Ok(hash_or_height) =
-                            <[u8; 32]>::try_from(child_block.prev_hash.as_slice())
-                                .map(zebra_chain::block::Hash)
-                                .map(HashOrHeight::from)
-                        else {
-                            break;
-                        };
-                        blocks.push(
-                            match fetch_service_clone
-                                .block_cache
-                                .get_compact_block(hash_or_height.to_string())
-                                .await
-                            {
-                                Ok(mut block) => {
-                                    if trim_non_nullifier {
-                                        block = compact_block_to_nullifiers(block);
-                                    } else {
-                                        block = compact_block_with_pool_types(block, &pool_types);
-                                    }
-                                    Ok(block)
-                                }
-                                Err(e) => {
-                                    let height = end - (i - start);
-                                    if height >= chain_height {
-                                        Err(tonic::Status::out_of_range(format!(
-                                            "Error: Height out of range [{height}]. Height requested \
-                                            is greater than the best chain tip [{chain_height}].",
-                                        )))
-                                    } else {
-                                        Err(tonic::Status::unknown(e.to_string()))
-                                    }
-                                }
-                            },
-                        );
-                    }
-                    if lowest_to_highest {
-                        blocks = NonEmpty::from_vec(blocks.into_iter().rev().collect::<Vec<_>>())
-                            .expect("known to be non-empty")
-                    }
-                    for block in blocks {
-                        if let Err(e) = channel_tx.send(block).await {
-                            warn!("GetBlockRange channel closed unexpectedly: {e}");
-                            break;
                         }
                     }
-                },
-            )
-            .await;
-            match timeout {
-                Ok(_) => {}
-                Err(_) => {
-                    channel_tx
-                        .send(Err(tonic::Status::deadline_exceeded(
-                            "Error: get_block_range gRPC request timed out.",
-                        )))
-                        .await
-                        .ok();
+                    Ok(None) => {
+                        // Per `get_compact_block_stream` semantics: `None` means at least one bound is above the tip.
+                        let offending_height = if start > chain_height { start } else { end };
+
+                        match channel_tx
+                            .send(Err(tonic::Status::out_of_range(format!(
+                                "Error: Height out of range [{offending_height}]. Height requested is greater than the best chain tip [{chain_height}].",
+                            ))))
+                            .await
+                        {
+                            Ok(_) => {}
+                            Err(e) => {
+                                warn!("GetBlockRange channel closed unexpectedly: {}", e);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        // Preserve previous behaviour: if the request is above tip, surface OutOfRange;
+                        // otherwise return the error (currently exposed for dev).
+                        if start > chain_height || end > chain_height {
+                            let offending_height = if start > chain_height { start } else { end };
+
+                            match channel_tx
+                                .send(Err(tonic::Status::out_of_range(format!(
+                                    "Error: Height out of range [{offending_height}]. Height requested is greater than the best chain tip [{chain_height}].",
+                                ))))
+                                .await
+                            {
+                                Ok(_) => {}
+                                Err(e) => {
+                                    warn!("GetBlockRange channel closed unexpectedly: {}", e);
+                                }
+                            }
+                        } else {
+                            // TODO: Hide server error from clients before release. Currently useful for dev purposes.
+                            if channel_tx
+                                .send(Err(tonic::Status::unknown(e.to_string())))
+                                .await
+                                .is_err()
+                            {
+                                warn!("GetBlockRangeStream closed unexpectedly: {}", e);
+                            }
+                        }
+                    }
                 }
+            },
+        )
+        .await;
+
+            if timeout_result.is_err() {
+                channel_tx
+                    .send(Err(tonic::Status::deadline_exceeded(
+                        "Error: get_block_range gRPC request timed out.",
+                    )))
+                    .await
+                    .ok();
             }
         });
+
         Ok(CompactBlockStream::new(channel_rx))
     }
 
