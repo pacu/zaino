@@ -95,7 +95,7 @@ pub enum SyncError {
     /// The backing validator node returned corrupt, invalid, or incomplete data
     /// TODO: This may not be correctly disambibuated from temporary network issues
     /// in the fetchservice case.
-    ZebradConnectionError(NodeConnectionError),
+    ValidatorConnectionError(NodeConnectionError),
     /// The channel used to store new blocks has been closed. This should only happen
     /// during shutdown.
     StagingChannelClosed,
@@ -117,11 +117,9 @@ impl From<UpdateError> for SyncError {
             UpdateError::DatabaseHole => {
                 SyncError::ReorgFailure(String::from("could not determine best chain"))
             }
-            UpdateError::ValidatorConnectionError => {
-                SyncError::ZebradConnectionError(NodeConnectionError::UnrecoverableError(Box::new(
-                    MissingBlockError("todo: what block is missing?".to_string()),
-                )))
-            }
+            UpdateError::ValidatorConnectionError(e) => SyncError::ValidatorConnectionError(
+                NodeConnectionError::UnrecoverableError(Box::new(MissingBlockError(e.to_string()))),
+            ),
         }
     }
 }
@@ -348,9 +346,9 @@ impl<Source: BlockchainSource> NonFinalizedState<Source> {
             .await
             .map_err(|e| {
                 // TODO: Check error. Determine what kind of error to return, this may be recoverable
-                SyncError::ZebradConnectionError(NodeConnectionError::UnrecoverableError(Box::new(
-                    e,
-                )))
+                SyncError::ValidatorConnectionError(NodeConnectionError::UnrecoverableError(
+                    Box::new(e),
+                ))
             })?
         {
             let parent_hash = BlockHash::from(block.header.previous_block_hash);
@@ -432,11 +430,11 @@ impl<Source: BlockchainSource> NonFinalizedState<Source> {
                     ))
                     .await
                     .map_err(|e| {
-                        SyncError::ZebradConnectionError(NodeConnectionError::UnrecoverableError(
-                            Box::new(e),
-                        ))
+                        SyncError::ValidatorConnectionError(
+                            NodeConnectionError::UnrecoverableError(Box::new(e)),
+                        )
                     })?
-                    .ok_or(SyncError::ZebradConnectionError(
+                    .ok_or(SyncError::ValidatorConnectionError(
                         NodeConnectionError::UnrecoverableError(Box::new(MissingBlockError(
                             "zebrad missing block in best chain".to_string(),
                         ))),
@@ -477,7 +475,7 @@ impl<Source: BlockchainSource> NonFinalizedState<Source> {
                 }
                 Err(mpsc::error::TryRecvError::Empty) => break,
                 Err(e @ mpsc::error::TryRecvError::Disconnected) => {
-                    return Err(SyncError::ZebradConnectionError(
+                    return Err(SyncError::ValidatorConnectionError(
                         NodeConnectionError::UnrecoverableError(Box::new(e)),
                     ))
                 }
@@ -515,8 +513,10 @@ impl<Source: BlockchainSource> NonFinalizedState<Source> {
             .source
             .get_best_block_height()
             .await
-            .map_err(|_| UpdateError::ValidatorConnectionError)?
-            .ok_or(UpdateError::ValidatorConnectionError)?;
+            .map_err(|e| UpdateError::ValidatorConnectionError(Box::new(e)))?
+            .ok_or(UpdateError::ValidatorConnectionError(Box::new(
+                MissingBlockError("no best block height".to_string()),
+            )))?;
         new_snapshot.validator_finalized_height = Height(validator_tip.0.saturating_sub(100));
 
         // Need to get best hash at some point in this process
@@ -575,9 +575,9 @@ impl<Source: BlockchainSource> NonFinalizedState<Source> {
             .get_tree_roots_from_source(block.hash().into())
             .await
             .map_err(|e| {
-                SyncError::ZebradConnectionError(NodeConnectionError::UnrecoverableError(Box::new(
-                    InvalidData(format!("{}", e)),
-                )))
+                SyncError::ValidatorConnectionError(NodeConnectionError::UnrecoverableError(
+                    Box::new(InvalidData(format!("{}", e))),
+                ))
             })?;
 
         Self::create_indexed_block_with_optional_roots(
@@ -587,7 +587,7 @@ impl<Source: BlockchainSource> NonFinalizedState<Source> {
             self.network.clone(),
         )
         .map_err(|e| {
-            SyncError::ZebradConnectionError(NodeConnectionError::UnrecoverableError(Box::new(
+            SyncError::ValidatorConnectionError(NodeConnectionError::UnrecoverableError(Box::new(
                 InvalidData(e),
             )))
         })
@@ -654,11 +654,11 @@ impl<Source: BlockchainSource> NonFinalizedState<Source> {
                     ))
                     .await
                     .map_err(|e| {
-                        SyncError::ZebradConnectionError(NodeConnectionError::UnrecoverableError(
-                            Box::new(e),
-                        ))
+                        SyncError::ValidatorConnectionError(
+                            NodeConnectionError::UnrecoverableError(Box::new(e)),
+                        )
                     })?
-                    .ok_or(SyncError::ZebradConnectionError(
+                    .ok_or(SyncError::ValidatorConnectionError(
                         NodeConnectionError::UnrecoverableError(Box::new(MissingBlockError(
                             "zebrad missing block".to_string(),
                         ))),
@@ -688,7 +688,7 @@ pub enum UpdateError {
     DatabaseHole,
 
     /// Failed to connect to the backing validator
-    ValidatorConnectionError,
+    ValidatorConnectionError(Box<dyn std::error::Error>),
 }
 
 trait Block {
