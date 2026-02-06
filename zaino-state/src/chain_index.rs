@@ -749,7 +749,8 @@ impl<Source: BlockchainSource> ChainIndex for NodeBackedChainIndexSubscriber<Sou
         let max_servable_height = snapshot
             .validator_finalized_height
             .max(snapshot.best_tip.height);
-        let end = end.unwrap_or(max_servable_height);
+        // The lower of the end of the provided range, and the highest block we can serve
+        let end = end.unwrap_or(max_servable_height).min(max_servable_height);
         // Serve as high as we can, or to the provided end if it's lower
         if start <= max_servable_height.min(end) {
             Some(
