@@ -767,6 +767,8 @@ impl<Source: BlockchainSource> ChainIndex for NodeBackedChainIndexSubscriber<Sou
         if start <= max_servable_height.min(end) {
             Some(
                 futures::stream::iter((start.0)..=(end.0)).then(move |height| async move {
+                    // For blocks above validator_finalized_height, it's not reorg-safe to get blocks by height. It is reorg-safe to get blocks by hash. What we need to do in this case is use our snapshot index to look up the hash at a given height, and then get that hash from the validator.
+                    // This is why we now look in the index.
                     match self
                         .finalized_state
                         .get_block_hash(types::Height(height))
@@ -794,6 +796,7 @@ impl<Source: BlockchainSource> ChainIndex for NodeBackedChainIndexSubscriber<Sou
                                         .ok_or(ChainIndexError::database_hole(block.hash()))
                                 }
                                 None => self
+                                    // usually getting by height is not reorg-safe, but here, height is known to be below or equal to validator_finalized_height.
                                     .get_fullblock_bytes_from_node(HashOrHeight::Height(
                                         zebra_chain::block::Height(height),
                                     ))
