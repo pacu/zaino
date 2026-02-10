@@ -585,14 +585,17 @@ impl<Source: BlockchainSource> NodeBackedChainIndexSubscriber<Source> {
         snapshot: &NonfinalizedBlockCacheSnapshot,
         hash: types::BlockHash,
     ) -> Result<Option<types::Height>, ChainIndexError> {
+        // ChainIndex step 2:
         match snapshot.blocks.get(&hash).cloned() {
             Some(block) => Ok(snapshot
+                // ChainIndex step 3:
                 .heights_to_hashes
                 .values()
                 .find(|h| **h == hash)
                 // Canonical height is None for blocks not on the best chain
                 .map(|_| block.index().height())),
             None => self
+                // ChainIndex step 4:
                 .finalized_state
                 .get_block_height(hash)
                 .await
@@ -648,6 +651,7 @@ impl<Source: BlockchainSource> NodeBackedChainIndexSubscriber<Source> {
         snapshot: &NonfinalizedBlockCacheSnapshot,
         hash: types::BlockHash,
     ) -> Result<Option<types::Height>, ChainIndexError> {
+        //ChainIndex step 5:
         match self
             .blockchain_source
             .get_block(HashOrHeight::Hash(hash.into()))
@@ -726,9 +730,14 @@ impl<Source: BlockchainSource> ChainIndex for NodeBackedChainIndexSubscriber<Sou
         snapshot: &Self::Snapshot,
         hash: types::BlockHash,
     ) -> Result<Option<types::Height>, Self::Error> {
+        // ChainIndex step 1: Skip
+        // mempool blocks have no canon height
+        // todo: possible efficiency boost by checking mempool for a negative?
+
+        // ChainIndex steps 2-4:
         match self.get_indexed_block_height(snapshot, hash).await? {
             Some(h) => Ok(Some(h)),
-            None => self.get_block_height_passthrough(snapshot, hash).await,
+            None => self.get_block_height_passthrough(snapshot, hash).await, // ChainIndex step 5
         }
     }
 
@@ -744,6 +753,9 @@ impl<Source: BlockchainSource> ChainIndex for NodeBackedChainIndexSubscriber<Sou
         start: types::Height,
         end: std::option::Option<types::Height>,
     ) -> Option<impl Stream<Item = Result<Vec<u8>, Self::Error>>> {
+        // ChainIndex step 1: Skip
+        // mempool blocks have no canon height
+
         // We can serve blocks above where the validator has finalized
         // only if we have those blocks in our nonfinalized snapshot
         let max_servable_height = snapshot
@@ -807,10 +819,16 @@ impl<Source: BlockchainSource> ChainIndex for NodeBackedChainIndexSubscriber<Sou
         snapshot: &Self::Snapshot,
         hash: &types::BlockHash,
     ) -> Result<Option<(types::BlockHash, types::Height)>, Self::Error> {
+        // ChainIndex step 1: Skip
+        // mempool blocks have no canon height, guaranteed to return None
+        // todo: possible efficiency boost by checking mempool for a negative?
+
+        // ChainIndex step 2:
         match snapshot.as_ref().get_chainblock_by_hash(hash) {
             Some(block) => {
                 // At this point, we know that
                 // The block is non-FINALIZED in the INDEXER
+                // ChainIndex step 3:
                 if snapshot.heights_to_hashes.get(&block.height()) == Some(block.hash()) {
                     // The block is in the best chain.
                     Ok(Some((*block.hash(), block.height())))
@@ -824,6 +842,7 @@ impl<Source: BlockchainSource> ChainIndex for NodeBackedChainIndexSubscriber<Sou
             None => {
                 // At this point, we know that
                 // the block is NOT non-FINALIZED in the INDEXER.
+                // ChainIndex step 4
                 match self.finalized_state.get_block_height(*hash).await {
                     Ok(Some(height)) => {
                         // the block is FINALIZED in the INDEXER
@@ -836,6 +855,7 @@ impl<Source: BlockchainSource> ChainIndex for NodeBackedChainIndexSubscriber<Sou
                         // (NEITHER is it non-FINALIZED in the INDEXER)
 
                         // Now, we ask the VALIDATOR.
+                        // ChainIndex step 5
                         match self
                             .blockchain_source
                             .get_block(HashOrHeight::Hash(zebra_chain::block::Hash::from(*hash)))
@@ -907,6 +927,7 @@ impl<Source: BlockchainSource> ChainIndex for NodeBackedChainIndexSubscriber<Sou
         snapshot: &Self::Snapshot,
         txid: &types::TransactionHash,
     ) -> Result<Option<(Vec<u8>, Option<u32>)>, Self::Error> {
+        // ChainIndex step 1
         if let Some(mempool_tx) = self
             .mempool
             .get_transaction(&mempool::MempoolKey {
