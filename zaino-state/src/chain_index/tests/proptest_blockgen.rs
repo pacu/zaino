@@ -216,17 +216,13 @@ fn passthrough_get_raw_transaction() {
                     )
                     .await
                     .unwrap();
-                if height.0 <= snapshot.validator_finalized_height.0 {
-                    let Some((raw_transaction, _branch_id)) = actual_transaction else {
-                        panic!("missing transaction at height {}", height.0)
-                    };
-                    assert_eq!(
-                        raw_transaction,
-                        SerializedTransaction::from(expected_transaction.clone()).as_ref()
-                    )
-                } else {
-                    assert!(actual_transaction.is_none())
-                }
+                let Some((raw_transaction, _branch_id)) = actual_transaction else {
+                    panic!("missing transaction at height {}", height.0)
+                };
+                assert_eq!(
+                    raw_transaction,
+                    SerializedTransaction::from(expected_transaction.clone()).as_ref()
+                )
             })
         }
         while let Some(_success) = parallel.next().await {}

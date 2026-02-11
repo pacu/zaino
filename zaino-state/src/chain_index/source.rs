@@ -29,7 +29,7 @@ macro_rules! expected_read_response {
 /// A trait for accessing blockchain data from different backends.
 #[async_trait]
 pub trait BlockchainSource: Clone + Send + Sync + 'static {
-    /// Returns the block by hash or height
+    /// Returns a best-chain block by hash or height
     async fn get_block(
         &self,
         id: HashOrHeight,
@@ -444,18 +444,30 @@ impl BlockchainSource for ValidatorConnector {
 
                 let response = read_state_service
                     .ready()
-                    .and_then(|svc| svc.call(zebra_state::ReadRequest::Transaction(zebra_txid)))
+                    .and_then(|svc| {
+                        svc.call(zebra_state::ReadRequest::AnyChainTransaction(zebra_txid))
+                    })
                     .await
                     .map_err(|e| {
                         BlockchainSourceError::Unrecoverable(format!("state read failed: {e}"))
                     })?;
 
-                if let zebra_state::ReadResponse::Transaction(opt) = response {
-                    if let Some(mined_tx) = opt {
-                        return Ok(Some((
-                            (mined_tx).tx.clone(),
-                            GetTransactionLocation::BestChain(mined_tx.height),
-                        )));
+                if let zebra_state::ReadResponse::AnyChainTransaction(opt) = response {
+                    if let Some(any_chain_tx) = opt {
+                        match any_chain_tx {
+                            zebra_state::AnyTx::Mined(mined_tx) => {
+                                return Ok(Some((
+                                    (mined_tx).tx.clone(),
+                                    GetTransactionLocation::BestChain(mined_tx.height),
+                                )))
+                            }
+                            zebra_state::AnyTx::Side((transaction, _block_hash)) => {
+                                return Ok(Some((
+                                    transaction,
+                                    GetTransactionLocation::NonbestChain,
+                                )))
+                            }
+                        }
                     }
                 } else {
                     unreachable!("unmatched response to a `Transaction` read request");
