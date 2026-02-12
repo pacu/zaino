@@ -568,7 +568,7 @@ impl<Source: BlockchainSource> NodeBackedChainIndexSubscriber<Source> {
         &self,
         id: HashOrHeight,
     ) -> Result<Option<Vec<u8>>, ChainIndexError> {
-        self.blockchain_source
+        self.source()
             .get_block(id)
             .await
             .map_err(ChainIndexError::backing_validator)?
@@ -648,7 +648,7 @@ impl<Source: BlockchainSource> NodeBackedChainIndexSubscriber<Source> {
         hash: types::BlockHash,
     ) -> Result<Option<types::Height>, ChainIndexError> {
         match self
-            .blockchain_source
+            .source()
             .get_block(HashOrHeight::Hash(hash.into()))
             .await
         {
@@ -836,7 +836,7 @@ impl<Source: BlockchainSource> ChainIndex for NodeBackedChainIndexSubscriber<Sou
 
                         // Now, we ask the VALIDATOR.
                         match self
-                            .blockchain_source
+                            .source()
                             .get_block(HashOrHeight::Hash(zebra_chain::block::Hash::from(*hash)))
                             .await
                         {
@@ -920,7 +920,7 @@ impl<Source: BlockchainSource> ChainIndex for NodeBackedChainIndexSubscriber<Sou
         }
 
         let Some((transaction, location)) = self
-            .blockchain_source
+            .source()
             .get_transaction(*txid)
             .await
             .map_err(|e| ChainIndexError::backing_validator(e))?
@@ -1039,7 +1039,7 @@ impl<Source: BlockchainSource> ChainIndex for NodeBackedChainIndexSubscriber<Sou
         // try passthrough
         if best_chain_block == None {
             if let Some((_transaction, location)) = self
-                .blockchain_source
+                .source()
                 .get_transaction(*txid)
                 .await
                 .map_err(|e| ChainIndexError::backing_validator(e))?
@@ -1047,7 +1047,7 @@ impl<Source: BlockchainSource> ChainIndex for NodeBackedChainIndexSubscriber<Sou
                 if let GetTransactionLocation::BestChain(height) = location {
                     if height <= snapshot.validator_finalized_height {
                         if let Some(block) = self
-                            .blockchain_source
+                            .source()
                             .get_block(HashOrHeight::Height(height))
                             .await
                             .map_err(|e| ChainIndexError::backing_validator(e))?
