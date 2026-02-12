@@ -547,6 +547,9 @@ pub struct NodeBackedChainIndexSubscriber<Source: BlockchainSource = ValidatorCo
 }
 
 impl<Source: BlockchainSource> NodeBackedChainIndexSubscriber<Source> {
+    fn source(&self) -> &Source {
+        &self.non_finalized_state.source
+    }
     /// Displays the status of the chain_index
     pub fn status(&self) -> StatusType {
         let finalized_status = self.finalized_state.status();
@@ -736,7 +739,7 @@ impl<Source: BlockchainSource> ChainIndex for NodeBackedChainIndexSubscriber<Sou
         // NOTE: Should this check blockhash exists in snapshot and db before proxying call?
         hash: &types::BlockHash,
     ) -> Result<(Option<Vec<u8>>, Option<Vec<u8>>), Self::Error> {
-        match self.blockchain_source.get_treestate(*hash).await {
+        match self.source().get_treestate(*hash).await {
             Ok(resp) => Ok(resp),
             Err(e) => Err(ChainIndexError {
                 kind: ChainIndexErrorKind::InternalServerError,
