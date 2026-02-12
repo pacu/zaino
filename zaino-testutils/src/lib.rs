@@ -78,7 +78,7 @@ pub async fn poll_until_ready(
         let mut interval = tokio::time::interval(poll_interval);
         loop {
             interval.tick().await;
-            if dbg!(component.is_ready()) {
+            if component.is_ready() {
                 return;
             }
         }
@@ -241,13 +241,15 @@ impl ValidatorExt for Zebrad {
     ) -> Result<(Self, ValidatorConfig), LaunchError> {
         let zebrad = Zebrad::launch(config).await?;
         let validator_config = ValidatorConfig {
-            validator_jsonrpc_listen_address: SocketAddr::new(
-                IpAddr::V4(Ipv4Addr::LOCALHOST),
-                zebrad.rpc_listen_port(),
+            validator_jsonrpc_listen_address: format!(
+                "{}:{}",
+                Ipv4Addr::LOCALHOST,
+                zebrad.rpc_listen_port()
             ),
-            validator_grpc_listen_address: Some(SocketAddr::new(
-                IpAddr::V4(Ipv4Addr::LOCALHOST),
-                zebrad.indexer_listen_port(),
+            validator_grpc_listen_address: Some(format!(
+                "{}:{}",
+                Ipv4Addr::LOCALHOST,
+                zebrad.indexer_listen_port()
             )),
             validator_cookie_path: None,
             validator_user: Some("xxxxxx".to_string()),
@@ -263,10 +265,7 @@ impl ValidatorExt for Zcashd {
     ) -> Result<(Self, ValidatorConfig), LaunchError> {
         let zcashd = Zcashd::launch(config).await?;
         let validator_config = ValidatorConfig {
-            validator_jsonrpc_listen_address: SocketAddr::new(
-                IpAddr::V4(Ipv4Addr::LOCALHOST),
-                zcashd.port(),
-            ),
+            validator_jsonrpc_listen_address: format!("{}:{}", Ipv4Addr::LOCALHOST, zcashd.port()),
             validator_grpc_listen_address: None,
             validator_cookie_path: None,
             validator_user: Some("xxxxxx".to_string()),
@@ -280,7 +279,7 @@ impl<C, Service> TestManager<C, Service>
 where
     C: ValidatorExt,
     Service: LightWalletService + Send + Sync + 'static,
-    Service::Config: From<ZainodConfig>,
+    Service::Config: TryFrom<ZainodConfig, Error = IndexerError>,
     IndexerError: From<<<Service as ZcashService>::Subscriber as ZcashIndexer>::Error>,
 {
     /// Launches zcash-local-net<Empty, Validator>.
@@ -402,7 +401,8 @@ where
             };
 
             let (handle, service_subscriber) = Indexer::<Service>::launch_inner(
-                Service::Config::from(indexer_config.clone()),
+                Service::Config::try_from(indexer_config.clone())
+                    .expect("Failed to convert ZainodConfig to service config"),
                 indexer_config,
             )
             .await
@@ -462,6 +462,8 @@ where
             full_node_rpc_listen_address,
             full_node_grpc_listen_address: validator_settings
                 .validator_grpc_listen_address
+                .as_ref()
+                .and_then(|addr| addr.parse().ok())
                 .unwrap_or(SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), 0)),
             zaino_handle,
             zaino_json_rpc_listen_address: zaino_json_listen_address,

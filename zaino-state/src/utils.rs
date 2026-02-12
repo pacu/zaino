@@ -1,10 +1,6 @@
 //! Contains utility funcitonality for Zaino-State.
-
 use std::fmt;
-
-use zaino_proto::proto::service::BlockId;
-use zebra_chain::{block::Height, parameters::Network};
-use zebra_state::HashOrHeight;
+use zebra_chain::parameters::Network;
 
 // *** Metadata structs ***
 
@@ -116,42 +112,4 @@ impl fmt::Display for ServiceMetadata {
         writeln!(f, "Zebra Build: {}", self.zebra_build)?;
         writeln!(f, "Zebra Subversion: {}", self.zebra_subversion)
     }
-}
-
-// *** Data transforms ***
-
-pub(crate) fn blockid_to_hashorheight(block_id: BlockId) -> Option<HashOrHeight> {
-    <[u8; 32]>::try_from(block_id.hash)
-        .map(zebra_chain::block::Hash)
-        .map(HashOrHeight::from)
-        .or_else(|_| {
-            block_id
-                .height
-                .try_into()
-                .map(|height| HashOrHeight::Height(Height(height)))
-        })
-        .ok()
-}
-
-/// Strips the ouputs and from all transactions, retains only
-/// the nullifier from all orcard actions, and clears the chain
-/// metadata from the block
-pub(crate) fn compact_block_to_nullifiers(
-    mut block: zaino_proto::proto::compact_formats::CompactBlock,
-) -> zaino_proto::proto::compact_formats::CompactBlock {
-    for ctransaction in &mut block.vtx {
-        ctransaction.outputs = Vec::new();
-        for caction in &mut ctransaction.actions {
-            *caction = zaino_proto::proto::compact_formats::CompactOrchardAction {
-                nullifier: caction.nullifier.clone(),
-                ..Default::default()
-            }
-        }
-    }
-
-    block.chain_metadata = Some(zaino_proto::proto::compact_formats::ChainMetadata {
-        sapling_commitment_tree_size: 0,
-        orchard_commitment_tree_size: 0,
-    });
-    block
 }
