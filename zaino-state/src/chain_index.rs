@@ -436,7 +436,6 @@ impl<Source: BlockchainSource> NodeBackedChainIndex<Source> {
     /// a clone-safe, drop-safe, read-only view onto the running indexer.
     pub async fn subscriber(&self) -> NodeBackedChainIndexSubscriber<Source> {
         NodeBackedChainIndexSubscriber {
-            blockchain_source: self.blockchain_source.as_ref().clone(),
             mempool: self.mempool.subscriber(),
             non_finalized_state: self.non_finalized_state.clone(),
             finalized_state: self.finalized_db.to_reader(),
@@ -539,7 +538,6 @@ impl<Source: BlockchainSource> NodeBackedChainIndex<Source> {
 /// [`NodeBackedChainIndexSubscriber`] can safely be cloned and dropped freely.
 #[derive(Clone)]
 pub struct NodeBackedChainIndexSubscriber<Source: BlockchainSource = ValidatorConnector> {
-    blockchain_source: Source,
     mempool: mempool::MempoolSubscriber,
     non_finalized_state: std::sync::Arc<crate::NonFinalizedState<Source>>,
     finalized_state: finalised_state::reader::DbReader,
