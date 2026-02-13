@@ -441,7 +441,6 @@ pub trait ChainIndex {
 /// - Snapshot-based consistency for queries
 #[derive(Debug)]
 pub struct NodeBackedChainIndex<Source: BlockchainSource = ValidatorConnector> {
-    blockchain_source: std::sync::Arc<Source>,
     #[allow(dead_code)]
     mempool: std::sync::Arc<mempool::Mempool<Source>>,
     non_finalized_state: std::sync::Arc<crate::NonFinalizedState<Source>>,
@@ -480,7 +479,6 @@ impl<Source: BlockchainSource> NodeBackedChainIndex<Source> {
         .await?;
 
         let mut chain_index = Self {
-            blockchain_source: Arc::new(source),
             mempool: std::sync::Arc::new(mempool_state),
             non_finalized_state: std::sync::Arc::new(non_finalized_state),
             finalized_db,
@@ -496,7 +494,6 @@ impl<Source: BlockchainSource> NodeBackedChainIndex<Source> {
     /// a clone-safe, drop-safe, read-only view onto the running indexer.
     pub fn subscriber(&self) -> NodeBackedChainIndexSubscriber<Source> {
         NodeBackedChainIndexSubscriber {
-            blockchain_source: self.blockchain_source.as_ref().clone(),
             mempool: self.mempool.subscriber(),
             non_finalized_state: self.non_finalized_state.clone(),
             finalized_state: self.finalized_db.to_reader(),
@@ -606,7 +603,6 @@ impl<Source: BlockchainSource> NodeBackedChainIndex<Source> {
 /// [`NodeBackedChainIndexSubscriber`] can safely be cloned and dropped freely.
 #[derive(Clone, Debug)]
 pub struct NodeBackedChainIndexSubscriber<Source: BlockchainSource = ValidatorConnector> {
-    blockchain_source: Source,
     mempool: mempool::MempoolSubscriber,
     non_finalized_state: std::sync::Arc<crate::NonFinalizedState<Source>>,
     finalized_state: finalised_state::reader::DbReader,
@@ -614,6 +610,11 @@ pub struct NodeBackedChainIndexSubscriber<Source: BlockchainSource = ValidatorCo
 }
 
 impl<Source: BlockchainSource> NodeBackedChainIndexSubscriber<Source> {
+
+    fn source(&self) -> &Source {
+        &self.non_finalized_state.source
+    }
+  
     /// Returns the combined status of all chain index components.
     pub fn combined_status(&self) -> StatusType {
         let finalized_status = self.finalized_state.status();
@@ -1014,7 +1015,7 @@ impl<Source: BlockchainSource> ChainIndex for NodeBackedChainIndexSubscriber<Sou
         // NOTE: Should this check blockhash exists in snapshot and db before proxying call?
         hash: &types::BlockHash,
     ) -> Result<(Option<Vec<u8>>, Option<Vec<u8>>), Self::Error> {
-        match self.blockchain_source.get_treestate(*hash).await {
+        match self.source().get_treestate(*hash).await {
             Ok(resp) => Ok(resp),
             Err(e) => Err(ChainIndexError {
                 kind: ChainIndexErrorKind::InternalServerError,
