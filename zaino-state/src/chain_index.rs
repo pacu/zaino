@@ -923,7 +923,7 @@ impl<Source: BlockchainSource> ChainIndex for NodeBackedChainIndexSubscriber<Sou
             .source()
             .get_transaction(*txid)
             .await
-            .map_err(|e| ChainIndexError::backing_validator(e))?
+            .map_err(ChainIndexError::backing_validator)?
         else {
             return Ok(None);
         };
@@ -1037,12 +1037,12 @@ impl<Source: BlockchainSource> ChainIndex for NodeBackedChainIndexSubscriber<Sou
 
         // If we haven't found a block on the best chain,
         // try passthrough
-        if best_chain_block == None {
+        if best_chain_block.is_none() {
             if let Some((_transaction, location)) = self
                 .source()
                 .get_transaction(*txid)
                 .await
-                .map_err(|e| ChainIndexError::backing_validator(e))?
+                .map_err(ChainIndexError::backing_validator)?
             {
                 if let GetTransactionLocation::BestChain(height) = location {
                     if height <= snapshot.validator_finalized_height {
@@ -1050,7 +1050,7 @@ impl<Source: BlockchainSource> ChainIndex for NodeBackedChainIndexSubscriber<Sou
                             .source()
                             .get_block(HashOrHeight::Height(height))
                             .await
-                            .map_err(|e| ChainIndexError::backing_validator(e))?
+                            .map_err(ChainIndexError::backing_validator)?
                         {
                             best_chain_block =
                                 Some(BestChainLocation::Block(block.hash().into(), height.into()));

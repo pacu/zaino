@@ -599,7 +599,7 @@ impl ChainIndexError {
     pub(crate) fn validator_data_error_block_coinbase_height_missing() -> Self {
         Self {
             kind: ChainIndexErrorKind::InternalServerError,
-            message: format!("validator error: data error: block.coinbase_height() returned None"),
+            message: "validator error: data error: block.coinbase_height() returned None".to_string(),
             source: None,
         }
     }
