@@ -386,7 +386,6 @@ pub trait ChainIndex {
 /// - Automatic synchronization between state layers
 /// - Snapshot-based consistency for queries
 pub struct NodeBackedChainIndex<Source: BlockchainSource = ValidatorConnector> {
-    blockchain_source: std::sync::Arc<Source>,
     #[allow(dead_code)]
     mempool: std::sync::Arc<mempool::Mempool<Source>>,
     non_finalized_state: std::sync::Arc<crate::NonFinalizedState<Source>>,
@@ -425,7 +424,6 @@ impl<Source: BlockchainSource> NodeBackedChainIndex<Source> {
         .await?;
 
         let mut chain_index = Self {
-            blockchain_source: Arc::new(source),
             mempool: std::sync::Arc::new(mempool_state),
             non_finalized_state: std::sync::Arc::new(non_finalized_state),
             finalized_db,
@@ -441,7 +439,6 @@ impl<Source: BlockchainSource> NodeBackedChainIndex<Source> {
     /// a clone-safe, drop-safe, read-only view onto the running indexer.
     pub async fn subscriber(&self) -> NodeBackedChainIndexSubscriber<Source> {
         NodeBackedChainIndexSubscriber {
-            blockchain_source: self.blockchain_source.as_ref().clone(),
             mempool: self.mempool.subscriber(),
             non_finalized_state: self.non_finalized_state.clone(),
             finalized_state: self.finalized_db.to_reader(),
@@ -544,7 +541,6 @@ impl<Source: BlockchainSource> NodeBackedChainIndex<Source> {
 /// [`NodeBackedChainIndexSubscriber`] can safely be cloned and dropped freely.
 #[derive(Clone)]
 pub struct NodeBackedChainIndexSubscriber<Source: BlockchainSource = ValidatorConnector> {
-    blockchain_source: Source,
     mempool: mempool::MempoolSubscriber,
     non_finalized_state: std::sync::Arc<crate::NonFinalizedState<Source>>,
     finalized_state: finalised_state::reader::DbReader,
@@ -552,6 +548,9 @@ pub struct NodeBackedChainIndexSubscriber<Source: BlockchainSource = ValidatorCo
 }
 
 impl<Source: BlockchainSource> NodeBackedChainIndexSubscriber<Source> {
+    fn source(&self) -> &Source {
+        &self.non_finalized_state.source
+    }
     /// Displays the status of the chain_index
     pub fn status(&self) -> StatusType {
         let finalized_status = self.finalized_state.status();
@@ -569,7 +568,7 @@ impl<Source: BlockchainSource> NodeBackedChainIndexSubscriber<Source> {
         &self,
         id: HashOrHeight,
     ) -> Result<Option<Vec<u8>>, ChainIndexError> {
-        self.blockchain_source
+        self.source()
             .get_block(id)
             .await
             .map_err(ChainIndexError::backing_validator)?
@@ -649,7 +648,7 @@ impl<Source: BlockchainSource> NodeBackedChainIndexSubscriber<Source> {
         hash: types::BlockHash,
     ) -> Result<Option<types::Height>, ChainIndexError> {
         match self
-            .blockchain_source
+            .source()
             .get_block(HashOrHeight::Hash(hash.into()))
             .await
         {
@@ -837,7 +836,7 @@ impl<Source: BlockchainSource> ChainIndex for NodeBackedChainIndexSubscriber<Sou
 
                         // Now, we ask the VALIDATOR.
                         match self
-                            .blockchain_source
+                            .source()
                             .get_block(HashOrHeight::Hash(zebra_chain::block::Hash::from(*hash)))
                             .await
                         {
@@ -889,7 +888,7 @@ impl<Source: BlockchainSource> ChainIndex for NodeBackedChainIndexSubscriber<Sou
         // even if the target block is non-finalized
         hash: &types::BlockHash,
     ) -> Result<(Option<Vec<u8>>, Option<Vec<u8>>), Self::Error> {
-        match self.blockchain_source.get_treestate(*hash).await {
+        match self.source().get_treestate(*hash).await {
             Ok(resp) => Ok(resp),
             Err(e) => Err(ChainIndexError {
                 kind: ChainIndexErrorKind::InternalServerError,
@@ -921,7 +920,7 @@ impl<Source: BlockchainSource> ChainIndex for NodeBackedChainIndexSubscriber<Sou
         }
 
         let Some((transaction, location)) = self
-            .blockchain_source
+            .source()
             .get_transaction(*txid)
             .await
             .map_err(|e| ChainIndexError::backing_validator(e))?
@@ -1040,7 +1039,7 @@ impl<Source: BlockchainSource> ChainIndex for NodeBackedChainIndexSubscriber<Sou
         // try passthrough
         if best_chain_block == None {
             if let Some((_transaction, location)) = self
-                .blockchain_source
+                .source()
                 .get_transaction(*txid)
                 .await
                 .map_err(|e| ChainIndexError::backing_validator(e))?
@@ -1048,7 +1047,7 @@ impl<Source: BlockchainSource> ChainIndex for NodeBackedChainIndexSubscriber<Sou
                 if let GetTransactionLocation::BestChain(height) = location {
                     if height <= snapshot.validator_finalized_height {
                         if let Some(block) = self
-                            .blockchain_source
+                            .source()
                             .get_block(HashOrHeight::Height(height))
                             .await
                             .map_err(|e| ChainIndexError::backing_validator(e))?
