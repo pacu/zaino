@@ -18,7 +18,8 @@ use tracing::info;
 use tracing_subscriber::EnvFilter;
 use zaino_common::{
     network::{ActivationHeights, ZEBRAD_DEFAULT_ACTIVATION_HEIGHTS},
-    probing::Readiness,
+    probing::{Liveness, Readiness},
+    status::Status,
     validator::ValidatorConfig,
     CacheConfig, DatabaseConfig, Network, ServiceConfig, StorageConfig,
 };
@@ -537,31 +538,52 @@ where
     }
 
     /// Generate `n` blocks for the local network and poll zaino's fetch/state subscriber until the chain index is synced to the target height.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the indexer is not live (Offline or CriticalError), indicating the
+    /// backing validator has crashed or become unreachable.
     pub async fn generate_blocks_and_poll_indexer<I>(
         &self,
         n: u32,
         indexer: &I,
     ) where
-        I: LightWalletIndexer + Readiness,
+        I: LightWalletIndexer + Liveness + Status,
     {
         let chain_height = self.local_net.get_chain_height().await;
+        let target_height = u64::from(chain_height) + n as u64;
         let mut next_block_height = u64::from(chain_height) + 1;
         let mut interval = tokio::time::interval(std::time::Duration::from_millis(200));
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         interval.tick().await;
+
         // NOTE: readstate service seems to not be functioning correctly when generate multiple blocks at once and polling the latest block.
         // commented out a fall back to `get_block` to query the cache directly if needed in the future.
         // while indexer.get_block(zaino_proto::proto::service::BlockId {
         //     height: u64::from(chain_height) + n as u64,
         //     hash: vec![],
         // }).await.is_err()
-        while indexer.get_latest_block().await.unwrap().height < u64::from(chain_height) + n as u64
-        {
+        while indexer.get_latest_block().await.unwrap().height < target_height {
+            // Check liveness - fail fast if the indexer is dead
+            if !indexer.is_live() {
+                let status = indexer.status();
+                panic!(
+                    "Indexer is not live (status: {status:?}). \
+                     The backing validator may have crashed or become unreachable."
+                );
+            }
+
             if n == 0 {
                 interval.tick().await;
             } else {
                 self.local_net.generate_blocks(1).await.unwrap();
                 while indexer.get_latest_block().await.unwrap().height != next_block_height {
+                    if !indexer.is_live() {
+                        let status = indexer.status();
+                        panic!(
+                            "Indexer is not live while waiting for block {next_block_height} (status: {status:?})."
+                        );
+                    }
                     interval.tick().await;
                 }
                 next_block_height += 1;
@@ -588,6 +610,11 @@ where
     }
 
     /// Generate `n` blocks for the local network and poll zaino's chain index until the chain index is synced to the target height.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the chain index is not live (Offline or CriticalError), indicating the
+    /// backing validator has crashed or become unreachable.
     pub async fn generate_blocks_and_poll_chain_index(
         &self,
         n: u32,
@@ -605,6 +632,15 @@ where
                 .height,
         ) < chain_height + n
         {
+            // Check liveness - fail fast if the chain index is dead
+            if !chain_index.is_live() {
+                let status = chain_index.combined_status();
+                panic!(
+                    "Chain index is not live (status: {status:?}). \
+                     The backing validator may have crashed or become unreachable."
+                );
+            }
+
             if n == 0 {
                 interval.tick().await;
             } else {
@@ -616,6 +652,12 @@ where
                         .height,
                 ) != next_block_height
                 {
+                    if !chain_index.is_live() {
+                        let status = chain_index.combined_status();
+                        panic!(
+                            "Chain index is not live while waiting for block {next_block_height} (status: {status:?})."
+                        );
+                    }
                     interval.tick().await;
                 }
                 next_block_height += 1;
