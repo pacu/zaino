@@ -1038,23 +1038,21 @@ impl<Source: BlockchainSource> ChainIndex for NodeBackedChainIndexSubscriber<Sou
         // If we haven't found a block on the best chain,
         // try passthrough
         if best_chain_block.is_none() {
-            if let Some((_transaction, location)) = self
+            if let Some((_transaction, GetTransactionLocation::BestChain(height))) = self
                 .source()
                 .get_transaction(*txid)
                 .await
                 .map_err(ChainIndexError::backing_validator)?
             {
-                if let GetTransactionLocation::BestChain(height) = location {
-                    if height <= snapshot.validator_finalized_height {
-                        if let Some(block) = self
-                            .source()
-                            .get_block(HashOrHeight::Height(height))
-                            .await
-                            .map_err(ChainIndexError::backing_validator)?
-                        {
-                            best_chain_block =
-                                Some(BestChainLocation::Block(block.hash().into(), height.into()));
-                        }
+                if height <= snapshot.validator_finalized_height {
+                    if let Some(block) = self
+                        .source()
+                        .get_block(HashOrHeight::Height(height))
+                        .await
+                        .map_err(ChainIndexError::backing_validator)?
+                    {
+                        best_chain_block =
+                            Some(BestChainLocation::Block(block.hash().into(), height.into()));
                     }
                 }
             }
