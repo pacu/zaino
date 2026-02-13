@@ -15,7 +15,7 @@ use crate::chain_index::non_finalised_state::BestTip;
 use crate::chain_index::types::db::metadata::MempoolInfo;
 use crate::chain_index::types::{BestChainLocation, NonBestChainLocation};
 use crate::error::{ChainIndexError, ChainIndexErrorKind, FinalisedStateError};
-use crate::local_cache::compact_block_with_pool_types;
+use crate::status::Status;
 use crate::{AtomicStatus, CompactBlockStream, StatusType, SyncError};
 use crate::{IndexedBlock, TransactionHash};
 use std::collections::HashSet;
@@ -27,7 +27,7 @@ use non_finalised_state::NonfinalizedBlockCacheSnapshot;
 use source::{BlockchainSource, ValidatorConnector};
 use tokio_stream::StreamExt;
 use tracing::info;
-use zaino_proto::proto::utils::PoolTypeFilter;
+use zaino_proto::proto::utils::{compact_block_with_pool_types, PoolTypeFilter};
 use zebra_chain::parameters::ConsensusBranchId;
 pub use zebra_chain::parameters::Network as ZebraNetwork;
 use zebra_chain::serialization::ZcashSerialize;
@@ -533,61 +533,68 @@ impl<Source: BlockchainSource> NodeBackedChainIndex<Source> {
         let fs = self.finalized_db.clone();
         let status = self.status.clone();
         tokio::task::spawn(async move {
-            loop {
-                if status.load() == StatusType::Closing {
-                    break;
-                }
-                let handle_error = |e| {
-                    tracing::error!("Sync failure: {e:?}. Shutting down.");
-                    status.store(StatusType::CriticalError);
-                    e
-                };
-
-                status.store(StatusType::Syncing);
-                // Sync nfs to chain tip, trimming blocks to finalized tip.
-                nfs.sync(fs.clone()).await.map_err(handle_error)?;
-
-                // Sync fs to chain tip - 100.
-                {
-                    let snapshot = nfs.get_snapshot();
-                    while snapshot.best_tip.height.0
-                        > (fs
-                            .to_reader()
-                            .db_height()
-                            .await
-                            .map_err(|_e| handle_error(SyncError::CannotReadFinalizedState))?
-                            .unwrap_or(types::Height(0))
-                            .0
-                            + 100)
-                    {
-                        let next_finalized_height = fs
-                            .to_reader()
-                            .db_height()
-                            .await
-                            .map_err(|_e| handle_error(SyncError::CannotReadFinalizedState))?
-                            .map(|height| height + 1)
-                            .unwrap_or(types::Height(0));
-                        let next_finalized_block = snapshot
-                            .blocks
-                            .get(
-                                snapshot
-                                    .heights_to_hashes
-                                    .get(&(next_finalized_height))
-                                    .ok_or(SyncError::CompetingSyncProcess)?,
-                            )
-                            .ok_or_else(|| handle_error(SyncError::CompetingSyncProcess))?;
-                        // TODO: Handle write errors better (fix db and continue)
-                        fs.write_block(next_finalized_block.clone())
-                            .await
-                            .map_err(|_e| handle_error(SyncError::CompetingSyncProcess))?;
+            let result: Result<(), SyncError> = async {
+                loop {
+                    if status.load() == StatusType::Closing {
+                        break;
                     }
+
+                    status.store(StatusType::Syncing);
+                    // Sync nfs to chain tip, trimming blocks to finalized tip.
+                    nfs.sync(fs.clone()).await?;
+
+                    // Sync fs to chain tip - 100.
+                    {
+                        let snapshot = nfs.get_snapshot();
+                        while snapshot.best_tip.height.0
+                            > (fs
+                                .to_reader()
+                                .db_height()
+                                .await
+                                .map_err(|_e| SyncError::CannotReadFinalizedState)?
+                                .unwrap_or(types::Height(0))
+                                .0
+                                + 100)
+                        {
+                            let next_finalized_height = fs
+                                .to_reader()
+                                .db_height()
+                                .await
+                                .map_err(|_e| SyncError::CannotReadFinalizedState)?
+                                .map(|height| height + 1)
+                                .unwrap_or(types::Height(0));
+                            let next_finalized_block = snapshot
+                                .blocks
+                                .get(
+                                    snapshot
+                                        .heights_to_hashes
+                                        .get(&(next_finalized_height))
+                                        .ok_or(SyncError::CompetingSyncProcess)?,
+                                )
+                                .ok_or(SyncError::CompetingSyncProcess)?;
+                            // TODO: Handle write errors better (fix db and continue)
+                            fs.write_block(next_finalized_block.clone())
+                                .await
+                                .map_err(|_e| SyncError::CompetingSyncProcess)?;
+                        }
+                    }
+                    status.store(StatusType::Ready);
+                    // TODO: configure sleep duration?
+                    tokio::time::sleep(Duration::from_millis(500)).await
+                    // TODO: Check for shutdown signal.
                 }
-                status.store(StatusType::Ready);
-                // TODO: configure sleep duration?
-                tokio::time::sleep(Duration::from_millis(500)).await
-                // TODO: Check for shutdown signal.
+                Ok(())
             }
-            Ok(())
+            .await;
+
+            // If the sync loop exited unexpectedly with an error, set CriticalError
+            // so that liveness checks can detect the failure.
+            if let Err(ref e) = result {
+                tracing::error!("Sync loop exited with error: {e:?}");
+                status.store(StatusType::CriticalError);
+            }
+
+            result
         })
     }
 }
@@ -607,8 +614,8 @@ pub struct NodeBackedChainIndexSubscriber<Source: BlockchainSource = ValidatorCo
 }
 
 impl<Source: BlockchainSource> NodeBackedChainIndexSubscriber<Source> {
-    /// Displays the status of the chain_index
-    pub fn status(&self) -> StatusType {
+    /// Returns the combined status of all chain index components.
+    pub fn combined_status(&self) -> StatusType {
         let finalized_status = self.finalized_state.status();
         let mempool_status = self.mempool.status();
         let combined_status = self
@@ -677,6 +684,12 @@ impl<Source: BlockchainSource> NodeBackedChainIndexSubscriber<Source> {
             });
         Ok(finalized_blocks_containing_transaction
             .chain(non_finalized_blocks_containing_transaction))
+    }
+}
+
+impl<Source: BlockchainSource> Status for NodeBackedChainIndexSubscriber<Source> {
+    fn status(&self) -> StatusType {
+        self.combined_status()
     }
 }
 

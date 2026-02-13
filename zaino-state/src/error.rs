@@ -11,7 +11,7 @@ use zaino_fetch::jsonrpsee::connector::RpcRequestError;
 use zaino_proto::proto::utils::GetBlockRangeError;
 
 /// Errors related to the `StateService`.
-#[deprecated]
+// #[deprecated]
 #[derive(Debug, thiserror::Error)]
 pub enum StateServiceError {
     /// An rpc-specific error we haven't accounted for

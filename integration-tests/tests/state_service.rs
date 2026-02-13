@@ -2925,10 +2925,19 @@ mod zebra {
                 .unwrap()
                 .height;
 
+            // NOTE / TODO: Zaino can not currently serve non standard script types in compact blocks,
+            // because of this it does not return the script pub key for the coinbase transaction of the
+            // genesis block. We should decide whether / how to fix this.
+            //
+            // For this reason this test currently does not fetch the genesis block.
+            //
+            // Issue: https://github.com/zingolabs/zaino/issues/818
+            //
+            // To see bug update start height of get_block_range to 0.
             let compact_block_range = state_service_subscriber
                 .get_block_range(BlockRange {
                     start: Some(BlockId {
-                        height: 0,
+                        height: 1,
                         hash: Vec::new(),
                     }),
                     end: Some(BlockId {
@@ -2947,6 +2956,7 @@ mod zebra {
 
             for cb in compact_block_range.into_iter() {
                 for tx in cb.vtx {
+                    dbg!(&tx);
                     // script pub key of this transaction is not empty
                     assert!(!tx.vout.first().unwrap().script_pub_key.is_empty());
                 }

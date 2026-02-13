@@ -300,6 +300,57 @@ pub fn blockid_to_hashorheight(block_id: BlockId) -> Option<HashOrHeight> {
         .ok()
 }
 
+/// prunes a compact block from transaction in formation related to pools not included in the
+/// `pool_types` vector.
+/// Note: for backwards compatibility an empty vector will return Sapling and Orchard Tx info.
+pub fn compact_block_with_pool_types(
+    mut block: CompactBlock,
+    pool_types: &[PoolType],
+) -> CompactBlock {
+    if pool_types.is_empty() {
+        for compact_tx in &mut block.vtx {
+            // strip out transparent inputs if not Requested
+            compact_tx.vin.clear();
+            compact_tx.vout.clear();
+        }
+
+        // Omit transactions that have no Sapling/Orchard elements.
+        block.vtx.retain(|compact_tx| {
+            !compact_tx.spends.is_empty()
+                || !compact_tx.outputs.is_empty()
+                || !compact_tx.actions.is_empty()
+        });
+    } else {
+        for compact_tx in &mut block.vtx {
+            // strip out transparent inputs if not Requested
+            if !pool_types.contains(&PoolType::Transparent) {
+                compact_tx.vin.clear();
+                compact_tx.vout.clear();
+            }
+            // strip out sapling if not requested
+            if !pool_types.contains(&PoolType::Sapling) {
+                compact_tx.spends.clear();
+                compact_tx.outputs.clear();
+            }
+            // strip out orchard if not requested
+            if !pool_types.contains(&PoolType::Orchard) {
+                compact_tx.actions.clear();
+            }
+        }
+
+        // Omit transactions that have no elements in any requested pool type.
+        block.vtx.retain(|compact_tx| {
+            !compact_tx.vin.is_empty()
+                || !compact_tx.vout.is_empty()
+                || !compact_tx.spends.is_empty()
+                || !compact_tx.outputs.is_empty()
+                || !compact_tx.actions.is_empty()
+        });
+    }
+
+    block
+}
+
 /// Strips the ouputs and from all transactions, retains only
 /// the nullifier from all orcard actions, and clears the chain
 /// metadata from the block

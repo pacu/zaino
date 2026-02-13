@@ -11,7 +11,7 @@ use zaino_proto::proto::service::{
 use zaino_state::ChainIndex;
 use zaino_state::FetchServiceSubscriber;
 #[allow(deprecated)]
-use zaino_state::{FetchService, LightWalletIndexer, StatusType, ZcashIndexer};
+use zaino_state::{FetchService, LightWalletIndexer, Status, StatusType, ZcashIndexer};
 use zaino_testutils::{TestManager, ValidatorExt, ValidatorKind};
 use zebra_chain::parameters::subsidy::ParameterSubsidy as _;
 use zebra_chain::subtree::NoteCommitmentSubtreeIndex;
@@ -1918,7 +1918,7 @@ async fn fetch_service_get_subtree_roots<V: ValidatorExt>(validator: &ValidatorK
     };
 
     let fetch_service_stream = fetch_service_subscriber
-        .get_subtree_roots(subtree_roots_arg.clone())
+        .get_subtree_roots(subtree_roots_arg)
         .await
         .unwrap();
     let fetch_service_roots: Vec<_> = fetch_service_stream.collect().await;
