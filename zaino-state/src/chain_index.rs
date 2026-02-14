@@ -386,7 +386,6 @@ pub trait ChainIndex {
 /// - Automatic synchronization between state layers
 /// - Snapshot-based consistency for queries
 pub struct NodeBackedChainIndex<Source: BlockchainSource = ValidatorConnector> {
-    blockchain_source: std::sync::Arc<Source>,
     #[allow(dead_code)]
     mempool: std::sync::Arc<mempool::Mempool<Source>>,
     non_finalized_state: std::sync::Arc<crate::NonFinalizedState<Source>>,
@@ -425,7 +424,6 @@ impl<Source: BlockchainSource> NodeBackedChainIndex<Source> {
         .await?;
 
         let mut chain_index = Self {
-            blockchain_source: Arc::new(source),
             mempool: std::sync::Arc::new(mempool_state),
             non_finalized_state: std::sync::Arc::new(non_finalized_state),
             finalized_db,
@@ -441,7 +439,6 @@ impl<Source: BlockchainSource> NodeBackedChainIndex<Source> {
     /// a clone-safe, drop-safe, read-only view onto the running indexer.
     pub async fn subscriber(&self) -> NodeBackedChainIndexSubscriber<Source> {
         NodeBackedChainIndexSubscriber {
-            blockchain_source: self.blockchain_source.as_ref().clone(),
             mempool: self.mempool.subscriber(),
             non_finalized_state: self.non_finalized_state.clone(),
             finalized_state: self.finalized_db.to_reader(),
@@ -544,7 +541,6 @@ impl<Source: BlockchainSource> NodeBackedChainIndex<Source> {
 /// [`NodeBackedChainIndexSubscriber`] can safely be cloned and dropped freely.
 #[derive(Clone)]
 pub struct NodeBackedChainIndexSubscriber<Source: BlockchainSource = ValidatorConnector> {
-    blockchain_source: Source,
     mempool: mempool::MempoolSubscriber,
     non_finalized_state: std::sync::Arc<crate::NonFinalizedState<Source>>,
     finalized_state: finalised_state::reader::DbReader,
@@ -552,6 +548,9 @@ pub struct NodeBackedChainIndexSubscriber<Source: BlockchainSource = ValidatorCo
 }
 
 impl<Source: BlockchainSource> NodeBackedChainIndexSubscriber<Source> {
+    fn source(&self) -> &Source {
+        &self.non_finalized_state.source
+    }
     /// Displays the status of the chain_index
     pub fn status(&self) -> StatusType {
         let finalized_status = self.finalized_state.status();
@@ -569,7 +568,7 @@ impl<Source: BlockchainSource> NodeBackedChainIndexSubscriber<Source> {
         &self,
         id: HashOrHeight,
     ) -> Result<Option<Vec<u8>>, ChainIndexError> {
-        self.blockchain_source
+        self.source()
             .get_block(id)
             .await
             .map_err(ChainIndexError::backing_validator)?
@@ -653,7 +652,7 @@ impl<Source: BlockchainSource> NodeBackedChainIndexSubscriber<Source> {
     ) -> Result<Option<types::Height>, ChainIndexError> {
         //ChainIndex step 5:
         match self
-            .blockchain_source
+            .source()
             .get_block(HashOrHeight::Hash(hash.into()))
             .await
         {
@@ -860,7 +859,7 @@ impl<Source: BlockchainSource> ChainIndex for NodeBackedChainIndexSubscriber<Sou
                         // Now, we ask the VALIDATOR.
                         // ChainIndex step 5
                         match self
-                            .blockchain_source
+                            .source()
                             .get_block(HashOrHeight::Hash(zebra_chain::block::Hash::from(*hash)))
                             .await
                         {
@@ -912,7 +911,7 @@ impl<Source: BlockchainSource> ChainIndex for NodeBackedChainIndexSubscriber<Sou
         // even if the target block is non-finalized
         hash: &types::BlockHash,
     ) -> Result<(Option<Vec<u8>>, Option<Vec<u8>>), Self::Error> {
-        match self.blockchain_source.get_treestate(*hash).await {
+        match self.source().get_treestate(*hash).await {
             Ok(resp) => Ok(resp),
             Err(e) => Err(ChainIndexError {
                 kind: ChainIndexErrorKind::InternalServerError,
@@ -944,59 +943,45 @@ impl<Source: BlockchainSource> ChainIndex for NodeBackedChainIndexSubscriber<Sou
             return Ok(Some((bytes, mempool_branch_id)));
         }
 
-        if let Some((transaction, location)) = self
-            .blockchain_source
+        let Some((transaction, location)) = self
+            .source()
             .get_transaction(*txid)
             .await
-            .map_err(|e| ChainIndexError::backing_validator(e))?
-        {
-            // Passthrough, if the transaction is finalized
-            // on the best chain
-            if let source::GetTransactionLocation::BestChain(height) = location {
-                if height <= snapshot.validator_finalized_height {
-                    return Ok(Some((
-                        zebra_chain::transaction::SerializedTransaction::from(transaction)
-                            .as_ref()
-                            .to_vec(),
-                        ConsensusBranchId::current(&self.non_finalized_state.network, height)
-                            .map(u32::from),
-                    )));
-                }
-            }
-        }
-
-        // if the tranasction isn't finalized on the best chain
-        // check our indexes
-        let Some(block) = self
-            .blocks_containing_transaction(snapshot, txid.0)
-            .await?
-            .next()
+            .map_err(ChainIndexError::backing_validator)?
         else {
             return Ok(None);
         };
+        // as the reorg process cannot modify a transaction
+        // it's safe to serve nonfinalized state directly here
+        let height = match location {
+            GetTransactionLocation::BestChain(height) => height,
+            GetTransactionLocation::NonbestChain => {
+                // if the tranasction isn't on the best chain
+                // check our indexes. We need to find out the height from our index
+                // to determine the consensus branch ID
+                match self
+                    .blocks_containing_transaction(snapshot, txid.0)
+                    .await?
+                    .next()
+                {
+                    Some(block) => block.index.height.into(),
+                    // If we don't have a block containing the transaction
+                    // locally and the transaction's not on the validator's
+                    // best chain, we can't determine its consensus branch ID
+                    None => return Ok(None),
+                }
+            }
+            // We've already checked the mempool. Should be unreachable?
+            // todo: error here?
+            GetTransactionLocation::Mempool => return Ok(None),
+        };
 
-        let full_block = self
-            .non_finalized_state
-            .source
-            .get_block(HashOrHeight::Hash((block.index().hash().0).into()))
-            .await
-            .map_err(ChainIndexError::backing_validator)?
-            .ok_or_else(|| ChainIndexError::database_hole(block.index().hash()))?;
-        let block_consensus_branch_id = full_block.coinbase_height().and_then(|height| {
-            ConsensusBranchId::current(&self.non_finalized_state.network, height).map(u32::from)
-        });
-        full_block
-            .transactions
-            .iter()
-            .find(|transaction| {
-                let txn_txid = transaction.hash().0;
-                txn_txid == txid.0
-            })
-            .map(ZcashSerialize::zcash_serialize_to_vec)
-            .ok_or_else(|| ChainIndexError::database_hole(block.index().hash()))?
-            .map_err(ChainIndexError::backing_validator)
-            .map(|transaction| (transaction, block_consensus_branch_id))
-            .map(Some)
+        Ok(Some((
+            zebra_chain::transaction::SerializedTransaction::from(transaction)
+                .as_ref()
+                .to_vec(),
+            ConsensusBranchId::current(&self.non_finalized_state.network, height).map(u32::from),
+        )))
     }
 
     /// Given a transaction ID, returns all known blocks containing this transaction
@@ -1076,24 +1061,22 @@ impl<Source: BlockchainSource> ChainIndex for NodeBackedChainIndexSubscriber<Sou
 
         // If we haven't found a block on the best chain,
         // try passthrough
-        if best_chain_block == None {
-            if let Some((_transaction, location)) = self
-                .blockchain_source
+        if best_chain_block.is_none() {
+            if let Some((_transaction, GetTransactionLocation::BestChain(height))) = self
+                .source()
                 .get_transaction(*txid)
                 .await
-                .map_err(|e| ChainIndexError::backing_validator(e))?
+                .map_err(ChainIndexError::backing_validator)?
             {
-                if let GetTransactionLocation::BestChain(height) = location {
-                    if height <= snapshot.validator_finalized_height {
-                        if let Some(block) = self
-                            .blockchain_source
-                            .get_block(HashOrHeight::Height(height))
-                            .await
-                            .map_err(|e| ChainIndexError::backing_validator(e))?
-                        {
-                            best_chain_block =
-                                Some(BestChainLocation::Block(block.hash().into(), height.into()));
-                        }
+                if height <= snapshot.validator_finalized_height {
+                    if let Some(block) = self
+                        .source()
+                        .get_block(HashOrHeight::Height(height))
+                        .await
+                        .map_err(ChainIndexError::backing_validator)?
+                    {
+                        best_chain_block =
+                            Some(BestChainLocation::Block(block.hash().into(), height.into()));
                     }
                 }
             }
