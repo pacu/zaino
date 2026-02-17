@@ -82,7 +82,7 @@ fn passthrough_test(
                 .await
                 .unwrap();
             tokio::time::sleep(Duration::from_secs(5)).await;
-            let index_reader = indexer.subscriber().await;
+            let index_reader = indexer.subscriber();
             let snapshot = index_reader.snapshot_nonfinalized_state();
             // 101 instead of 100 as heights are 0-indexed
             assert_eq!(snapshot.validator_finalized_height.0 as usize, (2 * segment_length) - 101);
