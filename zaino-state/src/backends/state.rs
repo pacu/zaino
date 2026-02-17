@@ -21,7 +21,6 @@ use crate::{
     utils::{get_build_info, ServiceMetadata},
     BackendType, MempoolKey, NodeBackedChainIndex, NodeBackedChainIndexSubscriber, State,
 };
-use nonempty::NonEmpty;
 use tokio_stream::StreamExt as _;
 use zaino_fetch::{
     chain::{transaction::FullTransaction, utils::ParseFromSlice},
@@ -90,7 +89,6 @@ use tokio::{
     sync::mpsc,
     time::{self, timeout},
 };
-use tokio_stream::StreamExt as _;
 use tonic::async_trait;
 use tower::{Service, ServiceExt};
 use tracing::{info, warn};
@@ -1505,6 +1503,7 @@ impl ZcashIndexer for StateServiceSubscriber {
             expected_read_response!(orch_response, OrchardTree).map(|tree| tree.to_rpc_bytes())
         });
 
+        #[allow(deprecated)]
         Ok(GetTreestateResponse::from_parts(
             hash,
             height,
@@ -1983,7 +1982,6 @@ impl LightWalletIndexer for StateServiceSubscriber {
                     }
                 }
             }
-            Err(e) => Err(StateServiceError::ChainIndexError(e)),
         }
     }
 
@@ -2460,6 +2458,7 @@ impl LightWalletIndexer for StateServiceSubscriber {
                 "Invalid hash or height",
             )),
         )?;
+        #[allow(deprecated)]
         let (hash, height, time, sapling, orchard) =
             <StateServiceSubscriber as ZcashIndexer>::z_get_treestate(
                 self,
