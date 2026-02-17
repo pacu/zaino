@@ -554,7 +554,8 @@ pub struct ChainIndexError {
     pub(crate) source: Option<Box<dyn std::error::Error + Send + Sync + 'static>>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Copy, Clone)]
+#[non_exhaustive]
 /// The high-level kinds of thing that can fail
 pub enum ChainIndexErrorKind {
     /// Zaino is in some way nonfunctional
@@ -578,6 +579,10 @@ impl Display for ChainIndexErrorKind {
 }
 
 impl ChainIndexError {
+    /// The error kind
+    pub fn kind(&self) -> ChainIndexErrorKind {
+        self.kind
+    }
     pub(crate) fn backing_validator(value: impl std::error::Error + Send + Sync + 'static) -> Self {
         Self {
             kind: ChainIndexErrorKind::InternalServerError,
