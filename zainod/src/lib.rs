@@ -20,18 +20,21 @@ pub mod indexer;
 /// Run the Zaino indexer.
 ///
 /// Initializes logging and runs the main indexer loop with restart support.
-pub async fn run(config_path: PathBuf) {
+/// Returns an error if config loading or indexer startup fails.
+pub async fn run(config_path: PathBuf) -> Result<(), IndexerError> {
     init_logging();
 
+    let config = load_config(&config_path)?;
+
     loop {
-        match start_indexer(load_config(&config_path).unwrap()).await {
+        match start_indexer(config.clone()).await {
             Ok(joinhandle_result) => {
                 info!("Zaino Indexer started successfully.");
                 match joinhandle_result.await {
                     Ok(indexer_result) => match indexer_result {
                         Ok(()) => {
                             info!("Exiting Zaino successfully.");
-                            break;
+                            return Ok(());
                         }
                         Err(IndexerError::Restart) => {
                             error!("Zaino encountered critical error, restarting.");
@@ -39,18 +42,18 @@ pub async fn run(config_path: PathBuf) {
                         }
                         Err(e) => {
                             error!("Exiting Zaino with error: {}", e);
-                            break;
+                            return Err(e);
                         }
                     },
                     Err(e) => {
                         error!("Zaino exited early with error: {}", e);
-                        break;
+                        return Err(e.into());
                     }
                 }
             }
             Err(e) => {
                 error!("Zaino failed to start with error: {}", e);
-                break;
+                return Err(e);
             }
         }
     }

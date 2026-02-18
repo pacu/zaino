@@ -11,7 +11,10 @@ async fn main() {
     match cli.command {
         Command::Start { config } => {
             let config_path = config.unwrap_or_else(default_config_path);
-            zainodlib::run(config_path).await
+            if let Err(e) = zainodlib::run(config_path).await {
+                eprintln!("Error: {}", e);
+                std::process::exit(1);
+            }
         }
         Command::GenerateConfig { output } => Command::generate_config(output),
     }
