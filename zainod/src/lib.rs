@@ -98,6 +98,11 @@ fn init_logging() {
 mod tests {
     use super::*;
 
+    /// Verifies that `generate_default_config()` produces valid TOML.
+    ///
+    /// TOML requires simple values before table sections. If ZainodConfig field
+    /// order changes incorrectly, serialization fails with "values must be
+    /// emitted before tables". This test catches that regression.
     #[test]
     fn test_generate_default_config_produces_valid_toml() {
         let content = generate_default_config().expect("should generate config");
@@ -106,5 +111,23 @@ mod tests {
         let toml_part = content.strip_prefix(GENERATED_CONFIG_HEADER).unwrap();
         let parsed: Result<toml::Value, _> = toml::from_str(toml_part);
         assert!(parsed.is_ok(), "Generated config is not valid TOML: {:?}", parsed.err());
+    }
+
+    /// Verifies config survives serialize → deserialize → serialize roundtrip.
+    ///
+    /// Catches regressions in custom serde impls (DatabaseSize, Network) and
+    /// ensures field ordering remains stable. If the second serialization differs
+    /// from the first, something is being lost or transformed during the roundtrip.
+    #[test]
+    fn test_config_roundtrip_serialize_deserialize() {
+        let original = ZainodConfig::default();
+
+        let toml_str = toml::to_string_pretty(&original).expect("should serialize");
+        let roundtripped: ZainodConfig =
+            toml::from_str(&toml_str).expect("should deserialize");
+        let toml_str_again =
+            toml::to_string_pretty(&roundtripped).expect("should serialize again");
+
+        assert_eq!(toml_str, toml_str_again, "config roundtrip should be stable");
     }
 }
