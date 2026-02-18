@@ -214,7 +214,7 @@ impl Default for ZainodConfig {
                     size: DatabaseSize::default(),
                 },
             },
-            zebra_db_path: default_zebra_db_path().unwrap(),
+            zebra_db_path: default_zebra_db_path(),
             network: Network::Testnet,
         }
     }
@@ -231,20 +231,12 @@ pub fn default_ephemeral_cookie_path() -> PathBuf {
 
 /// Loads the default file path for zaino's local db.
 pub fn default_zaino_db_path() -> PathBuf {
-    match std::env::var("HOME") {
-        Ok(home) => PathBuf::from(home).join(".cache").join("zaino"),
-        Err(_) => PathBuf::from("/tmp").join("zaino").join(".cache"),
-    }
+    zaino_common::xdg::resolve_path_with_xdg_cache_defaults("zaino")
 }
 
-/// Loads the default file path for zebras's local db.
-pub fn default_zebra_db_path() -> Result<PathBuf, IndexerError> {
-    match std::env::var("HOME") {
-        Ok(home) => Ok(PathBuf::from(home).join(".cache").join("zebra")),
-        Err(e) => Err(IndexerError::ConfigError(format!(
-            "Unable to find home directory: {e}",
-        ))),
-    }
+/// Loads the default file path for zebra's local db.
+pub fn default_zebra_db_path() -> PathBuf {
+    zaino_common::xdg::resolve_path_with_xdg_cache_defaults("zebra")
 }
 
 /// Resolves a hostname to a SocketAddr.

@@ -3,20 +3,15 @@
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
+use zaino_common::xdg::resolve_path_with_xdg_config_defaults;
 
 /// Returns the default config path following XDG Base Directory spec.
 ///
 /// Uses `$XDG_CONFIG_HOME/zaino/zainod.toml` if set,
-/// otherwise falls back to `$HOME/.config/zaino/zainod.toml`.
+/// otherwise falls back to `$HOME/.config/zaino/zainod.toml`,
+/// or `/tmp/zaino/.config/zaino/zainod.toml` if HOME is unset.
 pub fn default_config_path() -> PathBuf {
-    let config_dir = std::env::var("XDG_CONFIG_HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| {
-            let home = std::env::var("HOME").expect("HOME not set");
-            PathBuf::from(home).join(".config")
-        });
-
-    config_dir.join("zaino").join("zainod.toml")
+    resolve_path_with_xdg_config_defaults("zaino/zainod.toml")
 }
 
 /// The Zcash Indexing Service.
