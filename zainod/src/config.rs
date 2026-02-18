@@ -31,11 +31,20 @@ fn is_sensitive_leaf_key(leaf_key: &str) -> bool {
 }
 
 /// Config information required for Zaino.
+///
+/// Field order matters for TOML serialization: simple values must come before tables.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct ZainodConfig {
+    // Simple values first (TOML requirement)
     /// Type of backend to be used.
     pub backend: BackendType,
+    /// Block Cache database file path (ZebraDB location).
+    pub zebra_db_path: PathBuf,
+    /// Network chain type.
+    pub network: Network,
+
+    // Table sections
     /// Enable JsonRPC server with a valid Some value.
     pub json_server_settings: Option<JsonRpcServerConfig>,
     /// gRPC server settings including listen addr, tls status, key and cert.
@@ -46,10 +55,6 @@ pub struct ZainodConfig {
     pub service: ServiceConfig,
     /// Storage configuration (cache and database).
     pub storage: StorageConfig,
-    /// Block Cache database file path (ZebraDB location).
-    pub zebra_db_path: PathBuf,
-    /// Network chain type.
-    pub network: Network,
 }
 
 impl ZainodConfig {

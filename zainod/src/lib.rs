@@ -93,3 +93,18 @@ fn init_logging() {
         .with_target(true)
         .init();
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_generate_default_config_produces_valid_toml() {
+        let content = generate_default_config().expect("should generate config");
+        assert!(content.starts_with(GENERATED_CONFIG_HEADER));
+
+        let toml_part = content.strip_prefix(GENERATED_CONFIG_HEADER).unwrap();
+        let parsed: Result<toml::Value, _> = toml::from_str(toml_part);
+        assert!(parsed.is_ok(), "Generated config is not valid TOML: {:?}", parsed.err());
+    }
+}
