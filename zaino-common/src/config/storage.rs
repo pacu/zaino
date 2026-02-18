@@ -2,6 +2,8 @@
 
 use std::path::PathBuf;
 
+use crate::xdg::resolve_path_with_xdg_cache_defaults;
+
 /// Cache configuration for DashMaps.
 ///
 /// Used by the mempool and BlockCache non-finalized state (FetchService backend).
@@ -71,7 +73,7 @@ pub struct DatabaseConfig {
 impl Default for DatabaseConfig {
     fn default() -> Self {
         Self {
-            path: PathBuf::from("./zaino_cache"),
+            path: resolve_path_with_xdg_cache_defaults("zaino"),
             size: DatabaseSize::default(),
         }
     }

@@ -12,8 +12,7 @@ use tracing::warn;
 
 use crate::error::IndexerError;
 use zaino_common::{
-    try_resolve_address, AddressResolution, CacheConfig, DatabaseConfig, DatabaseSize, Network,
-    ServiceConfig, StorageConfig, ValidatorConfig,
+    try_resolve_address, AddressResolution, Network, ServiceConfig, StorageConfig, ValidatorConfig,
 };
 use zaino_serve::server::config::{GrpcServerConfig, JsonRpcServerConfig};
 #[allow(deprecated)]
@@ -207,13 +206,7 @@ impl Default for ZainodConfig {
                 validator_password: Some("xxxxxx".to_string()),
             },
             service: ServiceConfig::default(),
-            storage: StorageConfig {
-                cache: CacheConfig::default(),
-                database: DatabaseConfig {
-                    path: default_zaino_db_path(),
-                    size: DatabaseSize::default(),
-                },
-            },
+            storage: StorageConfig::default(),
             zebra_db_path: default_zebra_db_path(),
             network: Network::Testnet,
         }
@@ -227,11 +220,6 @@ pub fn default_ephemeral_cookie_path() -> PathBuf {
     } else {
         PathBuf::from("/tmp").join("zaino").join(".cookie")
     }
-}
-
-/// Loads the default file path for zaino's local db.
-pub fn default_zaino_db_path() -> PathBuf {
-    zaino_common::xdg::resolve_path_with_xdg_cache_defaults("zaino")
 }
 
 /// Loads the default file path for zebra's local db.
