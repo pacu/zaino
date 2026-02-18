@@ -41,7 +41,7 @@ pub enum Command {
 impl Command {
     /// Generate a default configuration file and write to output.
     pub fn generate_config(output: Option<PathBuf>) {
-        let content = match crate::generate_default_config() {
+        let content = match crate::config::generate_default_config() {
             Ok(content) => content,
             Err(e) => {
                 eprintln!("Error generating config: {}", e);

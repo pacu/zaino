@@ -19,6 +19,33 @@ use zaino_serve::server::config::{GrpcServerConfig, JsonRpcServerConfig};
 #[allow(deprecated)]
 use zaino_state::{BackendType, FetchServiceConfig, StateServiceConfig};
 
+/// Header for generated configuration files.
+pub const GENERATED_CONFIG_HEADER: &str = r#"# Zaino Configuration
+#
+# Generated with `zainod generate-config`
+#
+# Configuration sources are layered (highest priority first):
+#   1. Environment variables (prefix: ZAINO_)
+#   2. TOML configuration file
+#   3. Built-in defaults
+#
+# For detailed documentation, see:
+#   https://github.com/zingolabs/zaino
+
+"#;
+
+/// Generate default configuration file content.
+///
+/// Returns the full config file content including header and TOML-serialized defaults.
+pub fn generate_default_config() -> Result<String, IndexerError> {
+    let config = ZainodConfig::default();
+
+    let toml_content = toml::to_string_pretty(&config)
+        .map_err(|e| IndexerError::ConfigError(format!("Failed to serialize config: {}", e)))?;
+
+    Ok(format!("{}{}", GENERATED_CONFIG_HEADER, toml_content))
+}
+
 /// Sensitive key suffixes that should not be set via environment variables.
 const SENSITIVE_KEY_SUFFIXES: [&str; 5] = ["password", "secret", "token", "cookie", "private_key"];
 
@@ -972,5 +999,38 @@ listen_address = "127.0.0.1:8137"
         let config_path = create_test_config_file(&temp_dir, toml_content, "unknown_fields.toml");
         let result = load_config(&config_path);
         assert!(result.is_err());
+    }
+
+    /// Verifies that `generate_default_config()` produces valid TOML.
+    ///
+    /// TOML requires simple values before table sections. If ZainodConfig field
+    /// order changes incorrectly, serialization fails with "values must be
+    /// emitted before tables". This test catches that regression.
+    #[test]
+    fn test_generate_default_config_produces_valid_toml() {
+        let content = generate_default_config().expect("should generate config");
+        assert!(content.starts_with(GENERATED_CONFIG_HEADER));
+
+        let toml_part = content.strip_prefix(GENERATED_CONFIG_HEADER).unwrap();
+        let parsed: Result<toml::Value, _> = toml::from_str(toml_part);
+        assert!(parsed.is_ok(), "Generated config is not valid TOML: {:?}", parsed.err());
+    }
+
+    /// Verifies config survives serialize → deserialize → serialize roundtrip.
+    ///
+    /// Catches regressions in custom serde impls (DatabaseSize, Network) and
+    /// ensures field ordering remains stable. If the second serialization differs
+    /// from the first, something is being lost or transformed during the roundtrip.
+    #[test]
+    fn test_config_roundtrip_serialize_deserialize() {
+        let original = ZainodConfig::default();
+
+        let toml_str = toml::to_string_pretty(&original).expect("should serialize");
+        let roundtripped: ZainodConfig =
+            toml::from_str(&toml_str).expect("should deserialize");
+        let toml_str_again =
+            toml::to_string_pretty(&roundtripped).expect("should serialize again");
+
+        assert_eq!(toml_str, toml_str_again, "config roundtrip should be stable");
     }
 }
