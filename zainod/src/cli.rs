@@ -4,8 +4,20 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 
-/// Default path for the configuration file.
-pub const DEFAULT_CONFIG_PATH: &str = "./zainod/zindexer.toml";
+/// Returns the default config path following XDG Base Directory spec.
+///
+/// Uses `$XDG_CONFIG_HOME/zaino/zainod.toml` if set,
+/// otherwise falls back to `$HOME/.config/zaino/zainod.toml`.
+pub fn default_config_path() -> PathBuf {
+    let config_dir = std::env::var("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| {
+            let home = std::env::var("HOME").expect("HOME not set");
+            PathBuf::from(home).join(".config")
+        });
+
+    config_dir.join("zaino").join("zainod.toml")
+}
 
 /// The Zcash Indexing Service.
 #[derive(Parser, Debug)]
@@ -26,9 +38,9 @@ pub struct Cli {
 pub enum Command {
     /// Run the Zaino indexer service.
     Run {
-        /// Path to the configuration file.
-        #[arg(short, long, value_name = "FILE", default_value = DEFAULT_CONFIG_PATH)]
-        config: PathBuf,
+        /// Path to the configuration file. Defaults to $XDG_CONFIG_HOME/zaino/zainod.toml
+        #[arg(short, long, value_name = "FILE")]
+        config: Option<PathBuf>,
     },
     /// Generate an example configuration file with default values.
     GenerateConfig {
