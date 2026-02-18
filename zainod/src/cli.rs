@@ -4,8 +4,6 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 
-use crate::config::ZainodConfig;
-
 /// Default path for the configuration file.
 pub const DEFAULT_CONFIG_PATH: &str = "./zainod/zindexer.toml";
 
@@ -41,44 +39,26 @@ pub enum Command {
 }
 
 impl Command {
-    /// Generate a default configuration file.
+    /// Generate a default configuration file and write to output.
     pub fn generate_config(output: Option<PathBuf>) {
-        let config = ZainodConfig::default();
-
-        let header = r#"# Zaino Configuration
-#
-# Generated with `zainod generate-config`
-#
-# Configuration sources are layered (highest priority first):
-#   1. Environment variables (prefix: ZAINO_)
-#   2. TOML configuration file
-#   3. Built-in defaults
-#
-# For detailed documentation, see:
-#   https://github.com/zingolabs/zaino
-
-"#;
-
-        let toml_content = match toml::to_string_pretty(&config) {
+        let content = match crate::generate_default_config() {
             Ok(content) => content,
             Err(e) => {
-                eprintln!("Error serializing config: {}", e);
+                eprintln!("Error generating config: {}", e);
                 std::process::exit(1);
             }
         };
 
-        let output_content = format!("{}{}", header, toml_content);
-
         match output {
             Some(path) => {
-                if let Err(e) = std::fs::write(&path, &output_content) {
+                if let Err(e) = std::fs::write(&path, &content) {
                     eprintln!("Error writing to {}: {}", path.display(), e);
                     std::process::exit(1);
                 }
                 eprintln!("Generated config file: {}", path.display());
             }
             None => {
-                print!("{}", output_content);
+                print!("{}", content);
             }
         }
     }

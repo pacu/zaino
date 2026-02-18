@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
 
-use crate::config::load_config;
+use crate::config::{load_config, ZainodConfig};
 use crate::error::IndexerError;
 use crate::indexer::start_indexer;
 
@@ -16,6 +16,33 @@ pub mod cli;
 pub mod config;
 pub mod error;
 pub mod indexer;
+
+/// Header for generated configuration files.
+pub const GENERATED_CONFIG_HEADER: &str = r#"# Zaino Configuration
+#
+# Generated with `zainod generate-config`
+#
+# Configuration sources are layered (highest priority first):
+#   1. Environment variables (prefix: ZAINO_)
+#   2. TOML configuration file
+#   3. Built-in defaults
+#
+# For detailed documentation, see:
+#   https://github.com/zingolabs/zaino
+
+"#;
+
+/// Generate default configuration file content.
+///
+/// Returns the full config file content including header and TOML-serialized defaults.
+pub fn generate_default_config() -> Result<String, IndexerError> {
+    let config = ZainodConfig::default();
+
+    let toml_content = toml::to_string_pretty(&config)
+        .map_err(|e| IndexerError::ConfigError(format!("Failed to serialize config: {}", e)))?;
+
+    Ok(format!("{}{}", GENERATED_CONFIG_HEADER, toml_content))
+}
 
 /// Run the Zaino indexer.
 ///
