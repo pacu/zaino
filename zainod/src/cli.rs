@@ -36,23 +36,25 @@ pub struct Cli {
 /// Available subcommands.
 #[derive(Subcommand, Debug, Clone)]
 pub enum Command {
-    /// Run the Zaino indexer service.
-    Run {
+    /// Start the Zaino indexer service.
+    Start {
         /// Path to the configuration file. Defaults to $XDG_CONFIG_HOME/zaino/zainod.toml
         #[arg(short, long, value_name = "FILE")]
         config: Option<PathBuf>,
     },
-    /// Generate an example configuration file with default values.
+    /// Generate a configuration file with default values.
     GenerateConfig {
-        /// Output path for the generated config file (defaults to stdout).
+        /// Output path for the generated config file. Defaults to $XDG_CONFIG_HOME/zaino/zainod.toml
         #[arg(short, long, value_name = "FILE")]
         output: Option<PathBuf>,
     },
 }
 
 impl Command {
-    /// Generate a default configuration file and write to output.
+    /// Generate a configuration file with default values.
     pub fn generate_config(output: Option<PathBuf>) {
+        let path = output.unwrap_or_else(default_config_path);
+
         let content = match crate::config::generate_default_config() {
             Ok(content) => content,
             Err(e) => {
@@ -61,17 +63,21 @@ impl Command {
             }
         };
 
-        match output {
-            Some(path) => {
-                if let Err(e) = std::fs::write(&path, &content) {
-                    eprintln!("Error writing to {}: {}", path.display(), e);
+        // Create parent directories if needed
+        if let Some(parent) = path.parent() {
+            if !parent.exists() {
+                if let Err(e) = std::fs::create_dir_all(parent) {
+                    eprintln!("Error creating directory {}: {}", parent.display(), e);
                     std::process::exit(1);
                 }
-                eprintln!("Generated config file: {}", path.display());
-            }
-            None => {
-                print!("{}", content);
             }
         }
+
+        if let Err(e) = std::fs::write(&path, &content) {
+            eprintln!("Error writing to {}: {}", path.display(), e);
+            std::process::exit(1);
+        }
+
+        eprintln!("Generated config file: {}", path.display());
     }
 }

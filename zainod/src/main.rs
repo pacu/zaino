@@ -9,7 +9,7 @@ async fn main() {
     let cli = Cli::parse();
 
     match cli.command {
-        Command::Run { config } => {
+        Command::Start { config } => {
             let config_path = config.unwrap_or_else(default_config_path);
             zainodlib::run(config_path).await
         }
