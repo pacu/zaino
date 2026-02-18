@@ -3,15 +3,18 @@
 use std::path::PathBuf;
 
 /// Cache configuration for DashMaps.
+///
+/// Used by the mempool and BlockCache non-finalized state (FetchService backend).
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 #[serde(default)]
 pub struct CacheConfig {
-    /// Capacity of the DashMaps used for caching
+    /// Capacity of the DashMaps used for caching.
     pub capacity: usize,
-    /// Power of 2 for number of shards (e.g., 4 means 16 shards)
+    /// Power of 2 for number of shards (e.g., 4 means 16 shards).
     ///
     /// The actual shard count will be 2^shard_power.
     /// Valid range is typically 0-8 (1 to 256 shards).
+    /// Must be greater than 0.
     pub shard_power: u8,
 }
 

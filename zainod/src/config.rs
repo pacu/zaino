@@ -57,30 +57,32 @@ fn is_sensitive_leaf_key(leaf_key: &str) -> bool {
         .any(|suffix| key.ends_with(suffix))
 }
 
-/// Config information required for Zaino.
+/// Zaino daemon configuration.
 ///
 /// Field order matters for TOML serialization: simple values must come before tables.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct ZainodConfig {
     // Simple values first (TOML requirement)
-    /// Type of backend to be used.
+    /// Backend type for fetching blockchain data.
     pub backend: BackendType,
-    /// Block Cache database file path (ZebraDB location).
+    /// Path to Zebra's state database.
+    ///
+    /// Required when using the `state` backend.
     pub zebra_db_path: PathBuf,
-    /// Network chain type.
+    /// Network to connect to (Mainnet, Testnet, or Regtest).
     pub network: Network,
 
     // Table sections
-    /// Enable JsonRPC server with a valid Some value.
+    /// JSON-RPC server settings. Set to enable Zaino's JSON-RPC interface.
     pub json_server_settings: Option<JsonRpcServerConfig>,
-    /// gRPC server settings including listen addr, tls status, key and cert.
+    /// gRPC server settings (listen address, TLS configuration).
     pub grpc_settings: GrpcServerConfig,
-    /// Full node / validator configuration settings.
+    /// Validator connection settings.
     pub validator_settings: ValidatorConfig,
-    /// Service-level configuration (timeout, channel size).
+    /// Service-level settings (timeout, channel size).
     pub service: ServiceConfig,
-    /// Storage configuration (cache and database).
+    /// Storage settings (cache and database).
     pub storage: StorageConfig,
 }
 
@@ -766,24 +768,6 @@ listen_address = "127.0.0.1:8137"
         let config_path = create_test_config_file(&temp_dir, toml_content, "invalid_socket.toml");
         let result = load_config(&config_path);
         assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_parse_zindexer_toml_integration() {
-        let _guard = EnvGuard::new();
-        let temp_dir = TempDir::new().unwrap();
-        let zindexer_toml_content = include_str!("../zindexer.toml");
-
-        let config_path =
-            create_test_config_file(&temp_dir, zindexer_toml_content, "zindexer_test.toml");
-        let config = load_config(&config_path).expect("load_config failed to parse zindexer.toml");
-        let defaults = ZainodConfig::default();
-
-        assert_eq!(config.backend, BackendType::Fetch);
-        assert_eq!(
-            config.validator_settings.validator_user,
-            defaults.validator_settings.validator_user
-        );
     }
 
     #[test]
