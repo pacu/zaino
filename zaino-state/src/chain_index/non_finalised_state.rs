@@ -153,20 +153,17 @@ pub enum InitError {
 /// This is the core of the concurrent block cache.
 impl BestTip {
     /// Create a BestTip from an IndexedBlock
-    fn from_block(block: &IndexedBlock) -> Result<Self, InitError> {
+    fn from_block(block: &IndexedBlock) -> Self {
         let height = block.height();
         let blockhash = *block.hash();
-        Ok(Self { height, blockhash })
+        Self { height, blockhash }
     }
 }
 
 impl NonfinalizedBlockCacheSnapshot {
     /// Create initial snapshot from a single block
-    fn from_initial_block(
-        block: IndexedBlock,
-        validator_finalized_height: Height,
-    ) -> Result<Self, InitError> {
-        let best_tip = BestTip::from_block(&block)?;
+    fn from_initial_block(block: IndexedBlock, validator_finalized_height: Height) -> Self {
+        let best_tip = BestTip::from_block(&block);
         let hash = *block.hash();
         let height = best_tip.height;
 
@@ -176,12 +173,12 @@ impl NonfinalizedBlockCacheSnapshot {
         blocks.insert(hash, block);
         heights_to_hashes.insert(height, hash);
 
-        Ok(Self {
+        Self {
             blocks,
             heights_to_hashes,
             best_tip,
             validator_finalized_height,
-        })
+        }
     }
 
     fn add_block_new_chaintip(&mut self, block: IndexedBlock) {
@@ -243,7 +240,7 @@ impl<Source: BlockchainSource> NonFinalizedState<Source> {
         let snapshot = NonfinalizedBlockCacheSnapshot::from_initial_block(
             initial_block,
             Height(validator_tip.0.saturating_sub(100)),
-        )?;
+        );
 
         // Set up optional listener
         let nfs_change_listener = Self::setup_listener(&source).await;
@@ -331,6 +328,27 @@ impl<Source: BlockchainSource> NonFinalizedState<Source> {
     /// sync to the top of the chain, trimming to the finalised tip.
     pub(super) async fn sync(&self, finalized_db: Arc<ZainoDB>) -> Result<(), SyncError> {
         let mut initial_state = self.get_snapshot();
+        let local_finalized_tip = finalized_db
+            .to_reader()
+            .db_height()
+            .await
+            .map_err(|_e| SyncError::CannotReadFinalizedState)?;
+        if Some(initial_state.best_tip.height) < local_finalized_tip {
+            self.current.swap(Arc::new(
+                NonfinalizedBlockCacheSnapshot::from_initial_block(
+                    finalized_db
+                        .to_reader()
+                        .get_chain_block(
+                            local_finalized_tip.expect("known to be some due to above if"),
+                        )
+                        .await
+                        .map_err(|_e| SyncError::CannotReadFinalizedState)?
+                        .ok_or(SyncError::CannotReadFinalizedState)?,
+                    local_finalized_tip.unwrap(),
+                ),
+            ));
+            initial_state = self.get_snapshot()
+        }
         let mut working_snapshot = initial_state.as_ref().clone();
 
         // currently this only gets main-chain blocks
