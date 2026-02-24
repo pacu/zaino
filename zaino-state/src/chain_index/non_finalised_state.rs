@@ -90,23 +90,28 @@ impl std::fmt::Display for MissingBlockError {
 
 impl std::error::Error for MissingBlockError {}
 
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 /// An error occurred during sync of the NonFinalized State.
 pub enum SyncError {
     /// The backing validator node returned corrupt, invalid, or incomplete data
     /// TODO: This may not be correctly disambibuated from temporary network issues
     /// in the fetchservice case.
+    #[error("failed to connect to validator: {0:?}")]
     ValidatorConnectionError(NodeConnectionError),
     /// The channel used to store new blocks has been closed. This should only happen
     /// during shutdown.
+    #[error("staging channel closed. Shutdown in progress")]
     StagingChannelClosed,
     /// Sync has been called multiple times in parallel, or another process has
     /// written to the block snapshot.
+    #[error("multiple sync processes running")]
     CompetingSyncProcess,
     /// Sync attempted a reorg, and something went wrong.
+    #[error("reorg failed: {0}")]
     ReorgFailure(String),
     /// UnrecoverableFinalizedStateError
-    CannotReadFinalizedState,
+    #[error("error reading nonfinalized state")]
+    CannotReadFinalizedState(#[from] FinalisedStateError),
 }
 
 impl From<UpdateError> for SyncError {
@@ -114,7 +119,9 @@ impl From<UpdateError> for SyncError {
         match value {
             UpdateError::ReceiverDisconnected => SyncError::StagingChannelClosed,
             UpdateError::StaleSnapshot => SyncError::CompetingSyncProcess,
-            UpdateError::FinalizedStateCorruption => SyncError::CannotReadFinalizedState,
+            UpdateError::FinalizedStateCorruption => SyncError::CannotReadFinalizedState(
+                FinalisedStateError::Custom("mystery update failure".to_string()),
+            ),
             UpdateError::DatabaseHole => {
                 SyncError::ReorgFailure(String::from("could not determine best chain"))
             }
@@ -328,11 +335,7 @@ impl<Source: BlockchainSource> NonFinalizedState<Source> {
     /// sync to the top of the chain, trimming to the finalised tip.
     pub(super) async fn sync(&self, finalized_db: Arc<ZainoDB>) -> Result<(), SyncError> {
         let mut initial_state = self.get_snapshot();
-        let local_finalized_tip = finalized_db
-            .to_reader()
-            .db_height()
-            .await
-            .map_err(|_e| SyncError::CannotReadFinalizedState)?;
+        let local_finalized_tip = finalized_db.to_reader().db_height().await?;
         if Some(initial_state.best_tip.height) < local_finalized_tip {
             self.current.swap(Arc::new(
                 NonfinalizedBlockCacheSnapshot::from_initial_block(
@@ -341,9 +344,11 @@ impl<Source: BlockchainSource> NonFinalizedState<Source> {
                         .get_chain_block(
                             local_finalized_tip.expect("known to be some due to above if"),
                         )
-                        .await
-                        .map_err(|_e| SyncError::CannotReadFinalizedState)?
-                        .ok_or(SyncError::CannotReadFinalizedState)?,
+                        .await?
+                        .ok_or(FinalisedStateError::DataUnavailable(format!(
+                            "Missing block {}",
+                            local_finalized_tip.unwrap().0
+                        )))?,
                     local_finalized_tip.unwrap(),
                 ),
             ));
