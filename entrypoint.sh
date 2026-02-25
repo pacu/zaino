@@ -41,12 +41,22 @@ exit_error() {
 }
 
 # Creates a directory if it doesn't exist and sets ownership to UID:GID.
+# Gracefully handles read-only mounts by skipping chown if it fails.
 create_owned_directory() {
   local dir="$1"
   [[ -z ${dir} ]] && return
 
-  mkdir -p "${dir}" || exit_error "Failed to create directory: ${dir}"
-  chown -R "${UID}:${GID}" "${dir}" || exit_error "Failed to set ownership on: ${dir}"
+  # Try to create directory; skip if read-only
+  if ! mkdir -p "${dir}" 2>/dev/null; then
+    echo "WARN: Cannot create ${dir} (read-only or permission denied), skipping"
+    return 0
+  fi
+
+  # Try to set ownership; skip if read-only
+  if ! chown -R "${UID}:${GID}" "${dir}" 2>/dev/null; then
+    echo "WARN: Cannot chown ${dir} (read-only?), skipping"
+    return 0
+  fi
 
   # Set ownership on parent if it's not root or home
   local parent_dir
