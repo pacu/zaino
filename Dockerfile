@@ -66,6 +66,14 @@ ENV UID=${UID} GID=${GID} HOME=${HOME}
 
 WORKDIR ${HOME}
 
+# Create ergonomic mount points with symlinks to XDG defaults
+# Users mount to /app/config and /app/data, zaino uses ~/.config/zaino and ~/.cache/zaino
+RUN mkdir -p /app/config /app/data && \
+    mkdir -p ${HOME}/.config ${HOME}/.cache && \
+    ln -s /app/config ${HOME}/.config/zaino && \
+    ln -s /app/data ${HOME}/.cache/zaino && \
+    chown -R ${UID}:${GID} /app ${HOME}/.config ${HOME}/.cache
+
 # Copy binary and entrypoint
 COPY --from=builder /out/bin/zainod /usr/local/bin/zainod
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh

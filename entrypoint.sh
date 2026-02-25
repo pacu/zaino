@@ -13,17 +13,18 @@
 
 set -eo pipefail
 
-# Default writable paths matching zaino's XDG defaults.
-# Users can override via env vars; the entrypoint will create and chown them.
+# Default writable paths.
+# The Dockerfile creates symlinks: /app/config -> ~/.config/zaino, /app/data -> ~/.cache/zaino
+# So we handle /app/* paths directly for Docker users.
 #
-# XDG_CACHE_HOME defaults: storage.database.path
-: "${ZAINO_STORAGE__DATABASE__PATH:=${XDG_CACHE_HOME:-${HOME}/.cache}/zaino}"
+# Database path (symlinked from ~/.cache/zaino)
+: "${ZAINO_STORAGE__DATABASE__PATH:=/app/data}"
 #
-# XDG_RUNTIME_DIR defaults: json_server_settings.cookie_dir (ephemeral)
+# Cookie dir (runtime, ephemeral)
 : "${ZAINO_JSON_SERVER_SETTINGS__COOKIE_DIR:=${XDG_RUNTIME_DIR:-/tmp}/zaino}"
 #
-# XDG_CONFIG_HOME defaults: config file location
-ZAINO_CONFIG_DIR="${XDG_CONFIG_HOME:-${HOME}/.config}/zaino"
+# Config directory (symlinked from ~/.config/zaino)
+ZAINO_CONFIG_DIR="/app/config"
 
 # Drop privileges and execute command as non-root user
 exec_as_user() {

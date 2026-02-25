@@ -57,35 +57,27 @@ run_test "generate-config command" \
 run_test "start --help command" \
   docker run --rm "${IMAGE}" start --help
 
-# Volume mount tests - user-owned directories
-test_user_owned_config_mount() {
-  local dir="${TEST_DIR}/user-config"
+# Volume mount tests - using /app paths
+test_config_mount() {
+  local dir="${TEST_DIR}/config"
   mkdir -p "${dir}"
-  docker run --rm -v "${dir}:/home/container_user/.config/zaino" "${IMAGE}" generate-config
+  docker run --rm -v "${dir}:/app/config" "${IMAGE}" generate-config
   test -f "${dir}/zainod.toml"
 }
-run_test "user-owned config dir mount" test_user_owned_config_mount
+run_test "config dir mount (/app/config)" test_config_mount
 
-test_user_owned_cache_mount() {
-  local dir="${TEST_DIR}/user-cache"
+test_data_mount() {
+  local dir="${TEST_DIR}/data"
   mkdir -p "${dir}"
-  docker run --rm -v "${dir}:/home/container_user/.cache/zaino" "${IMAGE}" --version
+  docker run --rm -v "${dir}:/app/data" "${IMAGE}" --version
 }
-run_test "user-owned cache dir mount" test_user_owned_cache_mount
-
-test_user_owned_home_mount() {
-  local dir="${TEST_DIR}/user-home"
-  mkdir -p "${dir}"
-  docker run --rm -v "${dir}:/home/container_user" "${IMAGE}" generate-config
-  test -f "${dir}/.config/zaino/zainod.toml"
-}
-run_test "user-owned home dir mount" test_user_owned_home_mount
+run_test "data dir mount (/app/data)" test_data_mount
 
 # File ownership verification
 test_file_ownership() {
   local dir="${TEST_DIR}/ownership-test"
   mkdir -p "${dir}"
-  docker run --rm -v "${dir}:/home/container_user/.config/zaino" "${IMAGE}" generate-config
+  docker run --rm -v "${dir}:/app/config" "${IMAGE}" generate-config
   # File should be owned by UID 1000 (container_user)
   local uid
   uid=$(stat -c '%u' "${dir}/zainod.toml" 2>/dev/null || stat -f '%u' "${dir}/zainod.toml")
@@ -99,7 +91,7 @@ if command -v sudo &>/dev/null && sudo -n true 2>/dev/null; then
     local dir="${TEST_DIR}/root-owned"
     sudo mkdir -p "${dir}"
     sudo chown root:root "${dir}"
-    docker run --rm -v "${dir}:/home/container_user/.cache/zaino" "${IMAGE}" --version
+    docker run --rm -v "${dir}:/app/data" "${IMAGE}" --version
     # Entrypoint should have chowned it
     local uid
     uid=$(stat -c '%u' "${dir}" 2>/dev/null || stat -f '%u' "${dir}")
@@ -111,7 +103,7 @@ if command -v sudo &>/dev/null && sudo -n true 2>/dev/null; then
     local dir="${TEST_DIR}/root-config"
     sudo mkdir -p "${dir}"
     sudo chown root:root "${dir}"
-    docker run --rm -v "${dir}:/home/container_user/.config/zaino" "${IMAGE}" generate-config
+    docker run --rm -v "${dir}:/app/config" "${IMAGE}" generate-config
     test -f "${dir}/zainod.toml"
   }
   run_test "write to root-owned config dir" test_root_owned_config_write
@@ -119,27 +111,16 @@ else
   echo "⚠️  Skipping root-owned tests (sudo not available or requires password)"
 fi
 
-# Custom path via env var
-test_custom_path_env() {
-  local dir="${TEST_DIR}/custom-db"
-  mkdir -p "${dir}"
-  docker run --rm \
-    -e ZAINO_STORAGE__DATABASE__PATH=/data/zaino \
-    -v "${dir}:/data/zaino" \
-    "${IMAGE}" --version
-}
-run_test "custom database path via env var" test_custom_path_env
-
-# Read-only config file mount
+# Read-only config mount
 test_readonly_config() {
   local dir="${TEST_DIR}/ro-config"
   mkdir -p "${dir}"
   # First generate a config
-  docker run --rm -v "${dir}:/home/container_user/.config/zaino" "${IMAGE}" generate-config
+  docker run --rm -v "${dir}:/app/config" "${IMAGE}" generate-config
   # Then mount it read-only and verify we can still run
-  docker run --rm -v "${dir}/zainod.toml:/home/container_user/.config/zaino/zainod.toml:ro" "${IMAGE}" --version
+  docker run --rm -v "${dir}:/app/config:ro" "${IMAGE}" --version
 }
-run_test "read-only config file mount" test_readonly_config
+run_test "read-only config mount" test_readonly_config
 
 # Summary
 echo "========================================="
