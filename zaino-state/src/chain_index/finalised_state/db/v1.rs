@@ -1191,8 +1191,8 @@ impl DbV1 {
             status: self.status.clone(),
             config: self.config.clone(),
         };
-        let post_result = tokio::task::spawn_blocking(move || {
-            // let post_result: Result<(), FinalisedStateError> = (async {
+        let join_handle = tokio::task::spawn_blocking(move || {
+            // let post_result = tokio::task::spawn_blocking(move || {
             // Write block to ZainoDB
             let mut txn = zaino_db.env.begin_rw_txn()?;
 
@@ -1354,13 +1354,31 @@ impl DbV1 {
                 }
             }
 
-            zaino_db.env.sync(true).ok();
+            zaino_db.env.sync(true).map_err(|e| {
+                FinalisedStateError::Custom(format!("LMDB sync failed before validation: {e}"))
+            })?;
+
             zaino_db.validate_block_blocking(block_height, block_hash)?;
 
             Ok::<_, FinalisedStateError>(())
-        })
-        .await
-        .map_err(|e| FinalisedStateError::Custom(format!("Tokio task error: {e}")))?;
+        });
+
+        // Wait for the join and handle panic / cancellation explicitly so we can
+        // attempt to remove any partially written block.
+        let post_result = match join_handle.await {
+            Ok(inner_res) => inner_res,
+            Err(join_err) => {
+                warn!("Tokio task error (spawn_blocking join error): {}", join_err);
+
+                // Best-effort delete of partially written block; ignore delete result.
+                let _ = self.delete_block(&block).await;
+
+                return Err(FinalisedStateError::Custom(format!(
+                    "Tokio task error: {}",
+                    join_err
+                )));
+            }
+        };
 
         match post_result {
             Ok(_) => {
