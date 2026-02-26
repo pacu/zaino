@@ -1442,7 +1442,7 @@ impl DbV1 {
                     Err(e) => {
                         warn!("Error writing block to DB: {e}");
                         warn!(
-                            "Deleting corrupt block from DB at height: {} with hash: {}",
+                            "Deleting corrupt block from DB at height: {} with hash: {:?}",
                             block_height.0, block_hash.0
                         );
 
@@ -1463,7 +1463,7 @@ impl DbV1 {
             Err(e) => {
                 warn!("Error writing block to DB: {e}");
                 warn!(
-                    "Deleting corrupt block from DB at height: {} with hash: {}",
+                    "Deleting corrupt block from DB at height: {} with hash: {:?}",
                     block_height.0, block_hash.0
                 );
 
