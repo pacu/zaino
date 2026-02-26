@@ -1325,12 +1325,32 @@ impl DbV1 {
                         WriteFlags::empty(),
                     )?;
                     txn.commit()?;
+
                     // mark corresponding output as spent
-                    let _updated = zaino_db.mark_addr_hist_record_spent_blocking(
+                    let prev_addr_bytes = prev_output_script.to_bytes()?;
+                    let packed_prev =
+                        AddrEventBytes::from_record(&prev_output_record).map_err(|e| {
+                            FinalisedStateError::Custom(format!("AddrEventBytes pack error: {e:?}"))
+                        })?;
+                    let prev_entry_bytes =
+                        StoredEntryFixed::new(&prev_addr_bytes, packed_prev).to_bytes()?;
+                    let updated = zaino_db.mark_addr_hist_record_spent_blocking(
                         &prev_output_script,
-                        prev_output_record.tx_location(),
-                        prev_output_record.out_index(),
+                        &prev_entry_bytes,
                     )?;
+                    if !updated {
+                        // Log and treat as invalid block — marking the prev-output must succeed.
+                        return Err(FinalisedStateError::InvalidBlock {
+                            height: block_height.0,
+                            hash: block_hash,
+                            reason: format!(
+                                "failed to mark prev-output spent: addr={} tloc={:?} vout={}",
+                                hex::encode(addr_bytes),
+                                prev_output_record.tx_location(),
+                                prev_output_record.out_index()
+                            ),
+                        });
+                    }
                 }
             }
 
@@ -1703,22 +1723,40 @@ impl DbV1 {
 
             // Delete addrhist input data and mark old outputs spent in this block as unspent
             for (addr_script, records) in &addrhist_inputs_map {
+                let addr_bytes = addr_script.to_bytes()?;
+
                 // Mark outputs spent in this block as unspent
                 for (_record, (prev_output_script, prev_output_record)) in records {
                     {
-                        let _updated = zaino_db
-                            .mark_addr_hist_record_unspent_blocking(
-                                prev_output_script,
-                                prev_output_record.tx_location(),
-                                prev_output_record.out_index(),
-                            )
-                            // TODO: check internals to propagate important errors.
-                            .map_err(|_| FinalisedStateError::InvalidBlock {
+                        // mark corresponding output as unspent
+                        let prev_addr_bytes = prev_output_script.to_bytes()?;
+                        let packed_prev =
+                            AddrEventBytes::from_record(prev_output_record).map_err(|e| {
+                                FinalisedStateError::Custom(format!(
+                                    "AddrEventBytes pack error: {e:?}"
+                                ))
+                            })?;
+                        let prev_entry_bytes =
+                            StoredEntryFixed::new(&prev_addr_bytes, packed_prev).to_bytes()?;
+
+                        let updated = zaino_db.mark_addr_hist_record_unspent_blocking(
+                            prev_output_script,
+                            &prev_entry_bytes,
+                        )?;
+
+                        if !updated {
+                            // Log and treat as invalid block — marking the prev-output must succeed.
+                            return Err(FinalisedStateError::InvalidBlock {
                                 height: block_height.0,
                                 hash: block_hash,
-                                reason: "Corrupt block data: failed to mark output unspent"
-                                    .to_string(),
-                            })?;
+                                reason: format!(
+                                    "failed to mark prev-output spent: addr={} tloc={:?} vout={}",
+                                    hex::encode(addr_bytes),
+                                    prev_output_record.tx_location(),
+                                    prev_output_record.out_index()
+                                ),
+                            });
+                        }
                     }
                 }
 
@@ -4802,7 +4840,7 @@ impl DbV1 {
             }
 
             // Inputs: check spent + addrhist input record
-            for input in tx.inputs() {
+            for (input_index, input) in tx.inputs().iter().enumerate() {
                 // Continue if coinbase.
                 if input.is_null_prevout() {
                     continue;
@@ -4843,9 +4881,10 @@ impl DbV1 {
                     // - [19..=50] checksum
 
                     let flags = val[10];
-                    let vout = u16::from_be_bytes([val[8], val[9]]);
+                    let stored_vout = u16::from_be_bytes([val[8], val[9]]);
+
                     (flags & AddrEventBytes::FLAG_IS_INPUT) != 0
-                        && vout == input.prevout_index() as u16
+                        && stored_vout == input_index as u16
                 });
 
                 if !matched {
@@ -5358,12 +5397,14 @@ impl DbV1 {
 
         for (key, val) in cursor.iter_dup_of(&addr_script_bytes)? {
             if key.len() != AddrScript::VERSIONED_LEN {
-                // TODO: Return error?
-                break;
+                return Err(FinalisedStateError::Custom(
+                    "address history key length mismatch".into(),
+                ));
             }
             if val.len() != StoredEntryFixed::<AddrEventBytes>::VERSIONED_LEN {
-                // TODO: Return error?
-                break;
+                return Err(FinalisedStateError::Custom(
+                    "address history value length mismatch".into(),
+                ));
             }
 
             // Check tx_location match without deserializing
@@ -5545,76 +5586,78 @@ impl DbV1 {
     fn mark_addr_hist_record_spent_blocking(
         &self,
         addr_script: &AddrScript,
-        tx_location: TxLocation,
-        vout: u16,
+        expected_prev_entry_bytes: &[u8],
     ) -> Result<bool, FinalisedStateError> {
         let addr_bytes = addr_script.to_bytes()?;
         let mut txn = self.env.begin_rw_txn()?;
         {
             let mut cur = txn.open_rw_cursor(self.address_history)?;
 
+            // iterate duplicates for the address, but do an exact-value comparison
+            // to find *the* duplicate we intend to flip.
             for (key, val) in cur.iter_dup_of(&addr_bytes)? {
                 if key.len() != AddrScript::VERSIONED_LEN {
-                    // TODO: Return error?
-                    break;
+                    return Err(FinalisedStateError::Custom(
+                        "address history key length mismatch".into(),
+                    ));
                 }
                 if val.len() != StoredEntryFixed::<AddrEventBytes>::VERSIONED_LEN {
-                    // TODO: Return error?
-                    break;
+                    return Err(FinalisedStateError::Custom(
+                        "address history value length mismatch".into(),
+                    ));
                 }
-                let mut hist_record = [0u8; StoredEntryFixed::<AddrEventBytes>::VERSIONED_LEN];
-                hist_record.copy_from_slice(val);
 
-                // Parse the tx_location out of arr:
-                // - [0] StoredEntry tag
-                // - [1] record tag
-                // - [2..=5] height
-                // - [6..=7] tx_index
-                // - [8..=9] vout
-                // - [10] flags
-                // - [11..=18] value
-                // - [19..=50] checksum
-
-                let block_height = u32::from_be_bytes([
-                    hist_record[2],
-                    hist_record[3],
-                    hist_record[4],
-                    hist_record[5],
-                ]);
-                let tx_idx = u16::from_be_bytes([hist_record[6], hist_record[7]]);
-                let rec_vout = u16::from_be_bytes([hist_record[8], hist_record[9]]);
-                let flags = hist_record[10];
-
-                // Skip if this row is an input or already marked spent.
-                if flags & AddrHistRecord::FLAG_IS_INPUT != 0
-                    || flags & AddrHistRecord::FLAG_SPENT != 0
-                {
+                // exact byte-match: val is &[u8], expected_prev_entry_bytes is &[u8]
+                if val != expected_prev_entry_bytes {
                     continue;
                 }
 
-                // Match on (height, tx_location, vout).
-                if block_height == tx_location.block_height()
-                    && tx_idx == tx_location.tx_index()
-                    && rec_vout == vout
-                {
-                    // Flip FLAG_SPENT.
-                    hist_record[10] |= AddrHistRecord::FLAG_SPENT;
+                // we've located the exact duplicate bytes we built earlier.
+                let mut hist_record = [0u8; StoredEntryFixed::<AddrEventBytes>::VERSIONED_LEN];
+                hist_record.copy_from_slice(val);
 
-                    // Recompute checksum over entry header + payload (bytes 1‥19).
-                    let checksum = StoredEntryFixed::<AddrEventBytes>::blake2b256(
-                        &[&addr_bytes, &hist_record[1..19]].concat(),
-                    );
-                    hist_record[19..51].copy_from_slice(&checksum);
+                // Sanity: the record we intend to mark should be a mined output (not an input).
+                let flags = hist_record[10];
+                if (flags & AddrHistRecord::FLAG_IS_INPUT) != 0 {
+                    return Err(FinalisedStateError::Custom(
+                        "attempt to mark an input-row as spent".into(),
+                    ));
+                }
 
-                    // Write back in place.
-                    cur.put(&addr_bytes, &hist_record, WriteFlags::CURRENT)?;
+                // If it's already spent, treat as successful (idempotent).
+                if (flags & AddrHistRecord::FLAG_SPENT) != 0 {
                     drop(cur);
                     txn.commit()?;
-
                     return Ok(true);
                 }
+
+                // If the record is not marked MINED, that's an invariant failure.
+                // We surface it rather than silently overwriting/creating a spent-only record.
+                if (flags & AddrHistRecord::FLAG_MINED) == 0 {
+                    return Err(FinalisedStateError::Custom(
+                        "attempt to mark non-mined addrhist record as spent".into(),
+                    ));
+                }
+
+                // Preserve all existing flags (including MINED), and add SPENT.
+                hist_record[10] |= AddrHistRecord::FLAG_SPENT;
+
+                // Recompute checksum over entry header + payload (bytes 1..19).
+                let checksum = StoredEntryFixed::<AddrEventBytes>::blake2b256(
+                    &[&addr_bytes, &hist_record[1..19]].concat(),
+                );
+                hist_record[19..51].copy_from_slice(&checksum);
+
+                // Write back in place for the exact duplicate we matched.
+                cur.put(&addr_bytes, &hist_record, WriteFlags::CURRENT)?;
+                drop(cur);
+                txn.commit()?;
+
+                return Ok(true);
             }
         }
+
+        // not found
         txn.commit()?;
         Ok(false)
     }
@@ -5628,76 +5671,80 @@ impl DbV1 {
     fn mark_addr_hist_record_unspent_blocking(
         &self,
         addr_script: &AddrScript,
-        tx_location: TxLocation,
-        vout: u16,
+        expected_prev_entry_bytes: &[u8],
     ) -> Result<bool, FinalisedStateError> {
         let addr_bytes = addr_script.to_bytes()?;
         let mut txn = self.env.begin_rw_txn()?;
         {
             let mut cur = txn.open_rw_cursor(self.address_history)?;
 
+            // iterate duplicates for the address, but do an exact-value comparison
+            // to find *the* duplicate we intend to flip.
             for (key, val) in cur.iter_dup_of(&addr_bytes)? {
                 if key.len() != AddrScript::VERSIONED_LEN {
-                    // TODO: Return error?
-                    break;
+                    return Err(FinalisedStateError::Custom(
+                        "address history key length mismatch".into(),
+                    ));
                 }
                 if val.len() != StoredEntryFixed::<AddrEventBytes>::VERSIONED_LEN {
-                    // TODO: Return error?
-                    break;
+                    return Err(FinalisedStateError::Custom(
+                        "address history value length mismatch".into(),
+                    ));
                 }
-                let mut hist_record = [0u8; StoredEntryFixed::<AddrEventBytes>::VERSIONED_LEN];
-                hist_record.copy_from_slice(val);
 
-                // Parse the tx_location out of arr:
-                // - [0] StoredEntry tag
-                // - [1] record tag
-                // - [2..=5] height
-                // - [6..=7] tx_index
-                // - [8..=9] vout
-                // - [10] flags
-                // - [11..=18] value
-                // - [19..=50] checksum
-
-                let block_height = u32::from_be_bytes([
-                    hist_record[2],
-                    hist_record[3],
-                    hist_record[4],
-                    hist_record[5],
-                ]);
-                let tx_idx = u16::from_be_bytes([hist_record[6], hist_record[7]]);
-                let rec_vout = u16::from_be_bytes([hist_record[8], hist_record[9]]);
-                let flags = hist_record[10];
-
-                // Skip if this row is an input or already marked unspent.
-                if (flags & AddrHistRecord::FLAG_IS_INPUT) != 0
-                    || (flags & AddrHistRecord::FLAG_SPENT) == 0
-                {
+                // exact byte-match: val is &[u8], expected_prev_entry_bytes is &[u8]
+                if val != expected_prev_entry_bytes {
                     continue;
                 }
 
-                // Match on (height, tx_location, vout).
-                if block_height == tx_location.block_height()
-                    && tx_idx == tx_location.tx_index()
-                    && rec_vout == vout
-                {
-                    // Flip FLAG_SPENT.
-                    hist_record[10] &= !AddrHistRecord::FLAG_SPENT;
+                // we've located the exact duplicate bytes we built earlier.
+                let mut hist_record = [0u8; StoredEntryFixed::<AddrEventBytes>::VERSIONED_LEN];
+                hist_record.copy_from_slice(val);
 
-                    // Recompute checksum over entry header + payload (bytes 1‥19).
-                    let checksum = StoredEntryFixed::<AddrEventBytes>::blake2b256(
-                        &[&addr_bytes, &hist_record[1..19]].concat(),
-                    );
-                    hist_record[19..51].copy_from_slice(&checksum);
+                // parse flags (located at byte index 10 in the StoredEntry layout)
+                let flags = hist_record[10];
 
-                    // Write back in place.
-                    cur.put(&addr_bytes, &hist_record, WriteFlags::CURRENT)?;
+                // Sanity: the record we intend to mark should be a mined output (not an input).
+                if (flags & AddrHistRecord::FLAG_IS_INPUT) != 0 {
+                    return Err(FinalisedStateError::Custom(
+                        "attempt to mark an input-row as unspent".into(),
+                    ));
+                }
+
+                // If it's already unspent, treat as successful (idempotent).
+                if (flags & AddrHistRecord::FLAG_SPENT) == 0 {
                     drop(cur);
                     txn.commit()?;
-
                     return Ok(true);
                 }
+
+                // If the record is not marked MINED, that's an invariant failure.
+                // We surface it rather than producing a non-mined record.
+                if (flags & AddrHistRecord::FLAG_MINED) == 0 {
+                    return Err(FinalisedStateError::Custom(
+                        "attempt to mark non-mined addrhist record as unspent".into(),
+                    ));
+                }
+
+                // Preserve all existing flags (including MINED), and remove SPENT.
+                hist_record[10] &= !AddrHistRecord::FLAG_SPENT;
+
+                // Recompute checksum over entry header + payload (bytes 1..19).
+                let checksum = StoredEntryFixed::<AddrEventBytes>::blake2b256(
+                    &[&addr_bytes, &hist_record[1..19]].concat(),
+                );
+                hist_record[19..51].copy_from_slice(&checksum);
+
+                // Write back in place for the exact duplicate we matched.
+                cur.put(&addr_bytes, &hist_record, WriteFlags::CURRENT)?;
+                drop(cur);
+                txn.commit()?;
+
+                return Ok(true);
             }
         }
+
+        // not found
         txn.commit()?;
         Ok(false)
     }
