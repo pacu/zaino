@@ -1354,6 +1354,7 @@ impl DbV1 {
                 }
             }
 
+            zaino_db.env.sync(true).ok();
             zaino_db.validate_block_blocking(block_height, block_hash)?;
 
             Ok::<_, FinalisedStateError>(())
@@ -4680,6 +4681,7 @@ impl DbV1 {
             reason: reason.to_owned(),
         };
 
+        self.env.sync(true).ok();
         let ro = self.env.begin_ro_txn()?;
 
         // *** header ***
