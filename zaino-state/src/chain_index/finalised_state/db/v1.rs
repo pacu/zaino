@@ -1762,7 +1762,6 @@ impl DbV1 {
                 // Mark outputs spent in this block as unspent
                 for (_record, (prev_output_script, prev_output_record)) in records {
                     {
-                        // mark corresponding output as unspent
                         let prev_addr_bytes = prev_output_script.to_bytes()?;
                         let packed_prev =
                             AddrEventBytes::from_record(prev_output_record).map_err(|e| {
@@ -1770,12 +1769,27 @@ impl DbV1 {
                                     "AddrEventBytes pack error: {e:?}"
                                 ))
                             })?;
+
+                        // Build the *spent* form of the stored entry so it matches the DB
+                        // (mark_addr_hist_record_spent_blocking sets FLAG_SPENT and
+                        // recomputes the checksum).  We must pass the spent bytes here
+                        // because the DB currently contains the spent version.
                         let prev_entry_bytes =
                             StoredEntryFixed::new(&prev_addr_bytes, packed_prev).to_bytes()?;
 
+                        // Turn the mined-entry into the spent-entry (mutate flags + checksum)
+                        let mut spent_prev_entry = prev_entry_bytes.clone();
+                        // Set SPENT flag (flags byte is at index 10 in StoredEntry layout)
+                        spent_prev_entry[10] |= AddrHistRecord::FLAG_SPENT;
+                        // Recompute checksum over bytes 1..19 as StoredEntryFixed expects.
+                        let checksum = StoredEntryFixed::<AddrEventBytes>::blake2b256(
+                            &[&prev_addr_bytes, &spent_prev_entry[1..19]].concat(),
+                        );
+                        spent_prev_entry[19..51].copy_from_slice(&checksum);
+
                         let updated = zaino_db.mark_addr_hist_record_unspent_blocking(
                             prev_output_script,
-                            &prev_entry_bytes,
+                            &spent_prev_entry,
                         )?;
 
                         if !updated {
