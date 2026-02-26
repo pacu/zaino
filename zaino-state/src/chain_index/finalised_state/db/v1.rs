@@ -1441,6 +1441,10 @@ impl DbV1 {
                     }
                     Err(e) => {
                         warn!("Error writing block to DB: {e}");
+                        warn!(
+                            "Deleting corrupt block from DB at height: {} with hash: {}",
+                            block_height.0, block_hash.0
+                        );
 
                         let _ = self.delete_block(&block).await;
                         tokio::task::block_in_place(|| self.env.sync(true)).map_err(|e| {
@@ -1458,6 +1462,10 @@ impl DbV1 {
             }
             Err(e) => {
                 warn!("Error writing block to DB: {e}");
+                warn!(
+                    "Deleting corrupt block from DB at height: {} with hash: {}",
+                    block_height.0, block_hash.0
+                );
 
                 let _ = self.delete_block(&block).await;
                 tokio::task::block_in_place(|| self.env.sync(true))
