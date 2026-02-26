@@ -1,9 +1,9 @@
 //! Holds tonic generated code for the lightwallet service RPCs and compact formats.
 
+#[allow(clippy::all)]
 pub mod compact_formats;
+#[allow(clippy::all)]
 pub mod proposal;
-// The following mod is procedurally generated, with doc comments
-// formatted in a way clippy doesn't like
-#[allow(clippy::doc_overindented_list_items)]
+#[allow(clippy::all)]
 pub mod service;
 pub mod utils;
