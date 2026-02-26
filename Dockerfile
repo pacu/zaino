@@ -76,8 +76,8 @@ RUN mkdir -p /app/config /app/data && \
 
 # Copy binary and entrypoint
 COPY --from=builder /out/bin/zainod /usr/local/bin/zainod
-COPY entrypoint.sh /usr/local/bin/entrypoint.sh
-RUN chmod +x /usr/local/bin/entrypoint.sh
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
 
 # Default ports
 ARG ZAINO_GRPC_PORT=8137
@@ -88,5 +88,5 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
   CMD /usr/local/bin/zainod --version >/dev/null 2>&1 || exit 1
 
 # Start as root; entrypoint drops privileges after setting up directories
-ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
+ENTRYPOINT ["/entrypoint.sh"]
 CMD ["start"]
