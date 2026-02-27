@@ -192,8 +192,17 @@ use crate::{
     BlockHash, BlockMetadata, BlockWithMetadata, ChainWork, Height, IndexedBlock, StatusType,
 };
 
-use std::{sync::Arc, time::Duration};
-use tokio::time::{interval, MissedTickBehavior};
+use std::{
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    },
+    time::Duration,
+};
+use tokio::{
+    sync::watch,
+    time::{interval, MissedTickBehavior},
+};
 
 use super::source::BlockchainSource;
 
@@ -530,81 +539,129 @@ impl ZainoDB {
             }
         };
 
-        for height_int in (db_height.0)..=height.0 {
-            let block = match source
-                .get_block(zebra_state::HashOrHeight::Height(
-                    zebra_chain::block::Height(height_int),
-                ))
-                .await?
-            {
-                Some(block) => block,
-                None => {
-                    return Err(FinalisedStateError::BlockchainSourceError(
-                        BlockchainSourceError::Unrecoverable(format!(
-                            "error fetching block at height {} from validator",
-                            height.0
-                        )),
-                    ));
+        // Track last time we emitted an info log so we only print every 10s.
+        let current_height = Arc::new(AtomicU64::new(db_height.0 as u64));
+        let target_height = height.0 as u64;
+
+        // Shutdown signal for the reporter task.
+        let (shutdown_tx, shutdown_rx) = watch::channel(());
+        // Spawn reporter task that logs every 10 seconds, even while write_block() is running.
+        let reporter_current = Arc::clone(&current_height);
+        let reporter_network = network;
+        let mut reporter_shutdown = shutdown_rx.clone();
+        let reporter_handle = tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(10));
+            loop {
+                tokio::select! {
+                    _ = interval.tick() => {
+                        let cur = reporter_current.load(Ordering::Relaxed);
+                        tracing::info!(
+                            "sync_to_height: syncing height {current} / {target} on network = {:?}",
+                            reporter_network,
+                            current = cur,
+                            target = target_height
+                        );
+                    }
+                    // stop when we receive a shutdown signal
+                    _ = reporter_shutdown.changed() => {
+                        break;
+                    }
                 }
-            };
+            }
+        });
 
-            let block_hash = BlockHash::from(block.hash().0);
+        // Run the main sync logic inside an inner async block so we always get
+        // a chance to shutdown the reporter task regardless of how this block exits.
+        let result: Result<(), FinalisedStateError> = (async {
+            for height_int in (db_height.0)..=height.0 {
+                // Update the shared progress value as soon as we start processing this height.
+                current_height.store(height_int as u64, Ordering::Relaxed);
 
-            // Fetch sapling / orchard commitment tree data if above relevant network upgrade.
-            let (sapling_opt, orchard_opt) = source.get_commitment_tree_roots(block_hash).await?;
-            let is_sapling_active = height_int >= sapling_activation_height.0;
-            let is_orchard_active = height_int >= nu5_activation_height.0;
-            let (sapling_root, sapling_size) = if is_sapling_active {
-                sapling_opt.ok_or_else(|| {
-                    FinalisedStateError::BlockchainSourceError(
-                        BlockchainSourceError::Unrecoverable(format!(
-                            "missing Sapling commitment tree root for block {block_hash}"
-                        )),
-                    )
-                })?
-            } else {
-                (zebra_chain::sapling::tree::Root::default(), 0)
-            };
+                let block = match source
+                    .get_block(zebra_state::HashOrHeight::Height(
+                        zebra_chain::block::Height(height_int),
+                    ))
+                    .await?
+                {
+                    Some(block) => block,
+                    None => {
+                        return Err(FinalisedStateError::BlockchainSourceError(
+                            BlockchainSourceError::Unrecoverable(format!(
+                                "error fetching block at height {} from validator",
+                                height.0
+                            )),
+                        ));
+                    }
+                };
 
-            let (orchard_root, orchard_size) = if is_orchard_active {
-                orchard_opt.ok_or_else(|| {
-                    FinalisedStateError::BlockchainSourceError(
-                        BlockchainSourceError::Unrecoverable(format!(
-                            "missing Orchard commitment tree root for block {block_hash}"
-                        )),
-                    )
-                })?
-            } else {
-                (zebra_chain::orchard::tree::Root::default(), 0)
-            };
+                let block_hash = BlockHash::from(block.hash().0);
 
-            let metadata = BlockMetadata::new(
-                sapling_root,
-                sapling_size as u32,
-                orchard_root,
-                orchard_size as u32,
-                parent_chainwork,
-                network.to_zebra_network(),
-            );
+                // Fetch sapling / orchard commitment tree data if above relevant network upgrade.
+                let (sapling_opt, orchard_opt) =
+                    source.get_commitment_tree_roots(block_hash).await?;
+                let is_sapling_active = height_int >= sapling_activation_height.0;
+                let is_orchard_active = height_int >= nu5_activation_height.0;
+                let (sapling_root, sapling_size) = if is_sapling_active {
+                    sapling_opt.ok_or_else(|| {
+                        FinalisedStateError::BlockchainSourceError(
+                            BlockchainSourceError::Unrecoverable(format!(
+                                "missing Sapling commitment tree root for block {block_hash}"
+                            )),
+                        )
+                    })?
+                } else {
+                    (zebra_chain::sapling::tree::Root::default(), 0)
+                };
 
-            let block_with_metadata = BlockWithMetadata::new(block.as_ref(), metadata);
-            let chain_block = match IndexedBlock::try_from(block_with_metadata) {
-                Ok(block) => block,
-                Err(_) => {
-                    return Err(FinalisedStateError::BlockchainSourceError(
-                        BlockchainSourceError::Unrecoverable(format!(
-                            "error building block data at height {}",
-                            height.0
-                        )),
-                    ));
-                }
-            };
-            parent_chainwork = *chain_block.index().chainwork();
+                let (orchard_root, orchard_size) = if is_orchard_active {
+                    orchard_opt.ok_or_else(|| {
+                        FinalisedStateError::BlockchainSourceError(
+                            BlockchainSourceError::Unrecoverable(format!(
+                                "missing Orchard commitment tree root for block {block_hash}"
+                            )),
+                        )
+                    })?
+                } else {
+                    (zebra_chain::orchard::tree::Root::default(), 0)
+                };
 
-            self.write_block(chain_block).await?;
-        }
+                let metadata = BlockMetadata::new(
+                    sapling_root,
+                    sapling_size as u32,
+                    orchard_root,
+                    orchard_size as u32,
+                    parent_chainwork,
+                    network.to_zebra_network(),
+                );
 
-        Ok(())
+                let block_with_metadata = BlockWithMetadata::new(block.as_ref(), metadata);
+                let chain_block = match IndexedBlock::try_from(block_with_metadata) {
+                    Ok(block) => block,
+                    Err(_) => {
+                        return Err(FinalisedStateError::BlockchainSourceError(
+                            BlockchainSourceError::Unrecoverable(format!(
+                                "error building block data at height {}",
+                                height.0
+                            )),
+                        ));
+                    }
+                };
+                parent_chainwork = *chain_block.index().chainwork();
+
+                self.write_block(chain_block).await?;
+            }
+
+            Ok(())
+        })
+        .await;
+
+        // Signal the reporter to shut down and wait for it to finish.
+        // Ignore send error if receiver already dropped.
+        let _ = shutdown_tx.send(());
+        // Await the reporter to ensure clean shutdown; ignore errors if it panicked/was aborted.
+        let _ = reporter_handle.await;
+
+        result
     }
 
     /// Appends a single fully constructed [`IndexedBlock`] to the database.
