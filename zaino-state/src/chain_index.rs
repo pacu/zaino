@@ -510,9 +510,9 @@ impl<Source: BlockchainSource> NodeBackedChainIndex<Source> {
     /// an error indicates a failure to cleanly shutdown. Dropping the
     /// chain index should still stop everything
     pub async fn shutdown(&self) -> Result<(), FinalisedStateError> {
+        self.status.store(StatusType::Closing);
         self.finalized_db.shutdown().await?;
         self.mempool.close();
-        self.status.store(StatusType::Closing);
         Ok(())
     }
 
