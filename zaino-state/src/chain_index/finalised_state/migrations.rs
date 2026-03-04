@@ -125,8 +125,12 @@
 //! This release also introduces [`MigrationStep`], the enum-based migration dispatcher used by
 //! [`MigrationManager`], to allow selecting between multiple concrete migration implementations.
 //!
-//! Bug Fixes:
+//! Bug Fixes / Improvements:
 //! - Added safety check for idempotent DB writes
+//!
+//! Efficiency improvements:
+//! - Updated 'fix_addr_hist_records_by_addr_and_index_blocking' to take and reuse an lmdb ro
+//!   transaction, improving initial sync performance.
 
 use super::{
     capability::{
@@ -552,6 +556,10 @@ impl<T: BlockchainSource> Migration<T> for Migration0_0_0To1_0_0 {
 /// - Idempotent: if run more than once, it will re-write the same metadata.
 /// - No shadow database and no table rebuild.
 /// - Clears any stale in-progress migration status.
+///
+/// Efficiency improvements:
+/// - Updated 'fix_addr_hist_records_by_addr_and_index_blocking' to take and reuse an lmdb ro
+///   transaction, improving initial sync performance.
 struct Migration1_0_0To1_1_0;
 
 #[async_trait]
