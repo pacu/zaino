@@ -246,7 +246,11 @@ impl ZcashService for StateService {
                 RpcError::new_from_legacycode(LegacyCode::Misc, "no blocks in chain"),
             )?;
 
-            if server_height.0 == syncer_height.0 {
+            // Currently the ReadStateService and JsonRPC interface in zebra are 1 block out of sync.
+            // For this reason we cannot wait for a direct match, but wait for the syncer to be "close"
+            // to the validator's tip.
+            let diff = server_height.0.abs_diff(syncer_height.0);
+            if diff <= 5 {
                 break;
             } else {
                 info!(" - ReadStateService syncing with Zebra. Syncer chain height: {}, Validator chain height: {}",
