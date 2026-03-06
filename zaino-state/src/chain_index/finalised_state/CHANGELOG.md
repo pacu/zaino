@@ -152,6 +152,8 @@ Migration
 
 Bug Fixes / Optimisations
 - Added safety check for idempotent DB writes
+- Updated 'fix_addr_hist_records_by_addr_and_index_blocking' to take and reuse an lmdb ro transaction, improving initial sync performance.
+
 
 --------------------------------------------------------------------------------
 (append new entries below)

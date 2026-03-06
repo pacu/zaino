@@ -2919,7 +2919,11 @@ impl DbV1 {
         let addr_bytes = addr_script.to_bytes()?;
 
         let rec_results = tokio::task::block_in_place(|| {
-            self.addr_hist_records_by_addr_and_index_blocking(&addr_bytes, tx_location)
+            let ro = self.env.begin_ro_txn()?;
+            let fetch_records_result =
+                self.addr_hist_records_by_addr_and_index_in_txn(&ro, &addr_bytes, tx_location);
+            ro.commit()?;
+            fetch_records_result
         });
 
         let raw_records = match rec_results {
@@ -4855,7 +4859,7 @@ impl DbV1 {
                 let addr_bytes =
                     AddrScript::new(*output.script_hash(), output.script_type()).to_bytes()?;
                 let rec_bytes =
-                    self.addr_hist_records_by_addr_and_index_blocking(&addr_bytes, txid_index)?;
+                    self.addr_hist_records_by_addr_and_index_in_txn(&ro, &addr_bytes, txid_index)?;
 
                 let matched = rec_bytes.iter().any(|val| {
                     // avoid deserialization: check IS_MINED + correct vout
@@ -4906,7 +4910,7 @@ impl DbV1 {
                     AddrScript::new(*prev_output.script_hash(), prev_output.script_type())
                         .to_bytes()?;
                 let rec_bytes =
-                    self.addr_hist_records_by_addr_and_index_blocking(&addr_bytes, txid_index)?;
+                    self.addr_hist_records_by_addr_and_index_in_txn(&ro, &addr_bytes, txid_index)?;
 
                 let matched = rec_bytes.iter().any(|val| {
                     // avoid deserialization: check IS_INPUT + correct vout
@@ -5423,45 +5427,130 @@ impl DbV1 {
     ///
     /// Efficiently filters by matching block + tx index bytes in-place.
     ///
-    /// WARNING: This is a blocking function and **MUST** be called within a blocking thread / task.
-    fn addr_hist_records_by_addr_and_index_blocking(
+    /// WARNING: This operates *inside* an existing RO txn.
+    fn addr_hist_records_by_addr_and_index_in_txn(
         &self,
-        addr_script_bytes: &Vec<u8>,
+        txn: &lmdb::RoTransaction<'_>,
+        addr_script_bytes: &[u8],
         tx_location: TxLocation,
     ) -> Result<Vec<Vec<u8>>, FinalisedStateError> {
-        let txn = self.env.begin_ro_txn()?;
+        // Open a single cursor.
+        let cursor = txn.open_ro_cursor(self.address_history)?;
+        let mut results: Vec<Vec<u8>> = Vec::new();
 
-        let mut cursor = txn.open_ro_cursor(self.address_history)?;
-        let mut results = Vec::new();
+        // Build the seek data prefix that matches the stored bytes:
+        // [StoredEntry version, record version, height_be(4), tx_index_be(2)]
+        let stored_entry_tag = StoredEntryFixed::<AddrEventBytes>::VERSION;
+        let record_tag = AddrEventBytes::VERSION;
 
-        for (key, val) in cursor.iter_dup_of(&addr_script_bytes)? {
-            if key.len() != AddrScript::VERSIONED_LEN {
-                return Err(FinalisedStateError::Custom(
-                    "address history key length mismatch".into(),
-                ));
+        // Reserve the exact number of bytes we need for the SET_RANGE value prefix:
+        //
+        //  - 1 byte: outer StoredEntry version (StoredEntryFixed::<AddrEventBytes>::VERSION)
+        //  - 1 byte: inner record version (AddrEventBytes::VERSION)
+        //  - 4 bytes: block_height  (big-endian)
+        //  - 2 bytes: tx_index     (big-endian)
+        //
+        // This minimal prefix (2 + 4 + 2 = 8 bytes) is all we need for MDB_SET_RANGE to
+        // position at the first duplicate whose value >= (height, tx_index). Using
+        // `with_capacity` avoids reallocations while we build the prefix.  We do *not*
+        // append vout/flags/value/checksum here because we only need the leading bytes
+        // to seek into the dup-sorted data.
+        let mut seek_data = Vec::with_capacity(2 + 4 + 2);
+        seek_data.push(stored_entry_tag);
+        seek_data.push(record_tag);
+        seek_data.extend_from_slice(&tx_location.block_height().to_be_bytes());
+        seek_data.extend_from_slice(&tx_location.tx_index().to_be_bytes());
+
+        // Use MDB_SET_RANGE to position the cursor at the first duplicate for this key whose
+        // duplicate value is >= seek_data (this is the efficient B-tree seek).
+        let op_set_range = lmdb_sys::MDB_SET_RANGE;
+        match cursor.get(Some(addr_script_bytes), Some(&seek_data[..]), op_set_range) {
+            Ok((maybe_key, mut cur_val)) => {
+                // If there's no key, nothing to do
+                let mut cur_key = match maybe_key {
+                    Some(k) => k,
+                    None => return Ok(results),
+                };
+
+                // If the seek landed on a different key, there are no candidates for this addr.
+                if cur_key.len() != AddrScript::VERSIONED_LEN
+                    || &cur_key[..AddrScript::VERSIONED_LEN] != addr_script_bytes
+                {
+                    return Ok(results);
+                }
+
+                // Iterate from the positioned duplicate forward using MDB_NEXT_DUP.
+                let op_next_dup = lmdb_sys::MDB_NEXT_DUP;
+
+                loop {
+                    // Validate lengths, same as original function.
+                    if cur_key.len() != AddrScript::VERSIONED_LEN {
+                        return Err(FinalisedStateError::Custom(
+                            "address history key length mismatch".into(),
+                        ));
+                    }
+                    if cur_val.len() != StoredEntryFixed::<AddrEventBytes>::VERSIONED_LEN {
+                        return Err(FinalisedStateError::Custom(
+                            "address history value length mismatch".into(),
+                        ));
+                    }
+                    if cur_val[0] != StoredEntryFixed::<AddrEventBytes>::VERSION
+                        || cur_val[1] != AddrEventBytes::VERSION
+                    {
+                        return Err(FinalisedStateError::Custom(
+                            "address history value version tag mismatch".into(),
+                        ));
+                    }
+
+                    // Read height and tx_index *in-place* from the value bytes:
+                    // - [0] stored entry tag
+                    // - [1] record tag
+                    // - [2..=5] height (BE)
+                    // - [6..=7] tx_index (BE)
+                    let block_index =
+                        u32::from_be_bytes([cur_val[2], cur_val[3], cur_val[4], cur_val[5]]);
+                    let tx_idx = u16::from_be_bytes([cur_val[6], cur_val[7]]);
+
+                    if block_index == tx_location.block_height() && tx_idx == tx_location.tx_index()
+                    {
+                        // Matching entry — collect the full stored entry bytes (same behaviour).
+                        results.push(cur_val.to_vec());
+                    } else if block_index > tx_location.block_height()
+                        || (block_index == tx_location.block_height()
+                            && tx_idx > tx_location.tx_index())
+                    {
+                        // We've passed the requested tx_location in duplicate ordering -> stop
+                        // (duplicates are ordered by value, so once we pass, no matches remain).
+                        break;
+                    }
+
+                    // Advance to the next duplicate for the same key.
+                    match cursor.get(None, None, op_next_dup) {
+                        Ok((maybe_k, next_val)) => {
+                            // If key changed or no key returned, stop.
+                            let k = match maybe_k {
+                                Some(k) => k,
+                                None => break,
+                            };
+                            if k.len() != AddrScript::VERSIONED_LEN
+                                || &k[..AddrScript::VERSIONED_LEN] != addr_script_bytes
+                            {
+                                break;
+                            }
+                            // Update cur_key and cur_val and continue.
+                            cur_key = k;
+                            cur_val = next_val;
+                            continue;
+                        }
+                        Err(lmdb::Error::NotFound) => break,
+                        Err(e) => return Err(e.into()),
+                    }
+                } // loop
             }
-            if val.len() != StoredEntryFixed::<AddrEventBytes>::VERSIONED_LEN {
-                return Err(FinalisedStateError::Custom(
-                    "address history value length mismatch".into(),
-                ));
+            Err(lmdb::Error::NotFound) => {
+                // Nothing at or after seek -> empty result
             }
-
-            // Check tx_location match without deserializing
-            // - [0] StoredEntry tag
-            // - [1] record tag
-            // - [2..=5] height
-            // - [6..=7] tx_index
-            // - [8..=9] vout
-            // - [10] flags
-            // - [11..=18] value
-            // - [19..=50] checksum
-
-            let block_index = u32::from_be_bytes([val[2], val[3], val[4], val[5]]);
-            let tx_idx = u16::from_be_bytes([val[6], val[7]]);
-
-            if block_index == tx_location.block_height() && tx_idx == tx_location.tx_index() {
-                results.push(val.to_vec());
-            }
+            Err(e) => return Err(e.into()),
         }
 
         Ok(results)
