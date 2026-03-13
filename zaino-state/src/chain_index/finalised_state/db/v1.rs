@@ -3690,8 +3690,13 @@ impl DbV1 {
         end_height: Height,
         pool_types: PoolTypeFilter,
     ) -> Result<CompactBlockStream, FinalisedStateError> {
-        let (validated_start_height, validated_end_height) =
-            self.validate_block_range(start_height, end_height).await?;
+        // Do NOT validate the whole requested range up-front here.
+        // Validate heights on-demand inside the blocking task so we can return
+        // the stream handle immediately and start sending blocks as they become ready.
+        //
+        // Preserve caller ordering: direction is derived from the caller-supplied heights.
+        let validated_start_height = start_height;
+        let validated_end_height = end_height;
 
         let start_key_bytes = validated_start_height.to_bytes()?;
 
@@ -3706,16 +3711,28 @@ impl DbV1 {
         let (sender, receiver) =
             tokio::sync::mpsc::channel::<Result<CompactBlock, tonic::Status>>(128);
 
-        // Clone the database environment.
-        let env = self.env.clone();
-
-        // Copy database handles into the blocking task. LMDB database handles are cheap, copyable IDs.
-        let headers_database = self.headers;
-        let txids_database = self.txids;
-        let transparent_database = self.transparent;
-        let sapling_database = self.sapling;
-        let orchard_database = self.orchard;
-        let commitment_tree_data_database = self.commitment_tree_data;
+        // Clone everything the blocking task needs so we can move it into the blocking closure.
+        // This mirrors patterns already used elsewhere in this module.
+        let zaino_db = Self {
+            env: Arc::clone(&self.env),
+            headers: self.headers,
+            txids: self.txids,
+            transparent: self.transparent,
+            sapling: self.sapling,
+            orchard: self.orchard,
+            commitment_tree_data: self.commitment_tree_data,
+            heights: self.heights,
+            #[cfg(feature = "transparent_address_history_experimental")]
+            spent: self.spent,
+            #[cfg(feature = "transparent_address_history_experimental")]
+            address_history: self.address_history,
+            metadata: self.metadata,
+            validated_tip: Arc::clone(&self.validated_tip),
+            validated_set: self.validated_set.clone(),
+            db_handler: None,
+            status: self.status.clone(),
+            config: self.config.clone(),
+        };
 
         tokio::task::spawn_blocking(move || {
             /// Maximum number of blocks to stream per LMDB read transaction.
@@ -4050,7 +4067,7 @@ impl DbV1 {
                 //
                 // We intentionally drop the transaction regularly to keep reader slots available and
                 // to avoid holding a single snapshot for very large streams.
-                let txn = match env.begin_ro_txn() {
+                let txn = match zaino_db.env.begin_ro_txn() {
                     Ok(txn) => txn,
                     Err(error) => {
                         send_status(
@@ -4063,19 +4080,19 @@ impl DbV1 {
 
                 // Open cursors. Headers is the driving cursor; all others must remain key-aligned.
                 let headers_cursor =
-                    match open_ro_cursor_or_send(&sender, &txn, headers_database, "headers") {
+                    match open_ro_cursor_or_send(&sender, &txn, zaino_db.headers, "headers") {
                         Some(cursor) => cursor,
                         None => return,
                     };
 
                 let txids_cursor =
-                    match open_ro_cursor_or_send(&sender, &txn, txids_database, "txids") {
+                    match open_ro_cursor_or_send(&sender, &txn, zaino_db.txids, "txids") {
                         Some(cursor) => cursor,
                         None => return,
                     };
 
                 let transparent_cursor = if pool_types.includes_transparent() {
-                    match open_ro_cursor_or_send(&sender, &txn, transparent_database, "transparent")
+                    match open_ro_cursor_or_send(&sender, &txn, zaino_db.transparent, "transparent")
                     {
                         Some(cursor) => Some(cursor),
                         None => return,
@@ -4085,7 +4102,7 @@ impl DbV1 {
                 };
 
                 let sapling_cursor = if pool_types.includes_sapling() {
-                    match open_ro_cursor_or_send(&sender, &txn, sapling_database, "sapling") {
+                    match open_ro_cursor_or_send(&sender, &txn, zaino_db.sapling, "sapling") {
                         Some(cursor) => Some(cursor),
                         None => return,
                     }
@@ -4094,7 +4111,7 @@ impl DbV1 {
                 };
 
                 let orchard_cursor = if pool_types.includes_orchard() {
-                    match open_ro_cursor_or_send(&sender, &txn, orchard_database, "orchard") {
+                    match open_ro_cursor_or_send(&sender, &txn, zaino_db.orchard, "orchard") {
                         Some(cursor) => Some(cursor),
                         None => return,
                     }
@@ -4105,7 +4122,7 @@ impl DbV1 {
                 let commitment_tree_cursor = match open_ro_cursor_or_send(
                     &sender,
                     &txn,
-                    commitment_tree_data_database,
+                    zaino_db.commitment_tree_data,
                     "commitment_tree_data",
                 ) {
                     Some(cursor) => cursor,
@@ -4233,6 +4250,40 @@ impl DbV1 {
                             )),
                         );
                         return;
+                    }
+
+                    // ----- Ensure the block is validated (on-demand) -----
+                    // We are in a blocking task; call validate_block_blocking directly but only when needed.
+                    if !zaino_db.is_validated(current_height.into()) {
+                        // header.index().hash() is the block hash we just read from DB; call validator.
+                        let block_hash = *header.index().hash();
+
+                        match zaino_db.validate_block_blocking(current_height, block_hash) {
+                            Ok(()) => {
+                                // validation succeeded and mark_validated has been called inside the validator.
+                            }
+                            Err(FinalisedStateError::LmdbError(lmdb::Error::NotFound)) => {
+                                // missing data that was expected: emit DataUnavailable -> translate to not_found
+                                send_status(
+                                    &sender,
+                                    tonic::Status::internal(format!(
+                                        "block data unavailable during validation at height {}",
+                                        current_height.0
+                                    )),
+                                );
+                                return;
+                            }
+                            Err(e) => {
+                                send_status(
+                                    &sender,
+                                    tonic::Status::internal(format!(
+                                        "validation failed for height {}: {e:?}",
+                                        current_height.0
+                                    )),
+                                );
+                                return;
+                            }
+                        }
                     }
 
                     // ----- Decode txids and optional pool data -----
@@ -4816,7 +4867,6 @@ impl DbV1 {
             reason: reason.to_owned(),
         };
 
-        self.env.sync(true).ok();
         let ro = self.env.begin_ro_txn()?;
 
         // *** header ***
@@ -5108,6 +5158,26 @@ impl DbV1 {
         }
 
         layer[0]
+    }
+
+    /// Ensure `height` is validated.  If it's already validated this is a cheap O(1) check.
+    /// Otherwise this will perform blocking validation (`validate_block_blocking`) and mark
+    /// the height validated on success.
+    ///
+    /// This is the canonical, async-friendly entrypoint you should call from async code.
+    pub async fn validate_height(
+        &self,
+        height: Height,
+        hash: BlockHash,
+    ) -> Result<(), FinalisedStateError> {
+        // Cheap fast-path first, no blocking.
+        if self.is_validated(height.into()) {
+            return Ok(());
+        }
+
+        // Run blocking validation in a blocking context.
+        // Using block_in_place keeps the per-call semantics similar to other callers.
+        tokio::task::block_in_place(|| self.validate_block_blocking(height, hash))
     }
 
     /// Validate a contiguous inclusive range of block heights `[start, end]`.
