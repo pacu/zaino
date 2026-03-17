@@ -166,15 +166,16 @@ impl DbV1 {
             transparent.push(transparent_data);
 
             // Sapling transactions
-            let sapling_data = if tx.sapling().value().is_none() {
-                None
-            } else {
-                Some(tx.sapling().clone())
-            };
+            let sapling_data =
+                if tx.sapling().spends().is_empty() && tx.sapling().outputs().is_empty() {
+                    None
+                } else {
+                    Some(tx.sapling().clone())
+                };
             sapling.push(sapling_data);
 
             // Orchard transactions
-            let orchard_data = if tx.orchard().value().is_none() {
+            let orchard_data = if tx.orchard().actions().is_empty() {
                 None
             } else {
                 Some(tx.orchard().clone())
