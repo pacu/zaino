@@ -121,9 +121,7 @@ use super::{
 };
 
 use crate::{
-    chain_index::{
-        finalised_state::capability::DbMetadata, source::BlockchainSource, types::GENESIS_HEIGHT,
-    },
+    chain_index::{source::BlockchainSource, types::GENESIS_HEIGHT},
     config::BlockCacheConfig,
     error::FinalisedStateError,
     BlockHash, BlockMetadata, BlockWithMetadata, ChainWork, Height, IndexedBlock,
