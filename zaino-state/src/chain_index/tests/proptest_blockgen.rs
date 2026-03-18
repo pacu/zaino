@@ -363,7 +363,7 @@ fn make_chain() {
             tokio::time::sleep(Duration::from_secs(5)).await;
             let index_reader = indexer.subscriber();
             let snapshot = index_reader.snapshot_nonfinalized_state();
-            let best_tip_hash = snapshot.best_chaintip().blockhash;
+            let best_tip_hash = snapshot.best_tip.blockhash;
             let best_tip_block = snapshot
                 .get_chainblock_by_hash(&best_tip_hash)
                 .unwrap();

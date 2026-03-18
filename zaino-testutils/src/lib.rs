@@ -25,8 +25,8 @@ use zaino_common::{
 };
 use zaino_serve::server::config::{GrpcServerConfig, JsonRpcServerConfig};
 use zaino_state::{
-    chain_index::NonFinalizedSnapshot, BackendType, ChainIndex, LightWalletIndexer,
-    LightWalletService, NodeBackedChainIndexSubscriber, ZcashIndexer, ZcashService,
+    BackendType, ChainIndex, LightWalletIndexer, LightWalletService,
+    NodeBackedChainIndexSubscriber, ZcashIndexer, ZcashService,
 };
 use zainodlib::{config::ZainodConfig, error::IndexerError, indexer::Indexer};
 pub use zcash_local_net as services;
@@ -622,12 +622,8 @@ where
         let mut interval = tokio::time::interval(std::time::Duration::from_millis(200));
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         interval.tick().await;
-        while u32::from(
-            chain_index
-                .snapshot_nonfinalized_state()
-                .best_chaintip()
-                .height,
-        ) < chain_height + n
+        while u32::from(chain_index.snapshot_nonfinalized_state().best_tip.height)
+            < chain_height + n
         {
             // Check liveness - fail fast if the chain index is dead
             if !chain_index.is_live() {
@@ -642,12 +638,8 @@ where
                 interval.tick().await;
             } else {
                 self.local_net.generate_blocks(1).await.unwrap();
-                while u32::from(
-                    chain_index
-                        .snapshot_nonfinalized_state()
-                        .best_chaintip()
-                        .height,
-                ) != next_block_height
+                while u32::from(chain_index.snapshot_nonfinalized_state().best_tip.height)
+                    != next_block_height
                 {
                     if !chain_index.is_live() {
                         let status = chain_index.combined_status();
