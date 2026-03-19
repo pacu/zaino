@@ -9,6 +9,8 @@ pub mod test_vectors {
 }
 
 use once_cell::sync::Lazy;
+use tonic::transport::Channel;
+// use zingo_common_components::protocol::{ActivationHeights, ActivationHeightsBuilder};
 use std::{
     future::Future,
     net::{IpAddr, Ipv4Addr, SocketAddr},
@@ -39,8 +41,8 @@ use zcash_local_net::{
 };
 use zcash_local_net::{logs::LogsToStdoutAndStderr, process::Process};
 use zcash_protocol::PoolType;
-use zebra_chain::parameters::{testnet::ConfiguredActivationHeights, NetworkKind};
-use zingo_netutils::{GetClientError, GrpcConnector, UnderlyingService};
+use zebra_chain::parameters::NetworkKind;
+use zingo_netutils::{GetClientError, get_client};
 use zingo_test_vectors::seeds;
 pub use zingolib::get_base_address_macro;
 pub use zingolib::lightclient::LightClient;
@@ -282,6 +284,19 @@ where
     Service::Config: TryFrom<ZainodConfig, Error = IndexerError>,
     IndexerError: From<<<Service as ZcashService>::Subscriber as ZcashIndexer>::Error>,
 {
+
+    pub(crate)fn grpc_socket_to_uri(&self) -> http::Uri {
+        http::Uri::builder()
+            .scheme("http")
+            .authority(self.zaino_grpc_listen_address
+                .expect("grpc_listen_address should be set")
+                .to_string()
+            )
+            .path_and_query("/")
+            .build()
+            .unwrap()
+    }
+
     /// Launches zcash-local-net<Empty, Validator>.
     ///
     /// Possible validators: Zcashd, Zebrad.
@@ -428,24 +443,14 @@ where
                 ),
                 tempfile::tempdir().unwrap(),
             );
-            let configured_activation_heights = ConfiguredActivationHeights {
-                before_overwinter: activation_heights.before_overwinter,
-                overwinter: activation_heights.overwinter,
-                sapling: activation_heights.sapling,
-                blossom: activation_heights.blossom,
-                heartwood: activation_heights.heartwood,
-                canopy: activation_heights.canopy,
-                nu5: activation_heights.nu5,
-                nu6: activation_heights.nu6,
-                nu6_1: activation_heights.nu6_1,
-                nu7: activation_heights.nu7,
-            };
-            let faucet = client_builder.build_faucet(true, configured_activation_heights);
+            
+
+            let faucet = client_builder.build_faucet(true, activation_heights.into());
             let recipient = client_builder.build_client(
                 seeds::HOSPITAL_MUSEUM_SEED.to_string(),
                 1,
                 true,
-                configured_activation_heights,
+                activation_heights.into(),
             );
             Some(Clients {
                 client_builder,
@@ -498,11 +503,7 @@ where
 
     /// Generate `n` blocks for the local network and poll zaino via gRPC until the chain index is synced to the target height.
     pub async fn generate_blocks_and_poll(&self, n: u32) {
-        let mut grpc_client = build_client(services::network::localhost_uri(
-            self.zaino_grpc_listen_address
-                .expect("Zaino listen port is not available but zaino is active.")
-                .port(),
-        ))
+        let mut grpc_client = build_client(self.grpc_socket_to_uri())
         .await
         .unwrap();
         let chain_height = self.local_net.get_chain_height().await;
@@ -701,8 +702,8 @@ impl<C: Validator, Service: LightWalletService + Send + Sync + 'static> Drop
 /// Builds a client for creating RPC requests to the indexer/light-node
 async fn build_client(
     uri: http::Uri,
-) -> Result<CompactTxStreamerClient<UnderlyingService>, GetClientError> {
-    GrpcConnector::new(uri).get_client().await
+) -> Result<CompactTxStreamerClient<Channel>, GetClientError> {
+    get_client(uri).await
 }
 
 #[cfg(test)]
@@ -712,7 +713,6 @@ mod launch_testmanager {
     use zaino_state::FetchService;
 
     mod zcashd {
-
         use zcash_local_net::validator::zcashd::Zcashd;
 
         use super::*;
@@ -788,12 +788,10 @@ mod launch_testmanager {
             )
             .await
             .unwrap();
-            let _grpc_client = build_client(services::network::localhost_uri(
-                test_manager
-                    .zaino_grpc_listen_address
-                    .expect("Zaino listen port is not available but zaino is active.")
-                    .port(),
-            ))
+
+           
+           
+            let _grpc_client = build_client(test_manager.grpc_socket_to_uri())
             .await
             .unwrap();
             test_manager.close().await;
@@ -944,12 +942,7 @@ mod launch_testmanager {
                 )
                 .await
                 .unwrap();
-                let _grpc_client = build_client(services::network::localhost_uri(
-                    test_manager
-                        .zaino_grpc_listen_address
-                        .expect("Zaino listen port not available but zaino is active.")
-                        .port(),
-                ))
+                let _grpc_client = build_client(test_manager.grpc_socket_to_uri())
                 .await
                 .unwrap();
                 test_manager.close().await;
@@ -1225,12 +1218,7 @@ mod launch_testmanager {
                 )
                 .await
                 .unwrap();
-                let _grpc_client = build_client(services::network::localhost_uri(
-                    test_manager
-                        .zaino_grpc_listen_address
-                        .expect("Zaino listen port not available but zaino is active.")
-                        .port(),
-                ))
+                let _grpc_client = build_client(test_manager.grpc_socket_to_uri())
                 .await
                 .unwrap();
                 test_manager.close().await;
