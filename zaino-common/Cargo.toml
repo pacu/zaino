@@ -20,4 +20,3 @@ thiserror = { workspace = true }
 
 # Zingo 
 zingo_common_components = { workspace = true }
-zcash_local_net = { workspace = true }
