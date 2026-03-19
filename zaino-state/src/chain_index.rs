@@ -587,9 +587,11 @@ impl<Source: BlockchainSource> NodeBackedChainIndex<Source> {
 
             // If the sync loop exited unexpectedly with an error, set CriticalError
             // so that liveness checks can detect the failure.
-            if let Err(ref e) = result {
+            if let Err(e) = result {
                 tracing::error!("Sync loop exited with error: {e:?}");
                 status.store(StatusType::CriticalError);
+
+                return Err(e);
             }
 
             result
