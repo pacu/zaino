@@ -258,12 +258,6 @@ impl ZcashService for StateService {
             }
         }
 
-        // let block_cache = BlockCache::spawn(
-        //     &rpc_client,
-        //     Some(&read_state_service),
-        //     config.clone().into(),
-        // )
-        // .await?;
         let mempool_source = ValidatorConnector::State(crate::chain_index::source::State {
             read_state_service: read_state_service.clone(),
             mempool_fetcher: rpc_client.clone(),
@@ -295,7 +289,24 @@ impl ZcashService for StateService {
             status: AtomicStatus::new(StatusType::Spawning),
         };
 
-        state_service.status.store(StatusType::Ready);
+        // wait for sync to complete, return error on sync fail.
+        loop {
+            match state_service.status() {
+                StatusType::Ready => {
+                    state_service.status.store(StatusType::Ready);
+                    break;
+                }
+                StatusType::CriticalError => {
+                    return Err(StateServiceError::Critical(
+                        "Chain index sync failed".to_string(),
+                    ));
+                }
+                StatusType::Closing => break,
+                _ => {
+                    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+                }
+            }
+        }
 
         Ok(state_service)
     }

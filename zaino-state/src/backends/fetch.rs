@@ -145,8 +145,19 @@ impl ZcashService for FetchService {
             config,
         };
 
-        while fetch_service.status() != StatusType::Ready {
-            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+        // wait for sync to complete, return error on sync fail.
+        loop {
+            match fetch_service.status() {
+                StatusType::Ready | StatusType::Closing => break,
+                StatusType::CriticalError => {
+                    return Err(FetchServiceError::Critical(
+                        "ChainIndex initial sync failed, check full log for details.".to_string(),
+                    ));
+                }
+                _ => {
+                    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+                }
+            }
         }
 
         Ok(fetch_service)
