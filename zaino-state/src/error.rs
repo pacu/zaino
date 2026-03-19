@@ -605,13 +605,16 @@ impl ChainIndexError {
         }
     }
 
-    pub(crate) fn database_hole(missing_block: impl Display) -> Self {
+    pub(crate) fn database_hole(
+        missing_block: impl Display,
+        source: Option<Box<dyn std::error::Error + Send + Sync + 'static>>,
+    ) -> Self {
         Self {
             kind: ChainIndexErrorKind::InternalServerError,
             message: format!(
                 "InternalServerError: hole in validator database, missing block {missing_block}"
             ),
-            source: None,
+            source,
         }
     }
 

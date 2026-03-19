@@ -54,7 +54,7 @@ use zaino_proto::proto::{
 };
 
 use crate::{
-    chain_index::NonFinalizedSnapshot as _, ChainIndex, NodeBackedChainIndex,
+    ChainIndex, NodeBackedChainIndex,
     NodeBackedChainIndexSubscriber,
 };
 #[allow(deprecated)]
@@ -905,7 +905,8 @@ impl LightWalletIndexer for FetchServiceSubscriber {
             time::Duration::from_secs((service_timeout * 4) as u64),
             async {
                 let snapshot = fetch_service_clone.indexer.snapshot_nonfinalized_state();
-                let chain_height = snapshot.best_chaintip().height.0;
+                // Use the snapshot tip directly, as this function doesn't support passthrough
+                let chain_height = snapshot.best_tip.height.0;
 
                 match fetch_service_clone
                     .indexer
@@ -1014,7 +1015,9 @@ impl LightWalletIndexer for FetchServiceSubscriber {
             time::Duration::from_secs((service_timeout * 4) as u64),
             async {
                 let snapshot = fetch_service_clone.indexer.snapshot_nonfinalized_state();
-                let chain_height = snapshot.best_chaintip().height.0;
+                
+                // Use the snapshot tip directly, as this function doesn't support passthrough
+                let chain_height = snapshot.best_tip.height.0;
 
                 match fetch_service_clone
                     .indexer

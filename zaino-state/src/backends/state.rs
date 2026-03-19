@@ -5,7 +5,7 @@ use crate::{
     chain_index::{
         mempool::{Mempool, MempoolSubscriber},
         source::ValidatorConnector,
-        types as chain_types, ChainIndex, NonFinalizedSnapshot,
+        types as chain_types, ChainIndex,
     },
     config::StateServiceConfig,
     error::ChainIndexError,
@@ -576,7 +576,7 @@ impl StateServiceSubscriber {
             time::Duration::from_secs((service_timeout * 4) as u64),
             async {
                 let snapshot = state_service_clone.indexer.snapshot_nonfinalized_state();
-                let chain_height = snapshot.best_chaintip().height.0;
+                let chain_height = snapshot.best_tip.height.0;
 
                 match state_service_clone
                     .indexer
@@ -684,7 +684,7 @@ impl StateServiceSubscriber {
         height: u32,
     ) -> Result<CompactBlock, StateServiceError> {
         let snapshot = self.indexer.snapshot_nonfinalized_state();
-        let chain_height = snapshot.best_chaintip().height.0;
+        let chain_height = snapshot.best_tip.height.0;
         Err(if height >= chain_height {
             StateServiceError::TonicStatusError(tonic::Status::out_of_range(format!(
                 "Error: Height out of range [{height}]. Height requested \
@@ -1754,7 +1754,7 @@ impl ZcashIndexer for StateServiceSubscriber {
                                     PoolTypeFilter::includes_all(),
                                 )
                                 .await?
-                                .ok_or_else(|| ChainIndexError::database_hole(tx.height.0))?;
+                                .ok_or_else(|| ChainIndexError::database_hole(tx.height.0, None))?;
                             let tx_object = TransactionObject::from_transaction(
                                 tx.tx.clone(),
                                 best_chain_height,
@@ -2392,7 +2392,7 @@ impl LightWalletIndexer for StateServiceSubscriber {
         let service_timeout = self.config.service.timeout;
         let (channel_tx, channel_rx) = mpsc::channel(self.config.service.channel_size as usize);
         let snapshot = self.indexer.snapshot_nonfinalized_state();
-        let mempool_height = snapshot.best_chaintip().height.0;
+        let mempool_height = snapshot.best_tip.height.0;
         tokio::spawn(async move {
             let timeout = timeout(
                 time::Duration::from_secs((service_timeout * 6) as u64),
