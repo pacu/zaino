@@ -230,6 +230,24 @@ fn passthrough_get_raw_transaction() {
 }
 
 #[test]
+fn passthrough_best_chaintip() {
+    passthrough_test(async |mockchain, index_reader, snapshot| {
+        let tip = index_reader.best_chaintip(&snapshot).await.unwrap();
+        assert_eq!(
+            tip.height.0,
+            mockchain
+                .best_branch()
+                .last()
+                .unwrap()
+                .coinbase_height()
+                .unwrap()
+                .0
+                .saturating_sub(100)
+        );
+    })
+}
+
+#[test]
 fn passthrough_get_block_height() {
     passthrough_test(async |mockchain, index_reader, snapshot| {
         // We use a futures-unordered instead of only a for loop
