@@ -1,24 +1,27 @@
 [package]
 name = "zaino-fetch"
 description = "A mempool-fetching, chain-fetching and transaction submission service that uses zebra's RPC interface."
-edition = { workspace = true }
 authors = { workspace = true }
-license = { workspace = true }
 repository = { workspace = true }
+homepage = { workspace = true }
+edition = { workspace = true }
+license = { workspace = true }
+version = { workspace = true }
 
 [dependencies]
-zaino-proto = { path = "../zaino-proto" }
-
-# Librustzcash
-zcash_protocol = { workspace = true }
+zaino-common = { workspace = true }
+zaino-proto = { workspace = true }
 
 # Zebra
 zebra-chain = { workspace = true }
 zebra-rpc = { workspace = true }
 
+# Tracing
+tracing = { workspace = true }
+
 # Miscellaneous Workspace
 tokio = { workspace = true, features = ["full"] }
-tonic = { workspace = true }
+tonic = { workspace = true, features = ["tls-native-roots"] }
 http = { workspace = true }
 thiserror = { workspace = true }
 
@@ -26,11 +29,15 @@ thiserror = { workspace = true }
 prost = { workspace = true }
 reqwest = { workspace = true }
 url = { workspace = true }
-serde_json = { workspace = true, features = ["preserve_order"] } # The preserve_order feature in serde_jsonn is a dependency of jsonrpc-core
+serde_json = { workspace = true, features = ["preserve_order"] }
 serde = { workspace = true, features = ["derive"] }
 hex = { workspace = true, features = ["serde"] }
 indexmap = { workspace = true, features = ["serde"] }
 base64 = { workspace = true }
 byteorder = { workspace = true }
 sha2 = { workspace = true }
+jsonrpsee-types = { workspace = true }
+derive_more = { workspace = true, features = ["from"] }
 
+[dev-dependencies]
+zaino-testvectors = { workspace = true }

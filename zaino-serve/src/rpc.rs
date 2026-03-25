@@ -1,17 +1,20 @@
-//! Lightwallet service RPC implementations.
+//! gRPC / JsonRPC service implementations.
 
-use std::sync::{atomic::AtomicBool, Arc};
+use zaino_state::{IndexerSubscriber, LightWalletIndexer, ZcashIndexer};
 
-pub mod service;
+pub mod grpc;
+pub mod jsonrpc;
 
-#[derive(Debug, Clone)]
-/// Configuration data for gRPC server.
-pub struct GrpcClient {
-    /// Lightwalletd uri.
-    /// Used by grpc_passthrough to pass on unimplemented RPCs.
-    pub lightwalletd_uri: http::Uri,
-    /// Zebrad uri.
-    pub zebrad_uri: http::Uri,
-    /// Represents the Online status of the gRPC server.
-    pub online: Arc<AtomicBool>,
+#[derive(Clone)]
+/// Zaino gRPC service.
+pub struct GrpcClient<Indexer: ZcashIndexer + LightWalletIndexer> {
+    /// Chain fetch service subscriber.
+    pub service_subscriber: IndexerSubscriber<Indexer>,
+}
+
+#[derive(Clone)]
+/// Zaino JSONRPC service.
+pub struct JsonRpcClient<Indexer: ZcashIndexer + LightWalletIndexer> {
+    /// Chain fetch service subscriber.
+    pub service_subscriber: IndexerSubscriber<Indexer>,
 }

@@ -1,26 +1,55 @@
 [package]
 name = "integration-tests"
-description = "Crate containing Zaino 'Wallet-to-Node' tests."
-edition = { workspace = true }
+description = "Crate containing Zaino's integration-tests."
+publish = false
+
 authors = { workspace = true }
-license = { workspace = true }
 repository = { workspace = true }
+homepage = { workspace = true }
+edition = { workspace = true }
+license = { workspace = true }
+version = { workspace = true }
 
-[dependencies]
+[features]
+# **Experimental and alpha features**
+# Exposes the **complete** set of experimental / alpha features currently implemented in Zaino.
+experimental_features = ["transparent_address_history_experimental"]
+
+# Activates transparent address history capability in zaino
+#
+# NOTE: currently this is only implemented in the finalised state.
+transparent_address_history_experimental = [
+    "zaino-state/transparent_address_history_experimental",
+    "zainod/transparent_address_history_experimental",
+    "zaino-testutils/transparent_address_history_experimental"
+]
+
+[dev-dependencies]
+anyhow = { workspace = true }
+
 # Test utility
-zaino-testutils = { path = "../zaino-testutils" }
+zainod = { workspace = true }
+zaino-testutils = { workspace = true }
+zaino-fetch = { workspace = true }
+zaino-proto.workspace = true
+zaino-common.workspace = true
+zaino-state = { workspace = true, features = ["test_dependencies"] }
+zebra-chain.workspace = true
+zebra-state.workspace = true
+zebra-rpc.workspace = true
+zip32 = {workspace = true}
 
-# Test fixtures
-zcash_local_net = { workspace = true, features = ["test_fixtures"] }
-
-# Lightclient
-zingolib = { workspace = true }
+core2 = { workspace = true }
+prost = { workspace = true }
+serde_json = { workspace = true, features = ["preserve_order"] }
+futures.workspace = true
+tempfile.workspace = true
+tower = { workspace = true, features = ["buffer", "util"] }
+hex = { workspace = true }
 
 # Runtime
 tokio = { workspace = true }
 
-# Logging
-tracing-subscriber = { workspace = true }
-
-# Lazy
-once_cell = { workspace = true }
+# Zingo-infra
+zcash_local_net = { workspace = true }
+zingo_test_vectors = { workspace = true }

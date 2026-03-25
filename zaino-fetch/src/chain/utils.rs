@@ -9,11 +9,12 @@ use crate::chain::error::ParseError;
 pub trait ParseFromSlice {
     /// Reads data from a bytestring, consuming data read, and returns an instance of self along with the remaining data in the bytestring given.
     ///
-    /// txid is givin as an input as this is taken from a get_block verbose=1 call.
+    /// txid is giving as an input as this is taken from a get_block verbose=1 call.
     ///
     /// tx_version is used for deserializing sapling spends and outputs.
     fn parse_from_slice(
         data: &[u8],
+        // TODO: Why is txid a vec of vecs?
         txid: Option<Vec<Vec<u8>>>,
         tx_version: Option<u32>,
     ) -> Result<(&[u8], Self), ParseError>
@@ -34,7 +35,7 @@ pub(crate) fn skip_bytes(
     Ok(())
 }
 
-/// Reads the next n bytes from cursor into a vec<u8>, returns error message given if eof is reached.
+/// Reads the next n bytes from cursor into a `vec<u8>`, returns error message given if eof is reached.
 pub(crate) fn read_bytes(
     cursor: &mut Cursor<&[u8]>,
     n: usize,
@@ -59,6 +60,14 @@ pub(crate) fn read_u64(cursor: &mut Cursor<&[u8]>, error_msg: &str) -> Result<u6
 pub(crate) fn read_u32(cursor: &mut Cursor<&[u8]>, error_msg: &str) -> Result<u32, ParseError> {
     cursor
         .read_u32::<LittleEndian>()
+        .map_err(ParseError::from)
+        .map_err(|_| ParseError::InvalidData(error_msg.to_string()))
+}
+
+/// Reads the next 8 bytes from cursor into an i64, returns error message given if eof is reached.
+pub(crate) fn read_i64(cursor: &mut Cursor<&[u8]>, error_msg: &str) -> Result<i64, ParseError> {
+    cursor
+        .read_i64::<LittleEndian>()
         .map_err(ParseError::from)
         .map_err(|_| ParseError::InvalidData(error_msg.to_string()))
 }
@@ -163,7 +172,7 @@ impl CompactSize {
         }
     }
 
-    /// Reads an integer encoded in contact form and performs checked conversion
+    /// Reads an integer encoded in compact form and performs checked conversion
     /// to the target type.
     #[allow(dead_code)]
     pub(crate) fn read_t<R: Read, T: TryFrom<u64>>(mut reader: R) -> io::Result<T> {
@@ -194,21 +203,4 @@ impl CompactSize {
             }
         }
     }
-}
-
-/// Takes a vec of big endian hex encoded txids and returns them as a vec of little endian raw bytes.
-pub(crate) fn display_txids_to_server(txids: Vec<String>) -> Result<Vec<Vec<u8>>, ParseError> {
-    txids
-        .iter()
-        .map(|txid| {
-            txid.as_bytes()
-                .chunks(2)
-                .map(|chunk| {
-                    let hex_pair = std::str::from_utf8(chunk).map_err(ParseError::from)?;
-                    u8::from_str_radix(hex_pair, 16).map_err(ParseError::from)
-                })
-                .rev()
-                .collect::<Result<Vec<u8>, _>>()
-        })
-        .collect::<Result<Vec<Vec<u8>>, _>>()
 }

@@ -1,17 +1,17 @@
 # Zaino
 Zaino is an indexer for the Zcash blockchain implemented in Rust.
 
-Zaino provides all necessary functionality for "light" clients (wallets and other applications that don't rely on the complete history of blockchain) and "full" clients / wallets and block explorers providing access both the finalized chain and the non-finalized best chain and mempool held by either a Zebra or Zcashd full validator.
+Zaino provides all necessary functionality for "light" clients (wallets and other applications that don't rely on the complete history of blockchain) and "full" clients / wallets and block explorers providing access to both the finalized chain and the non-finalized best chain and mempool held by either a Zebra or Zcashd full validator.
 
 
 ### Motivations
 With the ongoing Zcashd deprecation project, there is a push to transition to a modern, Rust-based software stack for the Zcash ecosystem. By implementing Zaino in Rust, we aim to modernize the codebase, enhance performance and improve overall security. This work will build on the foundations laid down by [Librustzcash](https://github.com/zcash/librustzcash) and [Zebra](https://github.com/ZcashFoundation/zebra), helping to ensure that the Zcash infrastructure remains robust and maintainable for the future.
 
-Due to current potential data leaks / security weaknesses highlighted in [revised-nym-for-zcash-network-level-privacy](https://forum.zcashcommunity.com/t/revised-nym-for-zcash-network-level-privacy/46688) and [wallet-threat-model](https://zcash.readthedocs.io/en/master/rtd_pages/wallet_threat_model.html), there is a need to use anonymous transport protocols (such as Nym or Tor) to obfuscate clients' identities from Zcash's indexing servers ([Lightwalletd](https://github.com/zcash/lightwalletd), [Zcashd](https://github.com/zcash/zcash), Zaino). As Nym has chosen Rust as their primary SDK ([Nym-SDK](https://github.com/nymtech/nym)), and Tor is currently implementing Rust support ([Arti](https://gitlab.torproject.org/tpo/core/arti)), Rust is a straight-forward and well-suited choice for this software.
+Due to current potential data leaks / security weaknesses highlighted in [revised-nym-for-zcash-network-level-privacy](https://forum.zcashcommunity.com/t/revised-nym-for-zcash-network-level-privacy/46688) and [wallet-threat-model](https://zcash.readthedocs.io/en/master/rtd_pages/wallet_threat_model.html), there is a need to use anonymous transport protocols (such as Nym or Tor) to obfuscate clients' identities from Zcash's indexing servers ([Lightwalletd](https://github.com/zcash/lightwalletd), [Zcashd](https://github.com/zcash/zcash), Zaino). As Nym has chosen Rust as their primary SDK ([Nym-SDK](https://github.com/nymtech/nym)), and Tor is currently implementing Rust support ([Arti](https://gitlab.torproject.org/tpo/core/arti)), Rust is a straightforward and well-suited choice for this software.
 
 Zebra has been designed to allow direct read access to the finalized state and RPC access to the non-finalized state through its ReadStateService. Integrating directly with this service enables efficient access to chain data and allows new indices to be offered with minimal development.
 
-Separation of validation and indexing functionality serves several purposes. First, by removing indexing functionality from the Validator (Zebra) will lead to a smaller and more maintainable codebase. Second, by moving all indexing functionality away from Zebra into Zaino will unify this paradigm and simplify Zcash's security model. Separating this concerns (consensus node and blockchain indexing) serves to create a clear trust boundary between the Indexer and Validator allowing the Indexer to take on this responsibility. Historically, this had been the case for "light" clients/wallets using [Lightwalletd](https://github.com/zcash/lightwalletd) as opposed to "full-node" client/wallets and block explorers that were directly served by the [Zcashd full node](https://github.com/zcash/zcash).
+Separation of validation and indexing functionality serves several purposes. First, by removing indexing functionality from the Validator (Zebra) will lead to a smaller and more maintainable codebase. Second, by moving all indexing functionality away from Zebra into Zaino will unify this paradigm and simplify Zcash's security model. Separating these concerns (consensus node and blockchain indexing) serves to create a clear trust boundary between the Indexer and Validator allowing the Indexer to take on this responsibility. Historically, this had been the case for "light" clients/wallets using [Lightwalletd](https://github.com/zcash/lightwalletd) as opposed to "full-node" client/wallets and block explorers that were directly served by the [Zcashd full node](https://github.com/zcash/zcash).
 
 
 ### Goals
@@ -29,18 +29,19 @@ Currently Zebra's `ReadStateService` only enables direct access to chain data (b
 
 ## Documentation
 - [Use Cases](./docs/use_cases.md): Holds instructions and example use cases.
-- [Testing](./docs/testing.md): Hold intructions fo running tests.
-- [Live Service System Architecture](./docs/live_system_architecture.pdf): Holds the Zcash system architecture diagram for the Zaino live service.
-- [Library System Architecture](./docs/lib_system_architecture.pdf): Holds the Zcash system architecture diagram for the Zaino client library.
-- [Internal Architecture](./docs/internal_architecture.pdf): Holds an internal Zaino system architecture diagram.
-- [Internal Specification](./docs/internal_spec.md): Holds a specification for Zaino and its crates, detailing and their functionality, interfaces and dependencies.
+- [Testing](./docs/testing.md): Holds instructions for running tests.
+- [Live Service System Architecture](./docs/zaino_live_system_architecture.pdf): Holds the Zcash system architecture diagram for the Zaino live service.
+- [Library System Architecture](./docs/zaino_lib_system_architecture.pdf): Holds the Zcash system architecture diagram for the Zaino client library.
+- [ZainoD (Live Service) Internal Architecture](./docs/zaino_serve_architecture_v020.pdf): Holds an internal Zaino system architecture diagram.
+- [Zaino-State (Library) Internal Architecture](./docs/zaino_state_architecture_v020.pdf): Holds an internal Zaino system architecture diagram.
+- [Internal Specification](./docs/internal_spec.md): Holds a specification for Zaino and its crates, detailing their functionality, interfaces and dependencies.
 - [RPC API Spec](./docs/rpc_api.md): Holds a full specification of all of the RPC services served by Zaino.
 - [Cargo Docs](https://zingolabs.github.io/zaino/): Holds a full code specification for Zaino.
 
 
 ## Security Vulnerability Disclosure
-If you believe you have discovered a security issue, please contact us at:
-
+If you believe you have discovered a security issue, and it is time sensitive, please contact us online on Matrix. See our [CONTRIBUTING.md document](./CONTRIBUTING.md) for contact points.
+Otherwise you can send an email to:
 zingodisclosure@proton.me
 
 

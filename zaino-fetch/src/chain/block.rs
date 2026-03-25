@@ -1,20 +1,15 @@
 //! Block fetching and deserialization functionality.
 
-use crate::{
-    chain::{
-        error::{BlockCacheError, ParseError},
-        transaction::FullTransaction,
-        utils::{
-            display_txids_to_server, read_bytes, read_i32, read_u32, read_zcash_script_i64,
-            CompactSize, ParseFromSlice,
-        },
-    },
-    jsonrpc::{connector::JsonRpcConnector, response::GetBlockResponse},
+use crate::chain::{
+    error::ParseError,
+    transaction::FullTransaction,
+    utils::{read_bytes, read_i32, read_u32, read_zcash_script_i64, CompactSize, ParseFromSlice},
 };
 use sha2::{Digest, Sha256};
 use std::io::Cursor;
-use zaino_proto::proto::compact_formats::{
-    ChainMetadata, CompactBlock, CompactOrchardAction, CompactTx,
+use zaino_proto::proto::{
+    compact_formats::{ChainMetadata, CompactBlock},
+    utils::PoolTypeFilter,
 };
 
 /// A block header, containing metadata about a block.
@@ -34,7 +29,7 @@ struct BlockHeaderData {
     /// a free field. The only constraint is that it must be at least `4` when
     /// interpreted as an `i32`.
     ///
-    /// Size [bytes]: 4
+    /// Size \[bytes\]: 4
     version: i32,
 
     /// The hash of the previous block, used to create a chain of blocks back to
@@ -43,7 +38,7 @@ struct BlockHeaderData {
     /// This ensures no previous block can be changed without also changing this
     /// block's header.
     ///
-    /// Size [bytes]: 32
+    /// Size \[bytes\]: 32
     hash_prev_block: Vec<u8>,
 
     /// The root of the Bitcoin-inherited transaction Merkle tree, binding the
@@ -55,21 +50,21 @@ struct BlockHeaderData {
     /// transactions with the same Merkle root, although only one set will be
     /// valid.
     ///
-    /// Size [bytes]: 32
+    /// Size \[bytes\]: 32
     hash_merkle_root: Vec<u8>,
 
-    /// [Pre-Sapling] A reserved field which should be ignored.
-    /// [Sapling onward] The root LEBS2OSP_256(rt) of the Sapling note
+    /// \[Pre-Sapling\] A reserved field which should be ignored.
+    /// \[Sapling onward\] The root LEBS2OSP_256(rt) of the Sapling note
     /// commitment tree corresponding to the final Sapling treestate of this
     /// block.
     ///
-    /// Size [bytes]: 32
+    /// Size \[bytes\]: 32
     hash_final_sapling_root: Vec<u8>,
 
     /// The block timestamp is a Unix epoch time (UTC) when the miner
     /// started hashing the header (according to the miner).
     ///
-    /// Size [bytes]: 4
+    /// Size \[bytes\]: 4
     time: u32,
 
     /// An encoded version of the target threshold this block's header
@@ -81,19 +76,19 @@ struct BlockHeaderData {
     ///
     /// [Bitcoin-nBits](https://bitcoin.org/en/developer-reference#target-nbits)
     ///
-    /// Size [bytes]: 4
+    /// Size \[bytes\]: 4
     n_bits_bytes: Vec<u8>,
 
     /// An arbitrary field that miners can change to modify the header
     /// hash in order to produce a hash less than or equal to the
     /// target threshold.
     ///
-    /// Size [bytes]: 32
+    /// Size \[bytes\]: 32
     nonce: Vec<u8>,
 
     /// The Equihash solution.
     ///
-    /// Size [bytes]: CompactLength
+    /// Size \[bytes\]: CompactLength
     solution: Vec<u8>,
 }
 
@@ -224,6 +219,11 @@ impl FullBlockHeader {
         self.raw_block_header.hash_merkle_root.clone()
     }
 
+    /// Returns the final sapling root of the block.
+    pub fn final_sapling_root(&self) -> Vec<u8> {
+        self.raw_block_header.hash_final_sapling_root.clone()
+    }
+
     /// Returns the time when the miner started hashing the header (according to the miner).
     pub fn time(&self) -> u32 {
         self.raw_block_header.time
@@ -255,7 +255,7 @@ impl FullBlockHeader {
 pub struct FullBlock {
     /// The block header, containing block metadata.
     ///
-    /// Size [bytes]: 140+CompactLength
+    /// Size \[bytes\]: 140+CompactLength
     hdr: FullBlockHeader,
 
     /// The block transactions.
@@ -329,7 +329,7 @@ impl ParseFromSlice for FullBlock {
 /// Genesis block special case.
 ///
 /// From LightWalletD:
-/// see https://github.com/zcash/lightwalletd/issues/17#issuecomment-467110828.
+/// see <https://github.com/zcash/lightwalletd/issues/17#issuecomment-467110828>.
 const GENESIS_TARGET_DIFFICULTY: u32 = 520617983;
 
 impl FullBlock {
@@ -348,6 +348,16 @@ impl FullBlock {
         self.height
     }
 
+    /// Returns the Orchard `authDataRoot` of the block, taken from the coinbase transaction's anchorOrchard field.
+    ///
+    /// If the coinbase transaction is v5 and includes an Orchard bundle, this is the root of the Orchard commitment tree
+    /// after applying all Orchard actions in the block.
+    ///
+    /// Returns `Some(Vec<u8>)` if present, else `None`.
+    pub fn auth_data_root(&self) -> Option<Vec<u8>> {
+        self.vtx.first().and_then(|tx| tx.anchor_orchard())
+    }
+
     /// Decodes a hex encoded zcash full block into a FullBlock struct.
     pub fn parse_from_hex(data: &[u8], txid: Option<Vec<Vec<u8>>>) -> Result<Self, ParseError> {
         let (remaining_data, full_block) = Self::parse_from_slice(data, txid, None)?;
@@ -355,27 +365,41 @@ impl FullBlock {
             return Err(ParseError::InvalidData(format!(
                 "Error decoding full block - {} bytes of Remaining data. Compact Block Created: ({:?})",
                 remaining_data.len(),
-                full_block.into_compact(0, 0)
+                full_block.into_compact_block(0, 0, PoolTypeFilter::includes_all())
             )));
         }
         Ok(full_block)
     }
 
-    /// Converts a zcash full block into a compact block.
-    pub fn into_compact(
+    /// Turns this Block into a Compact Block according to the Lightclient protocol [ZIP-307](https://zips.z.cash/zip-0307)
+    /// callers can choose which pools to include in this compact block by specifying a
+    /// `PoolTypeFilter` accordingly.
+    pub fn into_compact_block(
         self,
         sapling_commitment_tree_size: u32,
         orchard_commitment_tree_size: u32,
+        pool_types: PoolTypeFilter,
     ) -> Result<CompactBlock, ParseError> {
         let vtx = self
             .vtx
             .into_iter()
             .enumerate()
             .filter_map(|(index, tx)| {
-                if tx.has_shielded_elements() {
-                    Some(tx.to_compact(index as u64))
-                } else {
-                    None
+                match tx.to_compact_tx(Some(index as u64), &pool_types) {
+                    Ok(compact_tx) => {
+                        // Omit transactions that have no elements in any requested pool type.
+                        if !compact_tx.vin.is_empty()
+                            || !compact_tx.vout.is_empty()
+                            || !compact_tx.spends.is_empty()
+                            || !compact_tx.outputs.is_empty()
+                            || !compact_tx.actions.is_empty()
+                        {
+                            Some(Ok(compact_tx))
+                        } else {
+                            None
+                        }
+                    }
+                    Err(parse_error) => Some(Err(parse_error)),
                 }
             })
             .collect::<Result<Vec<_>, _>>()?;
@@ -385,7 +409,7 @@ impl FullBlock {
         let header = Vec::new();
 
         let compact_block = CompactBlock {
-            proto_version: 0,
+            proto_version: 4,
             height: self.height as u64,
             hash: self.hdr.cached_hash.clone(),
             prev_hash: self.hdr.raw_block_header.hash_prev_block.clone(),
@@ -401,10 +425,25 @@ impl FullBlock {
         Ok(compact_block)
     }
 
+    #[deprecated]
+    /// Converts a zcash full block into a **legacy** compact block.
+    pub fn into_compact(
+        self,
+        sapling_commitment_tree_size: u32,
+        orchard_commitment_tree_size: u32,
+    ) -> Result<CompactBlock, ParseError> {
+        self.into_compact_block(
+            sapling_commitment_tree_size,
+            orchard_commitment_tree_size,
+            PoolTypeFilter::default(),
+        )
+    }
+
     /// Extracts the block height from the coinbase transaction.
     fn get_block_height(transactions: &[FullTransaction]) -> Result<i32, ParseError> {
         let transparent_inputs = transactions[0].transparent_inputs();
-        let coinbase_script = transparent_inputs[0].as_slice();
+        let (_, _, script_sig) = transparent_inputs[0].clone();
+        let coinbase_script = script_sig.as_slice();
 
         let mut cursor = Cursor::new(coinbase_script);
 
@@ -420,109 +459,5 @@ impl FullBlock {
         }
 
         Ok(height_num as i32)
-    }
-}
-
-/// Returns a compact block.
-///
-/// Retrieves a full block from zebrad/zcashd using 2 get_block calls.
-/// This is because a get_block verbose = 1 call is require to fetch txids.
-/// TODO: Save retrieved CompactBlock to the BlockCache.
-/// TODO: Return more representative error type.
-pub async fn get_block_from_node(
-    zebra_uri: &http::Uri,
-    height: &u32,
-) -> Result<CompactBlock, BlockCacheError> {
-    let zebrad_client = JsonRpcConnector::new(
-        zebra_uri.clone(),
-        Some("xxxxxx".to_string()),
-        Some("xxxxxx".to_string()),
-    )
-    .await?;
-    let block_1 = zebrad_client.get_block(height.to_string(), Some(1)).await;
-    match block_1 {
-        Ok(GetBlockResponse::Object {
-            hash,
-            confirmations: _,
-            height: _,
-            time: _,
-            tx,
-            trees,
-        }) => {
-            let block_0 = zebrad_client.get_block(hash.0.to_string(), Some(0)).await;
-            match block_0 {
-                Ok(GetBlockResponse::Object {
-                    hash: _,
-                    confirmations: _,
-                    height: _,
-                    time: _,
-                    tx: _,
-                    trees: _,
-                }) => Err(BlockCacheError::ParseError(ParseError::InvalidData(
-                    "Received object block type, this should not be possible here.".to_string(),
-                ))),
-                Ok(GetBlockResponse::Raw(block_hex)) => Ok(FullBlock::parse_from_hex(
-                    block_hex.as_ref(),
-                    Some(display_txids_to_server(tx)?),
-                )?
-                .into_compact(
-                    u32::try_from(trees.sapling()).map_err(ParseError::from)?,
-                    u32::try_from(trees.orchard()).map_err(ParseError::from)?,
-                )?),
-                Err(e) => Err(e.into()),
-            }
-        }
-        Ok(GetBlockResponse::Raw(_)) => Err(BlockCacheError::ParseError(ParseError::InvalidData(
-            "Received raw block type, this should not be possible here.".to_string(),
-        ))),
-        Err(e) => Err(e.into()),
-    }
-}
-
-/// Returns a compact block holding only action nullifiers.
-///
-/// Retrieves a full block from zebrad/zcashd using 2 get_block calls.
-/// This is because a get_block verbose = 1 call is require to fetch txids.
-///
-/// TODO / NOTE: This should be rewritten when the BlockCache is added.
-pub async fn get_nullifiers_from_node(
-    zebra_uri: &http::Uri,
-    height: &u32,
-) -> Result<CompactBlock, BlockCacheError> {
-    match get_block_from_node(zebra_uri, height).await {
-        Ok(block) => Ok(CompactBlock {
-            proto_version: block.proto_version,
-            height: block.height,
-            hash: block.hash,
-            prev_hash: block.prev_hash,
-            time: block.time,
-            header: block.header,
-            vtx: block
-                .vtx
-                .into_iter()
-                .map(|tx| CompactTx {
-                    index: tx.index,
-                    hash: tx.hash,
-                    fee: tx.fee,
-                    spends: tx.spends,
-                    outputs: Vec::new(),
-                    actions: tx
-                        .actions
-                        .into_iter()
-                        .map(|action| CompactOrchardAction {
-                            nullifier: action.nullifier,
-                            cmx: Vec::new(),
-                            ephemeral_key: Vec::new(),
-                            ciphertext: Vec::new(),
-                        })
-                        .collect(),
-                })
-                .collect(),
-            chain_metadata: Some(ChainMetadata {
-                sapling_commitment_tree_size: 0,
-                orchard_commitment_tree_size: 0,
-            }),
-        }),
-        Err(e) => Err(e),
     }
 }

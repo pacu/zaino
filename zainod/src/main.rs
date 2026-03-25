@@ -1,24 +1,21 @@
-//! Zingo-Indexer daemon
+//! Zaino Indexer daemon.
 
 use clap::Parser;
-use std::path::PathBuf;
-use zainodlib::{config::load_config, indexer::Indexer};
 
-#[derive(Parser, Debug)]
-#[command(name = "zindexer", about = "A server for Zingo-Indexer")]
-struct Args {
-    /// Path to the configuration file
-    #[arg(short, long, value_name = "FILE")]
-    config: Option<PathBuf>,
-}
+use zainodlib::cli::{default_config_path, Cli, Command};
 
 #[tokio::main]
 async fn main() {
-    Indexer::start(load_config(
-        &Args::parse()
-            .config
-            .unwrap_or_else(|| PathBuf::from("./zainod/zindexer.toml")),
-    ))
-    .await
-    .unwrap();
+    let cli = Cli::parse();
+
+    match cli.command {
+        Command::Start { config } => {
+            let config_path = config.unwrap_or_else(default_config_path);
+            if let Err(e) = zainodlib::run(config_path).await {
+                eprintln!("Error: {}", e);
+                std::process::exit(1);
+            }
+        }
+        Command::GenerateConfig { output } => Command::generate_config(output),
+    }
 }

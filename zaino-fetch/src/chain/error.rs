@@ -1,7 +1,5 @@
 //! Hold error types for the BlockCache and related functionality.
 
-use crate::jsonrpc::error::JsonRpcConnectorError;
-
 /// Parser Error Type.
 #[derive(Debug, thiserror::Error)]
 pub enum ParseError {
@@ -32,23 +30,34 @@ pub enum ParseError {
     /// Integer conversion error.
     #[error("Integer conversion error: {0}")]
     TryFromIntError(#[from] std::num::TryFromIntError),
-}
 
-/// Parser Error Type.
-#[derive(Debug, thiserror::Error)]
-pub enum BlockCacheError {
-    /// Serialization and deserialization error.
-    #[error("Parser Error: {0}")]
-    ParseError(#[from] ParseError),
-    /// Errors from the JsonRPC client.
-    #[error("JsonRPC Connector Error: {0}")]
-    JsonRpcError(#[from] JsonRpcConnectorError),
-}
+    /// Unecpected read order for sequential binary data
+    #[error("Sequential binary data read: field {field} expected on position {expected_order} of transaction, read on {actual_order}")]
+    InvalidParseOrder {
+        /// the noncomplient field
+        field: &'static str,
+        /// TODO: What does this mean
+        expected_order: u8,
+        /// TODO: What does this mean
+        actual_order: u8,
+    },
 
-/// Mempool Error struct.
-#[derive(thiserror::Error, Debug)]
-pub enum MempoolError {
-    /// Errors from the JsonRPC client.
-    #[error("JsonRPC Connector Error: {0}")]
-    JsonRpcError(#[from] JsonRpcConnectorError),
+    /// Unexpected field size during parsing
+    #[error("Field {field} expected size {expected} bytes, but advanced {actual} bytes")]
+    UnexpectedFieldSize {
+        /// the noncomplient field
+        field: &'static str,
+        /// size (in bytes) the field should have been
+        expected: usize,
+        /// size (in bytes) the field actually was
+        actual: usize,
+    },
+
+    /// Field not found in reader
+    #[error("Field not found: {0}")]
+    FieldNotFound(String),
+
+    /// Field not parsed yet
+    #[error("Field not parsed: {0}")]
+    FieldNotParsed(&'static str),
 }

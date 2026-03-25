@@ -1,242 +1,275 @@
-//! Zingo-Indexer implementation.
+//! Zaino : Zingo-Indexer implementation.
 
-use std::{
-    net::SocketAddr,
-    process,
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc,
-    },
+use tokio::time::Instant;
+use tracing::info;
+
+use zaino_fetch::jsonrpsee::connector::test_node_and_return_url;
+use zaino_serve::server::{config::GrpcServerConfig, grpc::TonicServer, jsonrpc::JsonRpcServer};
+#[allow(deprecated)]
+use zaino_state::{
+    BackendType, FetchService, FetchServiceConfig, IndexerService, LightWalletService,
+    StateService, StateServiceConfig, StatusType, ZcashIndexer, ZcashService,
 };
 
-use http::Uri;
-use zaino_fetch::jsonrpc::connector::test_node_and_return_uri;
-use zaino_serve::server::{
-    director::{Server, ServerStatus},
-    error::ServerError,
-    AtomicStatus, StatusType,
-};
+use crate::{config::ZainodConfig, error::IndexerError};
 
-use crate::{config::IndexerConfig, error::IndexerError};
-
-/// Holds the status of the server and all its components.
-#[derive(Debug, Clone)]
-pub struct IndexerStatus {
-    indexer_status: AtomicStatus,
-    server_status: ServerStatus,
-    // block_cache_status: BlockCacheStatus,
+/// Zaino, the Zingo-Indexer.
+pub struct Indexer<Service: ZcashService + LightWalletService> {
+    /// JsonRPC server.
+    ///
+    /// Disabled by default.
+    json_server: Option<JsonRpcServer>,
+    /// GRPC server.
+    server: Option<TonicServer>,
+    /// Chain fetch service state process handler..
+    service: Option<IndexerService<Service>>,
 }
 
-impl IndexerStatus {
-    /// Creates a new IndexerStatus.
-    pub fn new(max_workers: u16) -> Self {
-        IndexerStatus {
-            indexer_status: AtomicStatus::new(5),
-            server_status: ServerStatus::new(max_workers),
+/// Starts Indexer service.
+///
+/// Currently only takes an IndexerConfig.
+pub async fn start_indexer(
+    config: ZainodConfig,
+) -> Result<tokio::task::JoinHandle<Result<(), IndexerError>>, IndexerError> {
+    startup_message();
+    info!("Starting Zaino..");
+    spawn_indexer(config).await
+}
+
+/// Spawns a new Indexer server.
+pub async fn spawn_indexer(
+    config: ZainodConfig,
+) -> Result<tokio::task::JoinHandle<Result<(), IndexerError>>, IndexerError> {
+    config.check_config()?;
+    info!("Checking connection with node..");
+    let zebrad_uri = test_node_and_return_url(
+        &config.validator_settings.validator_jsonrpc_listen_address,
+        config.validator_settings.validator_cookie_path.clone(),
+        config.validator_settings.validator_user.clone(),
+        config.validator_settings.validator_password.clone(),
+    )
+    .await?;
+
+    info!(
+        " - Connected to node using JsonRPSee at address {}.",
+        zebrad_uri
+    );
+
+    #[allow(deprecated)]
+    match config.backend {
+        BackendType::State => {
+            let state_config = StateServiceConfig::try_from(config.clone())?;
+            Indexer::<StateService>::launch_inner(state_config, config)
+                .await
+                .map(|res| res.0)
+        }
+        BackendType::Fetch => {
+            let fetch_config = FetchServiceConfig::try_from(config.clone())?;
+            Indexer::<FetchService>::launch_inner(fetch_config, config)
+                .await
+                .map(|res| res.0)
         }
     }
-
-    /// Returns the IndexerStatus.
-    pub fn load(&self) -> IndexerStatus {
-        self.indexer_status.load();
-        self.server_status.load();
-        self.clone()
-    }
 }
 
-/// Zingo-Indexer.
-pub struct Indexer {
-    /// Indexer configuration data.
-    _config: IndexerConfig,
-    /// GRPC server.
-    server: Option<Server>,
-    // /// Internal block cache.
-    // block_cache: BlockCache,
-    /// Indexers status.
-    status: IndexerStatus,
-    /// Online status of the indexer.
-    online: Arc<AtomicBool>,
-}
+impl<Service: ZcashService + LightWalletService + Send + Sync + 'static> Indexer<Service>
+where
+    IndexerError: From<<Service::Subscriber as ZcashIndexer>::Error>,
+{
+    /// Spawns a new Indexer server.
+    // TODO: revise whether returning the subscriber here is the best way to access the service after the indexer is spawned.
+    pub async fn launch_inner(
+        service_config: Service::Config,
+        indexer_config: ZainodConfig,
+    ) -> Result<
+        (
+            tokio::task::JoinHandle<Result<(), IndexerError>>,
+            Service::Subscriber,
+        ),
+        IndexerError,
+    > {
+        let service = IndexerService::<Service>::spawn(service_config).await?;
+        let service_subscriber = service.inner_ref().get_subscriber();
 
-impl Indexer {
-    /// Starts Indexer service.
-    ///
-    /// Currently only takes an IndexerConfig.
-    pub async fn start(config: IndexerConfig) -> Result<(), IndexerError> {
-        let online = Arc::new(AtomicBool::new(true));
-        set_ctrlc(online.clone());
-        startup_message();
-        self::Indexer::start_indexer_service(config, online)
-            .await?
-            .await?
-    }
+        let json_server = match indexer_config.json_server_settings {
+            Some(json_server_config) => Some(
+                JsonRpcServer::spawn(service.inner_ref().get_subscriber(), json_server_config)
+                    .await
+                    .unwrap(),
+            ),
+            None => None,
+        };
 
-    /// Launches an Indexer service.
-    ///
-    /// Spawns an indexer service in a new task.
-    pub async fn start_indexer_service(
-        config: IndexerConfig,
-        online: Arc<AtomicBool>,
-    ) -> Result<tokio::task::JoinHandle<Result<(), IndexerError>>, IndexerError> {
-        // NOTE: This interval may need to be reduced or removed / moved once scale testing begins.
-        let mut interval = tokio::time::interval(tokio::time::Duration::from_millis(50));
-        println!("Launching Zingdexer!");
-        let mut indexer: Indexer = Indexer::new(config, online.clone()).await?;
-        Ok(tokio::task::spawn(async move {
-            let server_handle = if let Some(server) = indexer.server.take() {
-                Some(server.serve().await)
-            } else {
-                return Err(IndexerError::MiscIndexerError(
-                    "Server Missing! Fatal Error!.".to_string(),
-                ));
-            };
+        let grpc_server = TonicServer::spawn(
+            service.inner_ref().get_subscriber(),
+            GrpcServerConfig {
+                listen_address: indexer_config.grpc_settings.listen_address,
+                tls: indexer_config.grpc_settings.tls,
+            },
+        )
+        .await
+        .unwrap();
 
-            indexer.status.indexer_status.store(2);
+        let mut indexer = Self {
+            json_server,
+            server: Some(grpc_server),
+            service: Some(service),
+        };
+
+        let mut server_interval = tokio::time::interval(tokio::time::Duration::from_millis(100));
+        let mut last_log_time = Instant::now();
+        let log_interval = tokio::time::Duration::from_secs(10);
+
+        let serve_task = tokio::task::spawn(async move {
             loop {
-                indexer.status.load();
-                // indexer.log_status();
+                // Log the servers status.
+                if last_log_time.elapsed() >= log_interval {
+                    indexer.log_status();
+                    last_log_time = Instant::now();
+                }
+
+                // Check for restart signals.
+                if indexer.check_for_critical_errors() {
+                    indexer.close().await;
+                    return Err(IndexerError::Restart);
+                }
+
+                // Check for shutdown signals.
                 if indexer.check_for_shutdown() {
-                    indexer.status.indexer_status.store(4);
-                    indexer.shutdown_components(server_handle).await;
-                    indexer.status.indexer_status.store(5);
+                    indexer.close().await;
                     return Ok(());
                 }
-                interval.tick().await;
+
+                server_interval.tick().await;
             }
-        }))
+        });
+
+        Ok((serve_task, service_subscriber.inner()))
     }
 
-    /// Creates a new Indexer.
-    ///
-    /// Currently only takes an IndexerConfig.
-    async fn new(config: IndexerConfig, online: Arc<AtomicBool>) -> Result<Self, IndexerError> {
-        config.check_config()?;
-        let status = IndexerStatus::new(config.max_worker_pool_size);
-        let tcp_ingestor_listen_addr: Option<SocketAddr> = config
-            .listen_port
-            .map(|port| SocketAddr::new(std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST), port));
-        let lightwalletd_uri = Uri::builder()
-            .scheme("http")
-            .authority(format!("localhost:{}", config.lightwalletd_port))
-            .path_and_query("/")
-            .build()?;
-        println!("Checking connection with node..");
-        let zebrad_uri = test_node_and_return_uri(
-            &config.zebrad_port,
-            config.node_user.clone(),
-            config.node_password.clone(),
-        )
-        .await?;
-        status.indexer_status.store(0);
-        let server = Some(
-            Server::spawn(
-                config.tcp_active,
-                tcp_ingestor_listen_addr,
-                lightwalletd_uri,
-                zebrad_uri,
-                config.max_queue_size,
-                config.max_worker_pool_size,
-                config.idle_worker_pool_size,
-                status.server_status.clone(),
-                online.clone(),
-            )
-            .await?,
-        );
-        println!("Server Ready.");
-        Ok(Indexer {
-            _config: config,
-            server,
-            status,
-            online,
-        })
+    /// Checks indexers status and servers internal statuses for either offline of critical error signals.
+    fn check_for_critical_errors(&self) -> bool {
+        let status = self.status_int();
+        status == 5 || status >= 7
     }
 
-    /// Checks indexers online status and servers internal status for closure signal.
+    /// Checks indexers status and servers internal status for closure signal.
     fn check_for_shutdown(&self) -> bool {
-        if self.status() >= 4 {
-            return true;
-        }
-        if !self.check_online() {
+        if self.status_int() == 4 {
             return true;
         }
         false
     }
 
     /// Sets the servers to close gracefully.
-    pub fn shutdown(&mut self) {
-        self.status.indexer_status.store(4)
-    }
+    async fn close(&mut self) {
+        if let Some(mut json_server) = self.json_server.take() {
+            json_server.close().await;
+            json_server.status.store(StatusType::Offline);
+        }
 
-    /// Sets the server's components to close gracefully.
-    async fn shutdown_components(
-        &mut self,
-        server_handle: Option<tokio::task::JoinHandle<Result<(), ServerError>>>,
-    ) {
-        if let Some(handle) = server_handle {
-            self.status.server_status.server_status.store(4);
-            handle.await.ok();
+        if let Some(mut server) = self.server.take() {
+            server.close().await;
+            server.status.store(StatusType::Offline);
+        }
+
+        if let Some(service) = self.service.take() {
+            let mut service = service.inner();
+            service.close();
         }
     }
 
-    /// Returns the indexers current status usize.
-    pub fn status(&self) -> usize {
-        self.status.indexer_status.load()
+    /// Returns the indexers current status usize, calculates from internal statuses.
+    fn status_int(&self) -> usize {
+        let service_status = match &self.service {
+            Some(service) => service.inner_ref().status(),
+            None => return 7,
+        };
+
+        let json_server_status = self
+            .json_server
+            .as_ref()
+            .map(|json_server| json_server.status());
+
+        let mut server_status = match &self.server {
+            Some(server) => server.status(),
+            None => return 7,
+        };
+
+        if let Some(json_status) = json_server_status {
+            server_status = StatusType::combine(server_status, json_status);
+        }
+
+        usize::from(StatusType::combine(service_status, server_status))
     }
 
-    /// Returns the indexers current statustype.
-    pub fn statustype(&self) -> StatusType {
-        StatusType::from(self.status())
+    /// Returns the current StatusType of the indexer.
+    pub fn status(&self) -> StatusType {
+        StatusType::from(self.status_int())
     }
 
-    /// Returns the status of the indexer and its parts.
-    pub fn statuses(&mut self) -> IndexerStatus {
-        self.status.load();
-        self.status.clone()
-    }
+    /// Logs the indexers status.
+    pub fn log_status(&self) {
+        let service_status = match &self.service {
+            Some(service) => service.inner_ref().status(),
+            None => StatusType::Offline,
+        };
 
-    /// Check the online status on the indexer.
-    fn check_online(&self) -> bool {
-        self.online.load(Ordering::SeqCst)
+        let json_server_status = match &self.json_server {
+            Some(json_server) => json_server.status(),
+            None => StatusType::Offline,
+        };
+
+        let grpc_server_status = match &self.server {
+            Some(server) => server.status(),
+            None => StatusType::Offline,
+        };
+
+        let service_status_symbol = service_status.get_status_symbol();
+        let json_server_status_symbol = json_server_status.get_status_symbol();
+        let grpc_server_status_symbol = grpc_server_status.get_status_symbol();
+
+        info!(
+            "Zaino status check - ChainState Service:{}{} JsonRPC Server:{}{} gRPC Server:{}{}",
+            service_status_symbol,
+            service_status,
+            json_server_status_symbol,
+            json_server_status,
+            grpc_server_status_symbol,
+            grpc_server_status
+        );
     }
 }
 
-fn set_ctrlc(online: Arc<AtomicBool>) {
-    ctrlc::set_handler(move || {
-        online.store(false, Ordering::SeqCst);
-        process::exit(0);
-    })
-    .expect("Error setting Ctrl-C handler");
-}
-
+/// Prints Zaino's startup message.
 fn startup_message() {
     let welcome_message = r#"
-       ░░░░░░░▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒░░░▒▒░░░░░       
-       ░░░░▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒████▓░▒▒▒░░       
-       ░░▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒████▓▒▒▒▒▒▒       
-       ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒░▒▒▒▒▒▒▒▒       
-       ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▓▓▓▓▒▒▒▒▒▒▒▒▒▒▒▒▓▓▒▒▒▒▒▒▒▒       
-       ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▒▒▒▒▒██▓▒▒▒▒▒▒▒       
-       ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▒▒██▓▒▒▒▒▒▒▒       
-       ▒▒▒▒▒▒▒▒▒▒▒▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓███▓██▓▒▒▒▒▒▒▒       
-       ▒▒▒▒▒▒▒▒▒▒▓▓▓▓▒███▓░▒▓▓████████████████▓▓▒▒▒▒▒▒▒▒▒       
-       ▒▒▒▒▒▒▒▒▒▓▓▓▓▒▓████▓▓███████████████████▓▒▓▓▒▒▒▒▒▒       
-       ▒▒▒▒▒▒▒▒▓▓▓▓▓▒▒▓▓▓▓████████████████████▓▒▓▓▓▒▒▒▒▒▒       
-       ▒▒▒▒▒▒▒▒▓▓▓▓▓█████████████████████████▓▒▓▓▓▓▓▒▒▒▒▒       
-       ▒▒▒▒▒▒▒▓▓▓▒▓█████████████████████████▓▓▓▓▓▓▓▓▒▒▒▒▒       
-       ▒▒▒▒▒▒▒▒▓▓▓████████████████████████▓▓▓▓▓▓▓▓▓▒▒▒▒▒▒       
-       ▒▒▒▒▒▒▒▒▓▒███████████████████████▒▓▓▓▓▓▓▓▓▓▓▒▒▒▒▒▒       
-       ▒▒▒▒▒▒▒▒▒▓███████████████████▓▓▓▓▓▓▓▓▓▓▓▓▓▓▒▒▒▒▒▒▒       
-       ▒▒▒▒▒▒▒▒▒▓███████████████▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▒▒▒▒▒▒▒▒       
-       ▒▒▒▒▒▒▒▒▒▓██████████▓▓▒▒▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▒▒▒▒▒▒▒▒▒▒       
-       ▒▒▒▒▒▒▒███▓▒▓▓▓▓▓▒▒▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▒▒▒▒▒▒▒▒▒▒▒▒▒       
-       ▒▒▒▒▒▒▓████▒▒▒▒▒▒▒▒▓▓▓▓▓▓▓▓▓▓▓▓▓▓▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒       
-       ▒▒▒▒▒▒▒░▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒       
-              Thank you for using ZingoLabs Zaino!     
+       ░▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒████▓░▒▒▒
+       ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒████▓▒▒▒▒
+       ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒░▒▒▒▒▒▒
+       ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▓▓▓▓▒▒▒▒▒▒▒▒▒▒▒▒▓▓▒▒▒▒▒▒
+       ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▒▒▒▒▒██▓▒▒▒▒▒
+       ▒▒▒▒▒▒▒▒▒▒▒▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▒▒██▓▒▒▒▒▒
+       ▒▒▒▒▒▒▒▒▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓███▓██▓▒▒▒▒▒
+       ▒▒▒▒▒▒▒▓▓▓▓▒███▓░▒▓▓████████████████▓▓▒▒▒▒▒▒▒
+       ▒▒▒▒▒▒▓▓▓▓▒▓████▓▓███████████████████▓▒▓▓▒▒▒▒
+       ▒▒▒▒▒▓▓▓▓▓▒▒▓▓▓▓████████████████████▓▒▓▓▓▒▒▒▒
+       ▒▒▒▒▒▓▓▓▓▓█████████████████████████▓▒▓▓▓▓▓▒▒▒
+       ▒▒▒▒▓▓▓▒▓█████████████████████████▓▓▓▓▓▓▓▓▒▒▒
+       ▒▒▒▒▒▓▓▓████████████████████████▓▓▓▓▓▓▓▓▓▒▒▒▒
+       ▒▒▒▒▒▓▒███████████████████████▒▓▓▓▓▓▓▓▓▓▓▒▒▒▒
+       ▒▒▒▒▒▒▓███████████████████▓▓▓▓▓▓▓▓▓▓▓▓▓▓▒▒▒▒▒
+       ▒▒▒▒▒▒▓███████████████▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▒▒▒▒▒▒
+       ▒▒▒▒▒▒▓██████████▓▓▒▒▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▒▒▒▒▒▒▒▒
+       ▒▒▒▒███▓▒▓▓▓▓▓▒▒▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▒▒▒▒▒▒▒▒▒▒▒
+       ▒▒▒▓████▒▒▒▒▒▒▒▒▓▓▓▓▓▓▓▓▓▓▓▓▓▓▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒
+       ▒▒▒▒░▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒
+       ▒▒▒▒░▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒
+             Thank you for using ZingoLabs Zaino!
 
        - Donate to us at https://free2z.cash/zingolabs.
-       - Submit any security conserns to us at zingodisclosure@proton.me.
 
 ****** Please note Zaino is currently in development and should not be used to run mainnet nodes. ******
     "#;
-    println!("{}", welcome_message);
+    println!("{welcome_message}");
 }
