@@ -5774,6 +5774,7 @@ dependencies = [
  "memuse",
  "nonempty",
  "rand_core 0.6.4",
+ "sapling-crypto",
  "secrecy",
  "subtle",
  "tracing",
