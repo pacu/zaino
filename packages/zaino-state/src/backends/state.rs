@@ -2712,15 +2712,12 @@ impl LightWalletIndexer for StateServiceSubscriber {
         )
         .to_string();
 
-        let nu_info = blockchain_info
-            .upgrades()
-            .last()
-            .expect("Expected validator to have a consenus activated.")
-            .1
+        let latest_upgrade = super::latest_network_upgrade(blockchain_info.upgrades())
+            .map_err(StateServiceError::TonicStatusError)?
             .into_parts();
 
-        let nu_name = nu_info.0;
-        let nu_height = nu_info.1;
+        let nu_name = latest_upgrade.0;
+        let nu_height = latest_upgrade.1;
 
         Ok(LightdInfo {
             version: self.data.build_info().version(),
