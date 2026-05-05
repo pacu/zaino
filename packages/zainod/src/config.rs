@@ -5,6 +5,10 @@ use std::{
     path::PathBuf,
 };
 
+/// Default port for the Prometheus metrics endpoint.
+#[cfg(feature = "prometheus")]
+pub const DEFAULT_METRICS_PORT: u16 = 9998;
+
 use serde::{Deserialize, Serialize};
 use tracing::info;
 #[cfg(any(
@@ -76,6 +80,12 @@ pub struct ZainodConfig {
     pub zebra_db_path: PathBuf,
     /// Network to connect to (Mainnet, Testnet, or Regtest).
     pub network: Network,
+    /// Prometheus metrics endpoint listen address.
+    ///
+    /// Set to enable the `/metrics` scrape endpoint. Disabled when `None`.
+    /// Requires the `prometheus` feature.
+    #[cfg(feature = "prometheus")]
+    pub metrics_endpoint: Option<SocketAddr>,
 
     // Table sections
     /// JSON-RPC server settings. Set to enable Zaino's JSON-RPC interface.
@@ -220,6 +230,8 @@ impl Default for ZainodConfig {
     fn default() -> Self {
         Self {
             backend: BackendType::default(),
+            #[cfg(feature = "prometheus")]
+            metrics_endpoint: None,
             json_server_settings: None,
             grpc_settings: GrpcServerConfig {
                 listen_address: "127.0.0.1:8137".parse().unwrap(),
