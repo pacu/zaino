@@ -137,7 +137,6 @@ impl DbV1 {
         let mut sapling = Vec::with_capacity(tx_len);
         let mut orchard = Vec::with_capacity(tx_len);
 
-        #[cfg(feature = "transparent_address_history_experimental")]
         let mut spent_map: HashMap<Outpoint, TxLocation> = HashMap::new();
 
         #[cfg(feature = "transparent_address_history_experimental")]
@@ -184,11 +183,20 @@ impl DbV1 {
             };
             orchard.push(orchard_data);
 
+            // Transaction location
+            let tx_location = TxLocation::new(block_height.into(), _tx_index as u16);
+
+            // Transparent Inputs: Build Spent Outpoints Index
+            for input in tx.transparent().inputs().iter() {
+                if input.is_null_prevout() {
+                    continue;
+                }
+                let prev_outpoint = Outpoint::new(*input.prevout_txid(), input.prevout_index());
+                spent_map.insert(prev_outpoint, tx_location);
+            }
+
             #[cfg(feature = "transparent_address_history_experimental")]
             {
-                // Transaction location
-                let tx_location = TxLocation::new(block_height.into(), _tx_index as u16);
-
                 // Transparent Outputs: Build Address History
                 DbV1::build_transaction_output_histories(
                     &mut addrhist_outputs_map,
@@ -196,7 +204,7 @@ impl DbV1 {
                     tx.transparent().outputs().iter().enumerate(),
                 );
 
-                // Transparent Inputs: Build Spent Outpoints Index and Address History
+                // Transparent Inputs: Build Address History
                 for (input_index, input) in tx.transparent().inputs().iter().enumerate() {
                     if input.is_null_prevout() {
                         continue;
@@ -204,7 +212,7 @@ impl DbV1 {
                     let prev_outpoint = Outpoint::new(*input.prevout_txid(), input.prevout_index());
                     spent_map.insert(prev_outpoint, tx_location);
 
-                    //Check if output is in *this* block, else fetch from DB.
+                    // Check if output is in *this* block, else fetch from DB.
                     let prev_tx_hash = TransactionHash(*prev_outpoint.prev_txid());
                     if txid_set.contains(&prev_tx_hash) {
                         // Fetch transaction index within block
@@ -280,7 +288,6 @@ impl DbV1 {
             orchard: self.orchard,
             commitment_tree_data: self.commitment_tree_data,
             heights: self.heights,
-            #[cfg(feature = "transparent_address_history_experimental")]
             spent: self.spent,
             #[cfg(feature = "transparent_address_history_experimental")]
             address_history: self.address_history,
@@ -345,21 +352,21 @@ impl DbV1 {
                 WriteFlags::NO_OVERWRITE,
             )?;
 
+            // Write spent to ZainoDB
+            for (outpoint, tx_location) in spent_map {
+                let outpoint_bytes = &outpoint.to_bytes()?;
+                let tx_location_entry_bytes =
+                    StoredEntryFixed::new(outpoint_bytes, tx_location).to_bytes()?;
+                txn.put(
+                    zaino_db.spent,
+                    &outpoint_bytes,
+                    &tx_location_entry_bytes,
+                    WriteFlags::NO_OVERWRITE,
+                )?;
+            }
+
             #[cfg(feature = "transparent_address_history_experimental")]
             {
-                // Write spent to ZainoDB
-                for (outpoint, tx_location) in spent_map {
-                    let outpoint_bytes = &outpoint.to_bytes()?;
-                    let tx_location_entry_bytes =
-                        StoredEntryFixed::new(outpoint_bytes, tx_location).to_bytes()?;
-                    txn.put(
-                        zaino_db.spent,
-                        &outpoint_bytes,
-                        &tx_location_entry_bytes,
-                        WriteFlags::NO_OVERWRITE,
-                    )?;
-                }
-
                 // Write outputs to ZainoDB addrhist
                 for (addr_script, records) in addrhist_outputs_map {
                     let addr_bytes = addr_script.to_bytes()?;
@@ -714,7 +721,6 @@ impl DbV1 {
         let mut txid_set: HashSet<TransactionHash> = HashSet::with_capacity(tx_len);
         let mut transparent = Vec::with_capacity(tx_len);
 
-        #[cfg(feature = "transparent_address_history_experimental")]
         let mut spent_map: Vec<Outpoint> = Vec::new();
 
         #[cfg(feature = "transparent_address_history_experimental")]
@@ -744,6 +750,15 @@ impl DbV1 {
                 };
             transparent.push(transparent_data);
 
+            // Build Spent Outpoints Index
+            for input in tx.transparent().inputs().iter() {
+                if input.is_null_prevout() {
+                    continue;
+                }
+                let prev_outpoint = Outpoint::new(*input.prevout_txid(), input.prevout_index());
+                spent_map.push(prev_outpoint);
+            }
+
             #[cfg(feature = "transparent_address_history_experimental")]
             {
                 // Transaction location
@@ -756,13 +771,11 @@ impl DbV1 {
                     tx.transparent().outputs().iter().enumerate(),
                 );
 
-                // Transparent Inputs: Build Spent Outpoints Index and Address History
+                // Transparent Inputs: Build Address History
                 for (input_index, input) in tx.transparent().inputs().iter().enumerate() {
                     if input.is_null_prevout() {
                         continue;
                     }
-                    let prev_outpoint = Outpoint::new(*input.prevout_txid(), input.prevout_index());
-                    spent_map.push(prev_outpoint);
 
                     //Check if output is in *this* block, else fetch from DB.
                     let prev_tx_hash = TransactionHash(*prev_outpoint.prev_txid());
@@ -843,7 +856,6 @@ impl DbV1 {
             orchard: self.orchard,
             commitment_tree_data: self.commitment_tree_data,
             heights: self.heights,
-            #[cfg(feature = "transparent_address_history_experimental")]
             spent: self.spent,
             #[cfg(feature = "transparent_address_history_experimental")]
             address_history: self.address_history,
@@ -856,27 +868,26 @@ impl DbV1 {
             config: self.config.clone(),
         };
         tokio::task::spawn_blocking(move || {
-            // Delete spent data
             let mut txn = zaino_db.env.begin_rw_txn()?;
+
+            // Delete spent data
+            for outpoint in &spent_map {
+                let outpoint_bytes =
+                    &outpoint
+                        .to_bytes()
+                        .map_err(|_| FinalisedStateError::InvalidBlock {
+                            height: block_height.0,
+                            hash: block_hash,
+                            reason: "Corrupt block data: failed to serialise outpoint".to_string(),
+                        })?;
+                match txn.del(zaino_db.spent, outpoint_bytes, None) {
+                    Ok(()) | Err(lmdb::Error::NotFound) => {}
+                    Err(e) => return Err(FinalisedStateError::LmdbError(e)),
+                }
+            }
 
             #[cfg(feature = "transparent_address_history_experimental")]
             {
-                for outpoint in &spent_map {
-                    let outpoint_bytes =
-                        &outpoint
-                            .to_bytes()
-                            .map_err(|_| FinalisedStateError::InvalidBlock {
-                                height: block_height.0,
-                                hash: block_hash,
-                                reason: "Corrupt block data: failed to serialise outpoint"
-                                    .to_string(),
-                            })?;
-                    match txn.del(zaino_db.spent, outpoint_bytes, None) {
-                        Ok(()) | Err(lmdb::Error::NotFound) => {}
-                        Err(e) => return Err(FinalisedStateError::LmdbError(e)),
-                    }
-                }
-
                 // Delete addrhist input data and mark old outputs spent in this block as unspent
                 for (addr_script, records) in &addrhist_inputs_map {
                     let addr_bytes = addr_script.to_bytes()?;

@@ -50,20 +50,17 @@ use crate::{
     chain_index::{finalised_state::capability::CapabilityRequest, types::TransactionHash},
     error::FinalisedStateError,
     BlockHash, BlockHeaderData, CommitmentTreeData, CompactBlockStream, Height, IndexedBlock,
-    OrchardCompactTx, OrchardTxList, SaplingCompactTx, SaplingTxList, StatusType,
+    OrchardCompactTx, OrchardTxList, Outpoint, SaplingCompactTx, SaplingTxList, StatusType,
     TransparentCompactTx, TransparentTxList, TxLocation, TxidList,
 };
 
 #[cfg(feature = "transparent_address_history_experimental")]
-use crate::{
-    chain_index::{finalised_state::capability::TransparentHistExt, types::AddrEventBytes},
-    AddrScript, Outpoint,
-};
+use crate::{chain_index::types::AddrEventBytes, AddrScript};
 
 use super::{
     capability::{
         BlockCoreExt, BlockShieldedExt, BlockTransparentExt, CompactBlockExt, DbMetadata,
-        IndexedBlockExt,
+        IndexedBlockExt, TransparentHistExt,
     },
     db::DbBackend,
     ZainoDB,
@@ -427,7 +424,6 @@ impl DbReader {
     /// - `Ok(Some(TxLocation))` if the outpoint is spent.
     /// - `Ok(None)` if no entry exists (not spent or not known).
     /// - `Err(...)` on deserialization or DB error.
-    #[cfg(feature = "transparent_address_history_experimental")]
     pub(crate) async fn get_outpoint_spender(
         &self,
         outpoint: Outpoint,
@@ -443,7 +439,6 @@ impl DbReader {
     /// - Returns `Some(TxLocation)` if spent,
     /// - `None` if not found,
     /// - or returns `Err` immediately if any DB or decode error occurs.
-    #[cfg(feature = "transparent_address_history_experimental")]
     pub(crate) async fn get_outpoint_spenders(
         &self,
         outpoints: Vec<Outpoint>,

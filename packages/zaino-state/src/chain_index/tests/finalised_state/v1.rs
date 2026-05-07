@@ -1,6 +1,5 @@
 //! Holds tests for the V1 database.
 
-#[cfg(feature = "transparent_address_history_experimental")]
 use hex::ToHex;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -19,13 +18,11 @@ use crate::chain_index::tests::vectors::{
     build_mockchain_source, load_test_vectors, TestVectorBlockData, TestVectorData,
 };
 
-#[cfg(feature = "transparent_address_history_experimental")]
 use crate::chain_index::types::TransactionHash;
 
 use crate::error::FinalisedStateError;
 use crate::{BlockCacheConfig, BlockMetadata, BlockWithMetadata, ChainWork, Height, IndexedBlock};
 
-#[cfg(feature = "transparent_address_history_experimental")]
 use crate::{AddrScript, Outpoint};
 
 fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
@@ -901,7 +898,6 @@ async fn get_balance() {
     assert_eq!(test_vector_data.recipient.balance, reader_recipient_balance);
 }
 
-#[cfg(feature = "transparent_address_history_experimental")]
 #[tokio::test(flavor = "multi_thread")]
 async fn check_faucet_spent_map() {
     init_tracing();
@@ -1065,7 +1061,6 @@ async fn check_faucet_spent_map() {
     }
 }
 
-#[cfg(feature = "transparent_address_history_experimental")]
 #[tokio::test(flavor = "multi_thread")]
 async fn check_recipient_spent_map() {
     init_tracing();

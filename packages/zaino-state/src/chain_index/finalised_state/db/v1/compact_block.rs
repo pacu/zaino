@@ -331,7 +331,6 @@ impl DbV1 {
             orchard: self.orchard,
             commitment_tree_data: self.commitment_tree_data,
             heights: self.heights,
-            #[cfg(feature = "transparent_address_history_experimental")]
             spent: self.spent,
             #[cfg(feature = "transparent_address_history_experimental")]
             address_history: self.address_history,

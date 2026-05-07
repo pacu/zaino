@@ -30,6 +30,7 @@ use crate::{
             capability::{
                 BlockCoreExt, BlockShieldedExt, BlockTransparentExt, CompactBlockExt, DbCore,
                 DbMetadata, DbRead, DbVersion, DbWrite, IndexedBlockExt, MigrationStatus,
+                TransparentHistExt,
             },
             entry::{StoredEntryFixed, StoredEntryVar},
         },
@@ -39,16 +40,13 @@ use crate::{
     error::FinalisedStateError,
     BlockHash, BlockHeaderData, CommitmentTreeData, CompactBlockStream, CompactOrchardAction,
     CompactSaplingOutput, CompactSaplingSpend, CompactSize, CompactTxData, FixedEncodedLen as _,
-    Height, IndexedBlock, NamedAtomicStatus, OrchardCompactTx, OrchardTxList, SaplingCompactTx,
-    SaplingTxList, StatusType, TransparentCompactTx, TransparentTxList, TxInCompact, TxLocation,
-    TxOutCompact, TxidList, ZainoVersionedSerde as _,
+    Height, IndexedBlock, NamedAtomicStatus, OrchardCompactTx, OrchardTxList, Outpoint,
+    SaplingCompactTx, SaplingTxList, StatusType, TransparentCompactTx, TransparentTxList,
+    TxInCompact, TxLocation, TxOutCompact, TxidList, ZainoVersionedSerde as _,
 };
 
 #[cfg(feature = "transparent_address_history_experimental")]
-use crate::{
-    chain_index::{finalised_state::capability::TransparentHistExt, types::AddrEventBytes},
-    AddrHistRecord, AddrScript, Outpoint,
-};
+use crate::{chain_index::types::AddrEventBytes, AddrHistRecord, AddrScript};
 
 use zaino_proto::proto::{compact_formats::CompactBlock, utils::PoolTypeFilter};
 use zebra_chain::parameters::NetworkKind;
@@ -63,6 +61,7 @@ use lmdb::{
     Cursor, Database, DatabaseFlags, Environment, EnvironmentFlags, Transaction as _, WriteFlags,
 };
 use sha2::{Digest, Sha256};
+use std::collections::HashMap;
 use std::{
     collections::HashSet,
     fs,
@@ -76,9 +75,6 @@ use tokio::time::interval;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 
-#[cfg(feature = "transparent_address_history_experimental")]
-use std::collections::HashMap;
-
 pub(crate) mod validation;
 
 pub(crate) mod read_core;
@@ -91,7 +87,6 @@ pub(crate) mod block_transparent;
 pub(crate) mod compact_block;
 pub(crate) mod indexed_block;
 
-#[cfg(feature = "transparent_address_history_experimental")]
 pub(crate) mod transparent_address_history;
 
 // ───────────────────────── Schema v1 constants ─────────────────────────
@@ -223,7 +218,6 @@ pub(crate) struct DbV1 {
     /// Spent outpoints: `Outpoint` -> `StoredEntryFixed<Vec<TxLocation>>`
     ///
     /// Used to check spent status of given outpoints, retuning spending tx.
-    #[cfg(feature = "transparent_address_history_experimental")]
     spent: Database,
 
     /// Transparent address history: `AddrScript` -> duplicate values of `StoredEntryFixed<AddrEventBytes>`.
@@ -338,6 +332,8 @@ impl DbV1 {
                 .await?;
         let hashes = super::open_or_create_db(&env, "hashes_1_0_0", DatabaseFlags::empty()).await?;
 
+        let spent = super::open_or_create_db(&env, "spent_1_0_0", DatabaseFlags::empty()).await?;
+
         let metadata = super::open_or_create_db(&env, "metadata", DatabaseFlags::empty()).await?;
 
         // Create the DbV1 instance. We declare the variable in the outer scope and
@@ -346,9 +342,6 @@ impl DbV1 {
 
         #[cfg(feature = "transparent_address_history_experimental")]
         {
-            let spent =
-                super::open_or_create_db(&env, "spent_1_0_0", DatabaseFlags::empty()).await?;
-
             let address_history = super::open_or_create_db(
                 &env,
                 "address_history_1_0_0",
@@ -388,6 +381,7 @@ impl DbV1 {
                 orchard,
                 commitment_tree_data,
                 heights: hashes,
+                spent,
                 metadata,
                 validated_tip: Arc::new(AtomicU32::new(0)),
                 validated_set: DashSet::new(),
@@ -427,7 +421,6 @@ impl DbV1 {
             orchard: self.orchard,
             commitment_tree_data: self.commitment_tree_data,
             heights: self.heights,
-            #[cfg(feature = "transparent_address_history_experimental")]
             spent: self.spent,
             #[cfg(feature = "transparent_address_history_experimental")]
             address_history: self.address_history,
@@ -469,10 +462,16 @@ impl DbV1 {
                 }
                 #[cfg(not(feature = "transparent_address_history_experimental"))]
                 {
-                    if let Err(e) = zaino_db.initial_block_scan().await {
-                        error!("initial block scan failed: {e}");
-                        zaino_db.status.store(StatusType::CriticalError);
-                        return;
+                    let (r1, r2) =
+                        tokio::join!(zaino_db.initial_spent_scan(), zaino_db.initial_block_scan(),);
+
+                    for (desc, result) in [("spent scan", r1), ("block scan", r2)] {
+                        if let Err(e) = result {
+                            error!("initial {desc} failed: {e}");
+                            zaino_db.status.store(StatusType::CriticalError);
+                            // TODO: Handle error better? - Return invalid block error from validate?
+                            return;
+                        }
                     }
                 }
 
@@ -536,7 +535,6 @@ impl DbV1 {
     }
 
     /// Validates every stored spent-outpoint entry (`Outpoint` -> `TxLocation`) by checksum.
-    #[cfg(feature = "transparent_address_history_experimental")]
     async fn initial_spent_scan(&self) -> Result<(), FinalisedStateError> {
         let env = self.env.clone();
         let spent = self.spent;
@@ -603,7 +601,6 @@ impl DbV1 {
             orchard: self.orchard,
             commitment_tree_data: self.commitment_tree_data,
             heights: self.heights,
-            #[cfg(feature = "transparent_address_history_experimental")]
             spent: self.spent,
             #[cfg(feature = "transparent_address_history_experimental")]
             address_history: self.address_history,

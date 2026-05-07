@@ -6,9 +6,9 @@ use super::*;
 ///
 /// Provides address history queries built over the LMDB `DUP_SORT`/`DUP_FIXED` address-history
 /// database.
-#[cfg(feature = "transparent_address_history_experimental")]
 #[async_trait]
 impl TransparentHistExt for DbV1 {
+    #[cfg(feature = "transparent_address_history_experimental")]
     async fn addr_records(
         &self,
         addr_script: AddrScript,
@@ -16,6 +16,7 @@ impl TransparentHistExt for DbV1 {
         self.addr_records(addr_script).await
     }
 
+    #[cfg(feature = "transparent_address_history_experimental")]
     async fn addr_and_index_records(
         &self,
         addr_script: AddrScript,
@@ -24,6 +25,7 @@ impl TransparentHistExt for DbV1 {
         self.addr_and_index_records(addr_script, tx_location).await
     }
 
+    #[cfg(feature = "transparent_address_history_experimental")]
     async fn addr_tx_locations_by_range(
         &self,
         addr_script: AddrScript,
@@ -34,6 +36,7 @@ impl TransparentHistExt for DbV1 {
             .await
     }
 
+    #[cfg(feature = "transparent_address_history_experimental")]
     async fn addr_utxos_by_range(
         &self,
         addr_script: AddrScript,
@@ -44,6 +47,7 @@ impl TransparentHistExt for DbV1 {
             .await
     }
 
+    #[cfg(feature = "transparent_address_history_experimental")]
     async fn addr_balance_by_range(
         &self,
         addr_script: AddrScript,
@@ -405,7 +409,6 @@ impl DbV1 {
     /// - `Ok(Some(TxLocation))` if the outpoint is spent.
     /// - `Ok(None)` if no entry exists (not spent or not known).
     /// - `Err(...)` on deserialization or DB error.
-    #[cfg(feature = "transparent_address_history_experimental")]
     async fn get_outpoint_spender(
         &self,
         outpoint: Outpoint,
@@ -431,7 +434,6 @@ impl DbV1 {
     /// - Returns `Some(TxLocation)` if spent,
     /// - `None` if not found,
     /// - or returns `Err` immediately if any DB or decode error occurs.
-    #[cfg(feature = "transparent_address_history_experimental")]
     async fn get_outpoint_spenders(
         &self,
         outpoints: Vec<Outpoint>,

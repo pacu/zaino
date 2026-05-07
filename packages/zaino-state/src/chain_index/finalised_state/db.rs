@@ -64,19 +64,19 @@ use crate::{
     chain_index::{
         finalised_state::capability::{
             BlockCoreExt, BlockShieldedExt, BlockTransparentExt, CompactBlockExt, DbCore,
-            DbMetadata, DbRead, DbWrite, IndexedBlockExt,
+            DbMetadata, DbRead, DbWrite, IndexedBlockExt, TransparentHistExt,
         },
         types::TransactionHash,
     },
     config::BlockCacheConfig,
     error::FinalisedStateError,
     BlockHash, BlockHeaderData, CommitmentTreeData, CompactBlockStream, Height, IndexedBlock,
-    NamedAtomicStatus, OrchardCompactTx, OrchardTxList, SaplingCompactTx, SaplingTxList,
+    NamedAtomicStatus, OrchardCompactTx, OrchardTxList, Outpoint, SaplingCompactTx, SaplingTxList,
     StatusType, TransparentCompactTx, TransparentTxList, TxLocation, TxidList,
 };
 
 #[cfg(feature = "transparent_address_history_experimental")]
-use crate::{chain_index::finalised_state::capability::TransparentHistExt, AddrScript, Outpoint};
+use crate::AddrScript;
 
 use async_trait::async_trait;
 use lmdb::{Database, DatabaseFlags, Environment};
@@ -642,9 +642,9 @@ impl IndexedBlockExt for DbBackend {
     }
 }
 
-#[cfg(feature = "transparent_address_history_experimental")]
 #[async_trait]
 impl TransparentHistExt for DbBackend {
+    #[cfg(feature = "transparent_address_history_experimental")]
     async fn addr_records(
         &self,
         script: AddrScript,
@@ -657,6 +657,7 @@ impl TransparentHistExt for DbBackend {
         }
     }
 
+    #[cfg(feature = "transparent_address_history_experimental")]
     async fn addr_and_index_records(
         &self,
         script: AddrScript,
@@ -670,6 +671,7 @@ impl TransparentHistExt for DbBackend {
         }
     }
 
+    #[cfg(feature = "transparent_address_history_experimental")]
     async fn addr_tx_locations_by_range(
         &self,
         script: AddrScript,
@@ -684,6 +686,7 @@ impl TransparentHistExt for DbBackend {
         }
     }
 
+    #[cfg(feature = "transparent_address_history_experimental")]
     async fn addr_utxos_by_range(
         &self,
         script: AddrScript,
@@ -698,6 +701,7 @@ impl TransparentHistExt for DbBackend {
         }
     }
 
+    #[cfg(feature = "transparent_address_history_experimental")]
     async fn addr_balance_by_range(
         &self,
         script: AddrScript,
