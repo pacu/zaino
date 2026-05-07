@@ -277,6 +277,14 @@ impl DbBackend {
             Self::V1(_) => Capability::LATEST,
         }
     }
+
+    /// Return an arc clone of the underlying LMDB environment, used during some DB migrations.
+    pub(crate) fn env(&self) -> Arc<Environment> {
+        match self {
+            Self::V1(db) => Arc::clone(db.env()),
+            Self::V0(db) => Arc::clone(db.env()),
+        }
+    }
 }
 
 impl From<DbV0> for DbBackend {
