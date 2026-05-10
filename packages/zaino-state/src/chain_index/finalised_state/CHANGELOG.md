@@ -171,5 +171,64 @@ On-disk schema
   - No changes.
 
 --------------------------------------------------------------------------------
+DB VERSION v1.2.0 (from v1.1.0)
+Date: 2026-05-10
+--------------------------------------------------------------------------------
+
+Summary
+- Promote the `spent` outpoint index to core finalised-state data.
+- Backfill `spent` from existing per-block transparent transaction data.
+- Add resumable in-place migration progress tracking using a temporary metadata entry.
+
+On-disk schema
+- Layout:
+  - No directory layout changes.
+- Tables:
+  - Added: `spent` is now a core v1 table rather than an experimental transparent-address-history table.
+  - Removed: None.
+  - Renamed: None.
+- Encoding:
+  - Keys: No changes to `Outpoint` encoding.
+  - Values: `spent` stores `StoredEntryFixed<TxLocation>` values.
+  - Checksums / validation:
+    - `spent` entries are checksum-protected using the encoded `Outpoint` key.
+    - Migration progress is temporarily stored as `StoredEntryFixed<Height>` in the metadata DB under `_migration_spent_progress_1_2_0_next_height`.
+- Invariants:
+  - For every non-null transparent input in finalised-state block data, `spent[Outpoint]` must exist and point to the spending transaction’s `TxLocation`.
+  - Existing `spent` entries encountered during migration must decode, verify, and match the expected `TxLocation`.
+
+API / capabilities
+- Capability changes:
+  - Added: core availability of spent-outpoint lookup data.
+  - Removed: None.
+  - Changed:
+    - Spent-outpoint indexing is no longer dependent on transparent address-history support.
+- Public surface changes:
+  - Added: None.
+  - Removed: None.
+  - Changed:
+    - Existing spent/outpoint-spender functionality can be backed by the core `spent` table.
+
+Migration
+- Strategy: in-place index backfill.
+- Backfill:
+  - Iterates existing transparent block data from genesis through the current finalised DB tip.
+  - For each non-null transparent input, writes `Outpoint -> StoredEntryFixed<TxLocation>` to `spent`.
+- Completion criteria:
+  - All heights through the current finalised DB tip have been processed.
+  - Migration status reaches `Complete`.
+  - Temporary migration progress key is deleted.
+  - `DbMetadata.version` is advanced to v1.2.0 and `migration_status` is reset to `Empty`.
+- Failure handling:
+  - Resumes from the temporary metadata progress height.
+  - Spent entries and progress updates for each height are committed in the same LMDB transaction.
+  - Existing matching spent entries are accepted after checksum and `TxLocation` verification.
+  - Existing conflicting or corrupt spent entries fail the migration.
+
+Bug Fixes / Optimisations
+- Avoids a shadow rebuild by deriving the new core `spent` index from existing transparent transaction data.
+- Avoids temporary named LMDB databases by storing migration progress as a temporary metadata entry.
+
+--------------------------------------------------------------------------------
 (append new entries below)
 --------------------------------------------------------------------------------

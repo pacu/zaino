@@ -133,6 +133,35 @@
 //! `BlockHeaderData` records concurrently. This migration is metadata-only: it advances
 //! `DbMetadata::version` and refreshes the recorded schema checksum so persisted metadata
 //! matches the repository's updated schema text.
+//!
+//! ## v1.1.0 → v1.2.0
+//!
+//! `Migration1_1_0To1_2_0` is a **minor in-place index backfill**.
+//!
+//! Important changes in v1.2.0:
+//! - The `spent` outpoint index is promoted to a core finalised-state table rather than being tied
+//!   to transparent address-history support.
+//! - Existing databases must backfill `spent` from the already-stored transparent transaction data.
+//!
+//! Mechanics:
+//! - No shadow database is created.
+//! - The migration reads each block’s `TransparentTxList` through the existing transparent block
+//!   capability.
+//! - For every non-null transparent input, it writes:
+//!   `Outpoint -> StoredEntryFixed<TxLocation>`
+//!   into the `spent` table.
+//! - Progress is stored as a temporary `StoredEntryFixed<Height>` entry in the existing metadata DB
+//!   under `_migration_spent_progress_1_2_0_next_height`.
+//! - The temporary progress entry is removed once the migration reaches `Complete`.
+//!
+//! Safety and resumability:
+//! - Deterministic: the `spent` index is derived only from existing transparent block data.
+//! - Crash-resumable: the temporary progress height records the next block height to migrate.
+//! - Crash-safe: spent entries for a height and the progress update are committed in the same LMDB
+//!   write transaction.
+//! - Idempotent on resume: if a spent entry already exists, the migration verifies its checksum and
+//!   `TxLocation`; matching entries are accepted, conflicting entries fail the migration.
+//! - No unsafe code and no temporary named LMDB database are used.
 
 use super::{
     capability::{
@@ -327,6 +356,7 @@ impl<T: BlockchainSource> MigrationManager<T> {
         ) {
             (0, 0, 0) => Ok(MigrationStep::Migration0_0_0To1_0_0(Migration0_0_0To1_0_0)),
             (1, 0, 0) => Ok(MigrationStep::Migration1_0_0To1_1_0(Migration1_0_0To1_1_0)),
+            (1, 1, 0) => Ok(MigrationStep::Migration1_1_0To1_2_0(Migration1_1_0To1_2_0)),
             (_, _, _) => Err(FinalisedStateError::Custom(format!(
                 "Missing migration from version {}",
                 self.current_version
@@ -343,6 +373,7 @@ impl<T: BlockchainSource> MigrationManager<T> {
 enum MigrationStep {
     Migration0_0_0To1_0_0(Migration0_0_0To1_0_0),
     Migration1_0_0To1_1_0(Migration1_0_0To1_1_0),
+    Migration1_1_0To1_2_0(Migration1_1_0To1_2_0),
 }
 
 impl MigrationStep {
@@ -353,6 +384,9 @@ impl MigrationStep {
             }
             MigrationStep::Migration1_0_0To1_1_0(_step) => {
                 <Migration1_0_0To1_1_0 as Migration<T>>::TO_VERSION
+            }
+            MigrationStep::Migration1_1_0To1_2_0(_step) => {
+                <Migration1_1_0To1_2_0 as Migration<T>>::TO_VERSION
             }
         }
     }
@@ -366,6 +400,7 @@ impl MigrationStep {
         match self {
             MigrationStep::Migration0_0_0To1_0_0(step) => step.migrate(router, cfg, source).await,
             MigrationStep::Migration1_0_0To1_1_0(step) => step.migrate(router, cfg, source).await,
+            MigrationStep::Migration1_1_0To1_2_0(step) => step.migrate(router, cfg, source).await,
         }
     }
 }
@@ -718,7 +753,8 @@ impl<T: BlockchainSource> Migration<T> for Migration1_1_0To1_2_0 {
 
                     let db_height = db_height.0;
 
-                    // Loop: build spent entries and update migration progress.
+                    // Loop: build spent entries from internal trasparent tx data
+                    // and update migration progress.
                     while next_height_to_migrate <= db_height {
                         let height = Height::try_from(next_height_to_migrate)
                             .map_err(|error| FinalisedStateError::Custom(error.to_string()))?;
