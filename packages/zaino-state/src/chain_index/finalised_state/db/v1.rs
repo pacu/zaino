@@ -631,6 +631,17 @@ impl DbV1 {
         .await
         .map_err(|e| FinalisedStateError::Custom(format!("spawn_blocking failed: {e}")))?
     }
+
+    /// Provides access to the metadata DB table, enabling the migration manager
+    /// to use this DB table to store temporary migration metadata.
+    pub(crate) fn metadata_db(&self) -> Database {
+        self.metadata
+    }
+
+    /// Provudes access to the spent DB table, required for Migration1_1_0To1_2_0.
+    pub(crate) fn spent_db(&self) -> Database {
+        self.spent
+    }
 }
 
 impl Drop for DbV1 {

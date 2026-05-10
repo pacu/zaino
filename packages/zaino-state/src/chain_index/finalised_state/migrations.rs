@@ -144,16 +144,20 @@ use super::{
 
 use crate::{
     chain_index::{
-        finalised_state::capability::{CapabilityRequest, DbMetadata},
+        finalised_state::{
+            capability::{BlockTransparentExt as _, CapabilityRequest, DbMetadata},
+            entry::StoredEntryFixed,
+        },
         source::BlockchainSource,
         types::GENESIS_HEIGHT,
     },
     config::BlockCacheConfig,
     error::FinalisedStateError,
-    BlockHash, BlockMetadata, BlockWithMetadata, ChainWork, Height, IndexedBlock,
+    BlockHash, BlockMetadata, BlockWithMetadata, ChainWork, Height, IndexedBlock, Outpoint,
+    TxLocation, ZainoVersionedSerde as _,
 };
 
-use lmdb::{DatabaseFlags, Transaction, WriteFlags};
+use lmdb::{Transaction, WriteFlags};
 use zebra_chain::parameters::NetworkKind;
 
 use async_trait::async_trait;
@@ -598,9 +602,11 @@ impl<T: BlockchainSource> Migration<T> for Migration1_0_0To1_1_0 {
 /// Minor migration: v1.1.0 → v1.2.0.
 ///
 /// Safety and resumability:
-/// - Idempotent:
-/// - No shadow database and no table rebuild.
-/// - Clears any stale in-progress migration status.
+/// - Deterministic: rebuilds the spent outpoint index from the existing transparent block data.
+/// - Resumable: stores the next height to migrate in the metadata DB under a temporary migration key.
+/// - Crash-safe: each block's spent entries and progress update are committed in the same LMDB
+///   transaction.
+/// - No shadow database.
 struct Migration1_1_0To1_2_0;
 
 #[async_trait]
@@ -623,122 +629,204 @@ impl<T: BlockchainSource> Migration<T> for Migration1_1_0To1_2_0 {
         _cfg: BlockCacheConfig,
         _source: T,
     ) -> Result<(), FinalisedStateError> {
-        const MIGRATION_SPENT_PROGRESS_DB: &str = "_migration_spent_progress_1_2_0";
-        const MIGRATION_SPENT_PROGRESS_KEY: &[u8] = b"next_height";
+        const MIGRATION_SPENT_PROGRESS_KEY: &[u8] = b"_migration_spent_progress_1_2_0_next_height";
 
         info!("Starting v1.1.0 → v1.2.0 migration.");
 
         let backend = router.backend(CapabilityRequest::WriteCore)?;
         let env = backend.env();
+        let metadata_db = backend.metadata_db()?;
+        let spent_db = backend.spent_db()?;
 
         loop {
             match router.get_metadata().await?.migration_status() {
-                // Create the temporary migration metadata DB, update migration status.
+                // Create the temporary migration metadata entry and update migration status.
                 MigrationStatus::Empty => {
-                    // Temporary migration metadata db that holds a simple u32,
-                    // showing the height to which the database has been migrated to.
-                    let migration_progress_db = env
-                        .create_db(Some(MIGRATION_SPENT_PROGRESS_DB), DatabaseFlags::empty())
-                        .map_err(FinalisedStateError::LmdbError)?;
+                    let mut metadata: DbMetadata = router.get_metadata().await?;
+                    metadata.migration_status = MigrationStatus::PartialBuidInProgress;
 
-                    // Write height 0 to _migration_spent_progress_1_2_0.
                     {
                         let mut txn = env.begin_rw_txn()?;
-                        let height_bytes = 0u32.to_be_bytes();
+
+                        let next_height_entry =
+                            StoredEntryFixed::new(MIGRATION_SPENT_PROGRESS_KEY, GENESIS_HEIGHT);
+                        let next_height_bytes = next_height_entry.to_bytes()?;
 
                         txn.put(
-                            migration_progress_db,
+                            metadata_db,
                             &MIGRATION_SPENT_PROGRESS_KEY,
-                            &height_bytes,
+                            &next_height_bytes,
+                            WriteFlags::empty(),
+                        )?;
+
+                        let metadata_key = b"metadata";
+                        let metadata_entry_bytes =
+                            StoredEntryFixed::new(metadata_key, metadata).to_bytes()?;
+
+                        txn.put(
+                            metadata_db,
+                            metadata_key,
+                            &metadata_entry_bytes,
                             WriteFlags::empty(),
                         )?;
 
                         txn.commit()?;
                     }
-
-                    let mut metadata: DbMetadata = router.get_metadata().await?;
-
-                    metadata.migration_status = MigrationStatus::PartialBuidInProgress;
-                    router.update_metadata(metadata).await?;
                 }
 
-                // Open the temporary migration metadata DB, build the spent map, update migration status.
+                // Read the temporary migration progress entry, build the spent index, update migration status.
                 MigrationStatus::PartialBuidInProgress
                 | MigrationStatus::PartialBuildComplete
                 | MigrationStatus::FinalBuildInProgress => {
-                    let migration_progress_db = env
-                        .open_db(Some("MIGRATION_SPENT_PROGRESS_DB"))
-                        .map_err(FinalisedStateError::LmdbError)?;
-
-                    // Read _migration_spent_progress_1_2_0 height.
-                    let mut migrated_to_height = {
+                    // Read next height to migrate.
+                    let mut next_height_to_migrate = {
                         let txn = env.begin_ro_txn()?;
 
-                        let height_bytes = txn
-                            .get(migration_progress_db, &MIGRATION_SPENT_PROGRESS_KEY)
-                            .map_err(FinalisedStateError::LmdbError)?;
+                        let height_bytes = match txn.get(metadata_db, &MIGRATION_SPENT_PROGRESS_KEY)
+                        {
+                            Ok(height_bytes) => height_bytes,
+                            Err(lmdb::Error::NotFound) => {
+                                return Err(FinalisedStateError::Custom(
+                                    "missing v1.2.0 spent migration progress key".to_string(),
+                                ));
+                            }
+                            Err(error) => return Err(FinalisedStateError::LmdbError(error)),
+                        };
 
-                        if height_bytes.len() != 4 {
-                            return Err(FinalisedStateError::Custom(format!(
-                                "invalid {MIGRATION_SPENT_PROGRESS_DB} height length: expected 4 bytes, got {}",
-                                height_bytes.len()
-                            )));
+                        let height_entry = StoredEntryFixed::<Height>::from_bytes(height_bytes)
+                            .map_err(|error| {
+                                FinalisedStateError::Custom(format!(
+                                    "corrupt v1.2.0 spent migration progress entry: {error}"
+                                ))
+                            })?;
+
+                        if !height_entry.verify(MIGRATION_SPENT_PROGRESS_KEY) {
+                            return Err(FinalisedStateError::Custom(
+                                "v1.2.0 spent migration progress checksum mismatch".to_string(),
+                            ));
                         }
 
-                        u32::from_be_bytes([
-                            height_bytes[0],
-                            height_bytes[1],
-                            height_bytes[2],
-                            height_bytes[3],
-                        ])
+                        height_entry.inner().0
                     };
 
-                    let db_height = router.db_height().await?.unwrap_or(Height(0)).0;
+                    let Some(db_height) = router.db_height().await? else {
+                        let mut metadata: DbMetadata = router.get_metadata().await?;
+                        metadata.migration_status = MigrationStatus::Complete;
+                        router.update_metadata(metadata).await?;
+                        continue;
+                    };
 
-                    // loop: sync blocks and update _migration_spent_progress_1_2_0 height
-                    while migrated_to_height < db_height {
-                        let next_height = Height::try_from(migrated_to_height + 1)
+                    let db_height = db_height.0;
+
+                    // Loop: build spent entries and update migration progress.
+                    while next_height_to_migrate <= db_height {
+                        let height = Height::try_from(next_height_to_migrate)
                             .map_err(|error| FinalisedStateError::Custom(error.to_string()))?;
 
-                        /*
-                            Build and write the spent entries for `next_height` here.
+                        let transparent_tx_list = router
+                            .backend(CapabilityRequest::BlockTransparentExt)?
+                            .get_block_transparent(height)
+                            .await?;
 
-                            Keep the write for the spent entries and the progress update in the
-                            same LMDB write transaction, so interruption cannot record progress
-                            without the corresponding spent entries.
-
-                            Pseudocode shape:
-
-                            let mut txn = env.begin_rw_txn()?;
-
-                            // write spent entries for next_height here using txn.put(...)
-
-                            let height_bytes = next_height.0.to_be_bytes();
-                            txn.put(
-                                migration_progress_db,
-                                &MIGRATION_PROGRESS_HEIGHT_KEY,
-                                &height_bytes,
-                                WriteFlags::empty(),
-                            )?;
-
-                            txn.commit()?;
-                        */
-
+                        // Write both new spent data *and* update migration metadata in the same LMDB transaction,
+                        // ensuring the two never drift if migration is stopped due to a system crash.
                         {
                             let mut txn = env.begin_rw_txn()?;
-                            let height_bytes = next_height.0.to_be_bytes();
+
+                            for (tx_index, tx_opt) in transparent_tx_list.tx().iter().enumerate() {
+                                let Some(transparent_tx) = tx_opt else {
+                                    continue;
+                                };
+
+                                let tx_index = u16::try_from(tx_index).map_err(|_| {
+                                    FinalisedStateError::Custom(format!(
+                                        "transaction index out of range at height {}",
+                                        height.0
+                                    ))
+                                })?;
+
+                                let tx_location = TxLocation::new(height.0, tx_index);
+
+                                for input in transparent_tx.inputs() {
+                                    if input.is_null_prevout() {
+                                        continue;
+                                    }
+
+                                    let outpoint =
+                                        Outpoint::new(*input.prevout_txid(), input.prevout_index());
+
+                                    let outpoint_bytes = outpoint.to_bytes()?;
+                                    let tx_location_entry_bytes =
+                                        StoredEntryFixed::new(&outpoint_bytes, tx_location)
+                                            .to_bytes()?;
+
+                                    match txn.put(
+                                        spent_db,
+                                        &outpoint_bytes,
+                                        &tx_location_entry_bytes,
+                                        WriteFlags::NO_OVERWRITE,
+                                    ) {
+                                        Ok(()) => {}
+
+                                        Err(lmdb::Error::KeyExist) => {
+                                            let existing_bytes = txn
+                                                .get(spent_db, &outpoint_bytes)
+                                                .map_err(FinalisedStateError::LmdbError)?;
+
+                                            let existing_entry =
+                                                StoredEntryFixed::<TxLocation>::from_bytes(
+                                                    existing_bytes,
+                                                )
+                                                .map_err(|error| {
+                                                    FinalisedStateError::Custom(format!(
+                                                        "corrupt existing spent entry for outpoint {:?}: {error}",
+                                                        outpoint
+                                                    ))
+                                                })?;
+
+                                            if !existing_entry.verify(&outpoint_bytes) {
+                                                return Err(FinalisedStateError::Custom(format!(
+                                                    "existing spent entry checksum mismatch for outpoint {:?}",
+                                                    outpoint
+                                                )));
+                                            }
+
+                                            if existing_entry.inner() != &tx_location {
+                                                return Err(FinalisedStateError::Custom(format!(
+                                                    "conflicting spent entry for outpoint {:?} at height {}",
+                                                    outpoint, height.0
+                                                )));
+                                            }
+                                        }
+
+                                        Err(error) => {
+                                            return Err(FinalisedStateError::LmdbError(error))
+                                        }
+                                    }
+                                }
+                            }
+
+                            let next_height = if height.0 < db_height {
+                                height + 1
+                            } else {
+                                height
+                            };
+
+                            let next_height_entry =
+                                StoredEntryFixed::new(MIGRATION_SPENT_PROGRESS_KEY, next_height);
+                            let next_height_bytes = next_height_entry.to_bytes()?;
 
                             txn.put(
-                                migration_progress_db,
+                                metadata_db,
                                 &MIGRATION_SPENT_PROGRESS_KEY,
-                                &height_bytes,
+                                &next_height_bytes,
                                 WriteFlags::empty(),
                             )?;
 
                             txn.commit()?;
                         }
 
-                        migrated_to_height = next_height.0;
+                        next_height_to_migrate = height.0 + 1;
                     }
 
                     let mut metadata: DbMetadata = router.get_metadata().await?;
@@ -746,22 +834,24 @@ impl<T: BlockchainSource> Migration<T> for Migration1_1_0To1_2_0 {
                     router.update_metadata(metadata).await?;
                 }
 
-                // Delete the temporary migration metadata DB, update DB metadata.
+                // Delete the temporary migration progress entry, update DB metadata.
                 MigrationStatus::Complete => {
-                    // TODO: delete the temporary migration metadata DB.
+                    {
+                        let mut txn = env.begin_rw_txn()?;
+
+                        match txn.del(metadata_db, &MIGRATION_SPENT_PROGRESS_KEY, None) {
+                            Ok(()) | Err(lmdb::Error::NotFound) => {}
+                            Err(error) => return Err(FinalisedStateError::LmdbError(error)),
+                        }
+
+                        txn.commit()?;
+                    }
 
                     let mut metadata: DbMetadata = router.get_metadata().await?;
 
-                    // Advance the version marker to reflect the new API contract (v1.1.0), and refresh the
-                    // persisted schema hash to match the repository's recorded schema contract.
-                    // There are no on-disk layout changes; BlockIndex V2 is supported in-place because the
-                    // headers table stores a variable-length BlockHeaderData which nests a versioned BlockIndex.
                     metadata.version = <Self as Migration<T>>::TO_VERSION;
                     metadata.schema_hash =
                         crate::chain_index::finalised_state::db::v1::DB_SCHEMA_V1_HASH;
-
-                    // Outside of migrations this should be `Empty`. This step performs no build phases, so we
-                    // ensure we do not leave a stale in-progress status behind.
                     metadata.migration_status = MigrationStatus::Empty;
 
                     router.update_metadata(metadata).await?;
@@ -771,7 +861,7 @@ impl<T: BlockchainSource> Migration<T> for Migration1_1_0To1_2_0 {
             }
         }
 
-        info!("v1.0.0 to v1.1.0 migration complete.");
+        info!("v1.1.0 to v1.2.0 migration complete.");
         Ok(())
     }
 }

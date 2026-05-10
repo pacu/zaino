@@ -285,6 +285,23 @@ impl DbBackend {
             Self::V0(db) => Arc::clone(db.env()),
         }
     }
+
+    /// Provides access to the metadata DB table, enabling the migration manager
+    /// to use this DB table to store temporary migration metadata.
+    pub(crate) fn metadata_db(&self) -> Result<Database, FinalisedStateError> {
+        match self {
+            Self::V1(db) => Ok(db.metadata_db()),
+            Self::V0(_) => Err(FinalisedStateError::FeatureUnavailable("v1 metadata db")),
+        }
+    }
+
+    /// Provudes access to the spent DB table, required for Migration1_1_0To1_2_0.
+    pub(crate) fn spent_db(&self) -> Result<Database, FinalisedStateError> {
+        match self {
+            Self::V1(db) => Ok(db.spent_db()),
+            Self::V0(_) => Err(FinalisedStateError::FeatureUnavailable("v1 spent db")),
+        }
+    }
 }
 
 impl From<DbV0> for DbBackend {
