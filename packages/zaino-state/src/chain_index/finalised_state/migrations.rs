@@ -668,6 +668,10 @@ impl<T: BlockchainSource> Migration<T> for Migration1_1_0To1_2_0 {
 
         info!("Starting v1.1.0 → v1.2.0 migration.");
 
+        // Turn off transparent history extension while migration is in progress,
+        // stopping downstream clients from recieving invalid data from ZainoDB.
+        router.limit_primary_caps(Capability::TRANSPARENT_HIST_EXT);
+
         let backend = router.backend(CapabilityRequest::WriteCore)?;
         let env = backend.env();
         let metadata_db = backend.metadata_db()?;
@@ -896,6 +900,9 @@ impl<T: BlockchainSource> Migration<T> for Migration1_1_0To1_2_0 {
                 }
             }
         }
+
+        // Turn transparent history extension back on now index has been built.
+        router.extend_primary_caps(Capability::TRANSPARENT_HIST_EXT);
 
         info!("v1.1.0 to v1.2.0 migration complete.");
         Ok(())

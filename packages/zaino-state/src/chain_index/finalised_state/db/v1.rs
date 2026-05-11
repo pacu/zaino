@@ -132,7 +132,7 @@ pub(crate) const DB_SCHEMA_V1_HASH: [u8; 32] = [
 /// *Current* database V1 version.
 pub(crate) const DB_VERSION_V1: DbVersion = DbVersion {
     major: 1,
-    minor: 1,
+    minor: 2,
     patch: 0,
 };
 
@@ -725,29 +725,61 @@ impl DbV1 {
                 .await?;
         let hashes = super::open_or_create_db(&env, "hashes_1_0_0", DatabaseFlags::empty()).await?;
 
+        let spent = super::open_or_create_db(&env, "spent_1_0_0", DatabaseFlags::empty()).await?;
+
         let metadata = super::open_or_create_db(&env, "metadata", DatabaseFlags::empty()).await?;
 
-        // Create the DbV1 instance. We declare the variable in the outer scope and
-        // initialise it in the two cfg arms so `zaino_db` is available afterwards.
         let mut zaino_db: Self;
+        #[cfg(feature = "transparent_address_history_experimental")]
+        {
+            let address_history = super::open_or_create_db(
+                &env,
+                "address_history_1_0_0",
+                DatabaseFlags::DUP_SORT | DatabaseFlags::DUP_FIXED,
+            )
+            .await?;
 
-        zaino_db = Self {
-            env: Arc::new(env),
-            headers,
-            txids,
-            transparent,
-            sapling,
-            orchard,
-            commitment_tree_data,
-            heights: hashes,
-            metadata,
-            validated_tip: Arc::new(AtomicU32::new(0)),
-            validated_set: DashSet::new(),
-            db_handler: std::sync::Mutex::new(None),
-            cancel_token: CancellationToken::new(),
-            status: NamedAtomicStatus::new("ZainoDB", StatusType::Spawning),
-            config: config.clone(),
-        };
+            zaino_db = Self {
+                env: Arc::new(env),
+                headers,
+                txids,
+                transparent,
+                sapling,
+                orchard,
+                commitment_tree_data,
+                heights: hashes,
+                spent,
+                address_history,
+                metadata,
+                validated_tip: Arc::new(AtomicU32::new(0)),
+                validated_set: DashSet::new(),
+                db_handler: std::sync::Mutex::new(None),
+                cancel_token: CancellationToken::new(),
+                status: NamedAtomicStatus::new("ZainoDB", StatusType::Spawning),
+                config: config.clone(),
+            };
+        }
+        #[cfg(not(feature = "transparent_address_history_experimental"))]
+        {
+            zaino_db = Self {
+                env: Arc::new(env),
+                headers,
+                txids,
+                transparent,
+                sapling,
+                orchard,
+                commitment_tree_data,
+                heights: hashes,
+                spent,
+                metadata,
+                validated_tip: Arc::new(AtomicU32::new(0)),
+                validated_set: DashSet::new(),
+                db_handler: std::sync::Mutex::new(None),
+                cancel_token: CancellationToken::new(),
+                status: NamedAtomicStatus::new("ZainoDB", StatusType::Spawning),
+                config: config.clone(),
+            };
+        }
 
         // Initialise the metadata entry before we touch any tables.
         tokio::task::block_in_place(|| {

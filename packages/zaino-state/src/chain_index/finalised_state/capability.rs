@@ -457,7 +457,31 @@ impl DbVersion {
             }
 
             // V1: Adds chainblockv1 and transparent transaction history data.
-            (1, 0) => {
+            #[cfg(feature = "transparent_address_history_experimental")]
+            (1, 0) | (1, 1) => {
+                Capability::READ_CORE
+                    | Capability::WRITE_CORE
+                    | Capability::BLOCK_CORE_EXT
+                    | Capability::BLOCK_TRANSPARENT_EXT
+                    | Capability::BLOCK_SHIELDED_EXT
+                    | Capability::COMPACT_BLOCK_EXT
+                    | Capability::CHAIN_BLOCK_EXT
+                    | Capability::TRANSPARENT_HIST_EXT
+            }
+
+            #[cfg(not(feature = "transparent_address_history_experimental"))]
+            (1, 0) | (1, 1) => {
+                Capability::READ_CORE
+                    | Capability::WRITE_CORE
+                    | Capability::BLOCK_CORE_EXT
+                    | Capability::BLOCK_TRANSPARENT_EXT
+                    | Capability::BLOCK_SHIELDED_EXT
+                    | Capability::COMPACT_BLOCK_EXT
+                    | Capability::CHAIN_BLOCK_EXT
+            }
+
+            // V1.2: Moves Spent indexing out of "transparent_address_history_experimental".
+            (1, 2) => {
                 Capability::READ_CORE
                     | Capability::WRITE_CORE
                     | Capability::BLOCK_CORE_EXT
