@@ -1,6 +1,8 @@
 //! ZainoDB::V1 core write functionality.
 
 use super::*;
+#[cfg(test)]
+use crate::version;
 
 /// [`DbWrite`] capability implementation for [`DbV1`].
 ///
@@ -1028,6 +1030,168 @@ impl DbV1 {
             Ok(())
         })
     }
+}
 
-    // *** Internal DB methods ***
+#[cfg(test)]
+impl DbV1 {
+    /// Writes a block using the v1.0.0 format.
+    ///
+    /// This intentionally writes only the core v1 tables and uses v1 item encodings.
+    ///
+    /// This method does not perform safety checks and must not be used in production code.
+    ///
+    /// Used for migration tests.
+    pub(crate) async fn write_block_v1_0_0(
+        &self,
+        block: IndexedBlock,
+    ) -> Result<(), FinalisedStateError> {
+        self.status.store(StatusType::Syncing);
+
+        let block_hash = block.context.index.hash;
+        let block_hash_bytes = block_hash.to_bytes()?;
+        let block_height = block.context.index.height;
+        let block_height_bytes = block_height.to_bytes()?;
+
+        let height_entry_bytes = StoredEntryFixed::<Height>::to_bytes_with_item_version(
+            &block_hash_bytes,
+            &block.context.index.height,
+            version::V1,
+        )?;
+
+        let header = BlockHeaderData::new(block.context, *block.data());
+        let header_entry_bytes = StoredEntryVar::<BlockHeaderData>::to_bytes_with_item_version(
+            &block_height_bytes,
+            &header,
+            version::V1,
+        )?;
+
+        let commitment_tree_entry_bytes =
+            StoredEntryFixed::<CommitmentTreeData>::to_bytes_with_item_version(
+                &block_height_bytes,
+                block.commitment_tree_data(),
+                version::V1,
+            )?;
+
+        let tx_len = block.transactions().len();
+        let mut txids = Vec::with_capacity(tx_len);
+        let mut txid_set: HashSet<TransactionHash> = HashSet::with_capacity(tx_len);
+        let mut transparent = Vec::with_capacity(tx_len);
+        let mut sapling = Vec::with_capacity(tx_len);
+        let mut orchard = Vec::with_capacity(tx_len);
+
+        for tx in block.transactions() {
+            let hash = tx.txid();
+
+            if txid_set.insert(*hash) {
+                txids.push(*hash);
+            }
+
+            let transparent_data =
+                if tx.transparent().inputs().is_empty() && tx.transparent().outputs().is_empty() {
+                    None
+                } else {
+                    Some(tx.transparent().clone())
+                };
+            transparent.push(transparent_data);
+
+            let sapling_data =
+                if tx.sapling().spends().is_empty() && tx.sapling().outputs().is_empty() {
+                    None
+                } else {
+                    Some(tx.sapling().clone())
+                };
+            sapling.push(sapling_data);
+
+            let orchard_data = if tx.orchard().actions().is_empty() {
+                None
+            } else {
+                Some(tx.orchard().clone())
+            };
+            orchard.push(orchard_data);
+        }
+
+        let txid_list = TxidList::new(txids);
+        let txid_entry_bytes = StoredEntryVar::<TxidList>::to_bytes_with_item_version(
+            &block_height_bytes,
+            &txid_list,
+            version::V1,
+        )?;
+
+        let transparent_tx_list = TransparentTxList::new(transparent);
+        let transparent_entry_bytes =
+            StoredEntryVar::<TransparentTxList>::to_bytes_with_item_version(
+                &block_height_bytes,
+                &transparent_tx_list,
+                version::V1,
+            )?;
+
+        let sapling_tx_list = SaplingTxList::new(sapling);
+        let sapling_entry_bytes = StoredEntryVar::<SaplingTxList>::to_bytes_with_item_version(
+            &block_height_bytes,
+            &sapling_tx_list,
+            version::V1,
+        )?;
+
+        let orchard_tx_list = OrchardTxList::new(orchard);
+        let orchard_entry_bytes = StoredEntryVar::<OrchardTxList>::to_bytes_with_item_version(
+            &block_height_bytes,
+            &orchard_tx_list,
+            version::V1,
+        )?;
+
+        tokio::task::block_in_place(|| {
+            let mut txn = self.env.begin_rw_txn()?;
+
+            txn.put(
+                self.headers,
+                &block_height_bytes,
+                &header_entry_bytes,
+                WriteFlags::NO_OVERWRITE,
+            )?;
+            txn.put(
+                self.heights,
+                &block_hash_bytes,
+                &height_entry_bytes,
+                WriteFlags::NO_OVERWRITE,
+            )?;
+            txn.put(
+                self.txids,
+                &block_height_bytes,
+                &txid_entry_bytes,
+                WriteFlags::NO_OVERWRITE,
+            )?;
+            txn.put(
+                self.transparent,
+                &block_height_bytes,
+                &transparent_entry_bytes,
+                WriteFlags::NO_OVERWRITE,
+            )?;
+            txn.put(
+                self.sapling,
+                &block_height_bytes,
+                &sapling_entry_bytes,
+                WriteFlags::NO_OVERWRITE,
+            )?;
+            txn.put(
+                self.orchard,
+                &block_height_bytes,
+                &orchard_entry_bytes,
+                WriteFlags::NO_OVERWRITE,
+            )?;
+            txn.put(
+                self.commitment_tree_data,
+                &block_height_bytes,
+                &commitment_tree_entry_bytes,
+                WriteFlags::NO_OVERWRITE,
+            )?;
+
+            txn.commit()?;
+            self.env.sync(true)?;
+
+            Ok::<_, FinalisedStateError>(())
+        })?;
+
+        self.status.store(StatusType::Ready);
+        Ok(())
+    }
 }

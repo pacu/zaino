@@ -648,3 +648,130 @@ impl Drop for DbV1 {
         }
     }
 }
+
+#[cfg(test)]
+impl DbV1 {
+    /// Spawns a test-only [`DbV1`] using the v1.0.0 database metadata.
+    ///
+    /// This method is intended for migration tests that need to create an old v1.0.0 database
+    /// before opening it through the current startup / migration path.
+    ///
+    /// This method:
+    /// - chooses the normal V1 path suffix (`.../<network>/v1`),
+    /// - configures LMDB map size and reader slots,
+    /// - opens or creates the v1.0.0 named databases,
+    /// - writes a `"metadata"` record with database version `1.0.0`, and
+    /// - spawns the background validator / maintenance task.
+    ///
+    /// Unlike [`DbV1::spawn`], this method intentionally does **not** call
+    /// [`DbV1::check_schema_version`], because that would initialize fresh metadata using the
+    /// current [`DB_VERSION_V1`] value instead of the historical v1.0.0 value required by the tests.
+    pub(crate) async fn spawn_v1_0_0(
+        config: &BlockCacheConfig,
+    ) -> Result<Self, FinalisedStateError> {
+        info!("Launching ZainoDB");
+
+        // Prepare database details and path.
+        let db_size_bytes = config.storage.database.size.to_byte_count();
+        let db_path_dir = match config.network.to_zebra_network().kind() {
+            NetworkKind::Mainnet => "mainnet",
+            NetworkKind::Testnet => "testnet",
+            NetworkKind::Regtest => "regtest",
+        };
+        let db_path = config.storage.database.path.join(db_path_dir).join("v1");
+        if !db_path.exists() {
+            fs::create_dir_all(&db_path)?;
+        }
+
+        // Check system rescources to set max db reeaders, clamped between 512 and 4096.
+        let cpu_cnt = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(4);
+
+        // Sets LMDB max_readers based on CPU count (cpu * 32), clamped between 512 and 4096.
+        // Allows high async read concurrency while keeping memory use low (~192B per slot).
+        // The 512 min ensures reasonable capacity even on low-core systems.
+        let max_readers = u32::try_from((cpu_cnt * 32).clamp(512, 4096))
+            .expect("max_readers was clamped to fit in u32");
+
+        // Open LMDB environment and set environmental details.
+        let env = Environment::new()
+            .set_max_dbs(12)
+            .set_map_size(db_size_bytes)
+            .set_max_readers(max_readers)
+            .set_flags(EnvironmentFlags::NO_TLS | EnvironmentFlags::NO_READAHEAD)
+            .open(&db_path)?;
+
+        // Open individual LMDB DBs.
+        let headers =
+            super::open_or_create_db(&env, "headers_1_0_0", DatabaseFlags::empty()).await?;
+        let txids = super::open_or_create_db(&env, "txids_1_0_0", DatabaseFlags::empty()).await?;
+        let transparent =
+            super::open_or_create_db(&env, "transparent_1_0_0", DatabaseFlags::empty()).await?;
+        let sapling =
+            super::open_or_create_db(&env, "sapling_1_0_0", DatabaseFlags::empty()).await?;
+        let orchard =
+            super::open_or_create_db(&env, "orchard_1_0_0", DatabaseFlags::empty()).await?;
+        let commitment_tree_data =
+            super::open_or_create_db(&env, "commitment_tree_data_1_0_0", DatabaseFlags::empty())
+                .await?;
+        let hashes = super::open_or_create_db(&env, "hashes_1_0_0", DatabaseFlags::empty()).await?;
+
+        let metadata = super::open_or_create_db(&env, "metadata", DatabaseFlags::empty()).await?;
+
+        // Create the DbV1 instance. We declare the variable in the outer scope and
+        // initialise it in the two cfg arms so `zaino_db` is available afterwards.
+        let mut zaino_db: Self;
+
+        zaino_db = Self {
+            env: Arc::new(env),
+            headers,
+            txids,
+            transparent,
+            sapling,
+            orchard,
+            commitment_tree_data,
+            heights: hashes,
+            metadata,
+            validated_tip: Arc::new(AtomicU32::new(0)),
+            validated_set: DashSet::new(),
+            db_handler: std::sync::Mutex::new(None),
+            cancel_token: CancellationToken::new(),
+            status: NamedAtomicStatus::new("ZainoDB", StatusType::Spawning),
+            config: config.clone(),
+        };
+
+        // Initialise the metadata entry before we touch any tables.
+        tokio::task::block_in_place(|| {
+            let mut txn = zaino_db.env.begin_rw_txn()?;
+
+            let entry = StoredEntryFixed::new(
+                b"metadata",
+                DbMetadata {
+                    version: DbVersion {
+                        major: 1,
+                        minor: 0,
+                        patch: 0,
+                    },
+                    schema_hash: [0u8; 32],
+                    migration_status: MigrationStatus::Empty,
+                },
+            );
+            txn.put(
+                zaino_db.metadata,
+                b"metadata",
+                &entry.to_bytes()?,
+                WriteFlags::NO_OVERWRITE,
+            )?;
+
+            txn.commit()?;
+
+            Ok::<(), FinalisedStateError>(())
+        })?;
+
+        // Spawn handler task to perform background validation and trailing tx cleanup.
+        zaino_db.spawn_handler().await?;
+
+        Ok(zaino_db)
+    }
+}

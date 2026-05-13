@@ -221,12 +221,38 @@ pub trait Migration<T: BlockchainSource> {
     ///
     /// # Errors
     /// Returns `FinalisedStateError` if the migration cannot proceed safely or deterministically.
+    ///
+    /// **Default**: Metadata-only migration.
+    ///
+    /// Use this for migrations where no LMDB data layout changes are required.
     async fn migrate(
         &self,
         router: Arc<Router>,
-        cfg: BlockCacheConfig,
-        source: T,
-    ) -> Result<(), FinalisedStateError>;
+        _cfg: BlockCacheConfig,
+        _source: T,
+    ) -> Result<(), FinalisedStateError> {
+        info!(
+            "Starting metadata-only migration from {} to {}.",
+            Self::CURRENT_VERSION,
+            Self::TO_VERSION,
+        );
+
+        let mut metadata: DbMetadata = router.get_metadata().await?;
+
+        metadata.version = Self::TO_VERSION;
+        metadata.schema_hash = crate::chain_index::finalised_state::db::v1::DB_SCHEMA_V1_HASH;
+        metadata.migration_status = MigrationStatus::Empty;
+
+        router.update_metadata(metadata).await?;
+
+        info!(
+            "Metadata-only migration from {} to {} complete.",
+            Self::CURRENT_VERSION,
+            Self::TO_VERSION,
+        );
+
+        Ok(())
+    }
 }
 
 /// Orchestrates a sequence of migration steps until `target_version` is reached.
@@ -564,31 +590,4 @@ impl<T: BlockchainSource> Migration<T> for Migration1_0_0To1_1_0 {
         minor: 1,
         patch: 0,
     };
-
-    async fn migrate(
-        &self,
-        router: Arc<Router>,
-        _cfg: BlockCacheConfig,
-        _source: T,
-    ) -> Result<(), FinalisedStateError> {
-        info!("Starting v1.0.0 → v1.1.0 migration (metadata-only).");
-
-        let mut metadata: DbMetadata = router.get_metadata().await?;
-
-        // Advance the version marker to reflect the new API contract (v1.1.0), and refresh the
-        // persisted schema hash to match the repository's recorded schema contract.
-        // There are no on-disk layout changes; BlockIndex V2 is supported in-place because the
-        // headers table stores a variable-length BlockHeaderData which nests a versioned BlockIndex.
-        metadata.version = <Self as Migration<T>>::TO_VERSION;
-        metadata.schema_hash = crate::chain_index::finalised_state::db::v1::DB_SCHEMA_V1_HASH;
-
-        // Outside of migrations this should be `Empty`. This step performs no build phases, so we
-        // ensure we do not leave a stale in-progress status behind.
-        metadata.migration_status = MigrationStatus::Empty;
-
-        router.update_metadata(metadata).await?;
-
-        info!("v1.0.0 to v1.1.0 migration complete.");
-        Ok(())
-    }
 }

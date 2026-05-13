@@ -738,6 +738,36 @@ impl TransparentHistExt for DbBackend {
 }
 
 #[cfg(test)]
+impl DbBackend {
+    /// Spawn a test-only v1 backend initialized as a v1.0.0 database.
+    ///
+    /// Used by migration tests to create a historical v1.0.0 database fixture before reopening it
+    /// through the current startup / migration path.
+    pub(crate) async fn spawn_v1_0_0(cfg: &BlockCacheConfig) -> Result<Self, FinalisedStateError> {
+        Ok(Self::V1(DbV1::spawn_v1_0_0(cfg).await?))
+    }
+
+    /// Writes a block using the v1.0.0 format.
+    ///
+    /// This intentionally writes only the core v1 tables and uses v1 item encodings.
+    ///
+    /// This method does not perform safety checks and must not be used in production code.
+    ///
+    /// Used for migration tests.
+    pub(crate) async fn write_block_v1_0_0(
+        &self,
+        block: IndexedBlock,
+    ) -> Result<(), FinalisedStateError> {
+        match self {
+            Self::V1(db) => db.write_block_v1_0_0(block).await,
+            Self::V0(_) => Err(FinalisedStateError::Custom(
+                "v1.0.0 test fixture writer requires a v1 backend".to_string(),
+            )),
+        }
+    }
+}
+
+#[cfg(test)]
 mod shutdown {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
