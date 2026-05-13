@@ -463,7 +463,7 @@ impl ZcashIndexer for FetchServiceSubscriber {
     /// method: post
     /// tags: blockchain
     async fn get_tx_out_set_info(&self) -> Result<GetTxOutSetInfoResponse, Self::Error> {
-        Ok(self.fetcher.get_tx_out_set_info().await?)
+        Ok(self.indexer.get_tx_out_set_info().await?)
     }
 
     /// Returns the hash of the best block (tip) of the longest chain.

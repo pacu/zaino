@@ -29,6 +29,13 @@ impl BlockTransparentExt for DbV1 {
     ) -> Result<Vec<TransparentTxList>, FinalisedStateError> {
         self.get_block_range_transparent(start, end).await
     }
+
+    async fn get_previous_output(
+        &self,
+        outpoint: Outpoint,
+    ) -> Result<TxOutCompact, FinalisedStateError> {
+        tokio::task::block_in_place(|| self.get_previous_output_blocking(outpoint))
+    }
 }
 
 impl DbV1 {

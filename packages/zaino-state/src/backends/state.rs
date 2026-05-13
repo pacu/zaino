@@ -1449,7 +1449,7 @@ impl ZcashIndexer for StateServiceSubscriber {
     /// method: post
     /// tags: blockchain
     async fn get_tx_out_set_info(&self) -> Result<GetTxOutSetInfoResponse, Self::Error> {
-        Ok(self.rpc_client.get_tx_out_set_info().await?)
+        Ok(self.indexer.get_tx_out_set_info().await?)
     }
 
     // No request parameters.

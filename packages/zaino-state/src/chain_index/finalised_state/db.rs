@@ -72,7 +72,7 @@ use crate::{
     error::FinalisedStateError,
     BlockHash, BlockHeaderData, CommitmentTreeData, CompactBlockStream, Height, IndexedBlock,
     NamedAtomicStatus, OrchardCompactTx, OrchardTxList, Outpoint, SaplingCompactTx, SaplingTxList,
-    StatusType, TransparentCompactTx, TransparentTxList, TxLocation, TxidList,
+    StatusType, TransparentCompactTx, TransparentTxList, TxLocation, TxOutCompact, TxidList,
 };
 
 #[cfg(feature = "transparent_address_history_experimental")]
@@ -543,6 +543,18 @@ impl BlockTransparentExt for DbBackend {
     ) -> Result<Vec<TransparentTxList>, FinalisedStateError> {
         match self {
             Self::V1(db) => db.get_block_range_transparent(start, end).await,
+            _ => Err(FinalisedStateError::FeatureUnavailable("block_transparent")),
+        }
+    }
+
+    async fn get_previous_output(
+        &self,
+        outpoint: Outpoint,
+    ) -> Result<TxOutCompact, FinalisedStateError> {
+        match self {
+            Self::V1(db) => {
+                <DbV1 as BlockTransparentExt>::get_previous_output(db, outpoint).await
+            }
             _ => Err(FinalisedStateError::FeatureUnavailable("block_transparent")),
         }
     }

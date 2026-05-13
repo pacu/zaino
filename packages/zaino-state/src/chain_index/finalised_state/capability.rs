@@ -83,7 +83,8 @@ use crate::{
     read_fixed_le, read_u32_le, read_u8, version, write_fixed_le, write_u32_le, write_u8,
     BlockHash, BlockHeaderData, CommitmentTreeData, CompactBlockStream, FixedEncodedLen, Height,
     IndexedBlock, OrchardCompactTx, OrchardTxList, Outpoint, SaplingCompactTx, SaplingTxList,
-    StatusType, TransparentCompactTx, TransparentTxList, TxLocation, TxidList, ZainoVersionedSerde,
+    StatusType, TransparentCompactTx, TransparentTxList, TxLocation, TxOutCompact, TxidList,
+    ZainoVersionedSerde,
 };
 
 #[cfg(feature = "transparent_address_history_experimental")]
@@ -821,6 +822,16 @@ pub trait BlockTransparentExt: Send + Sync {
         start: Height,
         end: Height,
     ) -> Result<Vec<TransparentTxList>, FinalisedStateError>;
+
+    /// Returns the [`TxOutCompact`] referenced by `outpoint`, looking up the previous
+    /// transaction's transparent data via the txid index and the transparent block table.
+    ///
+    /// Returns an error if the previous transaction is not indexed by the finalised state
+    /// or the requested output index is out of range.
+    async fn get_previous_output(
+        &self,
+        outpoint: Outpoint,
+    ) -> Result<TxOutCompact, FinalisedStateError>;
 }
 
 /// Shielded transaction indexing extension (Sapling + Orchard + commitment tree data).

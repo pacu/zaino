@@ -269,12 +269,12 @@ async fn expected_tx_out_set_info_accumulator(
 
             let transaction = environment.begin_ro_txn().unwrap();
 
-            for output_index in 0..transparent_transaction.outputs().len() {
+            for (output_index, output) in transparent_transaction.outputs().iter().enumerate() {
                 let output_index = u32::try_from(output_index).unwrap();
                 let outpoint = Outpoint::new(transaction_hash.0, output_index);
                 let outpoint_bytes = outpoint.to_bytes().unwrap();
 
-                match transaction.get(spent_database, &outpoint_bytes) {
+                let still_unspent = match transaction.get(spent_database, &outpoint_bytes) {
                     Ok(spent_bytes) => {
                         let spent_entry =
                             StoredEntryFixed::<TxLocation>::from_bytes(spent_bytes).unwrap();
@@ -285,25 +285,27 @@ async fn expected_tx_out_set_info_accumulator(
                             outpoint
                         );
 
-                        if spent_entry.inner().block_height() > max_height.0 {
-                            unspent_outputs_for_transaction += 1;
-                        }
+                        spent_entry.inner().block_height() > max_height.0
                     }
 
-                    Err(lmdb::Error::NotFound) => {
-                        unspent_outputs_for_transaction += 1;
-                    }
+                    Err(lmdb::Error::NotFound) => true,
 
                     Err(error) => panic!(
                         "failed to read spent entry for outpoint {:?}: {error}",
                         outpoint
                     ),
+                };
+
+                if still_unspent {
+                    unspent_outputs_for_transaction += 1;
+                    expected_accumulator
+                        .apply_added_output(&outpoint, output)
+                        .unwrap();
                 }
             }
 
             if unspent_outputs_for_transaction > 0 {
                 expected_accumulator.transactions += 1;
-                expected_accumulator.transaction_outputs += unspent_outputs_for_transaction;
             }
         }
     }

@@ -95,6 +95,16 @@
 #    FinalisedTxOutSetInfoAccumulator V1 body =
 #        LE(u64) transactions
 #        LE(u64) transaction_outputs
+#        LE(u64) bytes_serialized
+#        [32]   hash_serialized
+#        LE(u64) total_zatoshis
+#
+#    `hash_serialized` is Zaino's XOR-of-BLAKE2b-256 multiset commitment over
+#    every currently-unspent transparent output. Per-output digest =
+#    BLAKE2b-256(b"ZcashTxOutSet___" || prev_txid[32] || LE(u32) prev_index
+#                || LE(u64) value || script_hash[20] || u8 script_type).
+#    The 65-byte canonical entry is also what `bytes_serialized` counts:
+#    bytes_serialized == transaction_outputs * 65.
 #
 # 10. address_history  ―  AddrScript  ->  StoredEntryFixed<AddrEventBytes>
 #    Key : 0x01 + AddrScript

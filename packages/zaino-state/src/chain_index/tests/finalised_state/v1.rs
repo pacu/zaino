@@ -1,7 +1,7 @@
 //! Holds tests for the V1 database.
 
 use hex::ToHex;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -1249,13 +1249,18 @@ async fn tx_out_set_info_accumulator_updates_on_write() {
     // Build the expected UTXO set directly from the same vector blocks.
     //
     // Map shape:
-    //   txid -> set of currently unspent transparent output indices for that txid
+    //   txid -> { output_index -> TxOutCompact }
     //
-    // At the end:
+    // From this we derive every accumulator field:
     //   transactions         = number of txids with at least one unspent output
     //   transaction_outputs  = total number of unspent transparent outputs
-    let mut unspent_output_indices_by_transaction_hash: HashMap<TransactionHash, HashSet<u32>> =
-        HashMap::new();
+    //   bytes_serialized     = transaction_outputs * ZAINO_TXOUTSET_ENTRY_LEN
+    //   hash_serialized      = XOR of tx_out_set_entry_digest over all unspent outputs
+    //   total_zatoshis       = sum of `value` over all unspent outputs
+    let mut unspent_output_indices_by_transaction_hash: HashMap<
+        TransactionHash,
+        HashMap<u32, crate::TxOutCompact>,
+    > = HashMap::new();
 
     // The test vectors are converted into IndexedBlock values in chain order. Each conversion
     // needs the previous block's chainwork, so this is carried forward as we process blocks.
@@ -1317,7 +1322,9 @@ async fn tx_out_set_info_accumulator_updates_on_write() {
                     });
 
                 assert!(
-                    unspent_output_indices.remove(&input.prevout_index()),
+                    unspent_output_indices
+                        .remove(&input.prevout_index())
+                        .is_some(),
                     "test vectors spend unknown output: transaction {:?}, output {}",
                     previous_transaction_hash,
                     input.prevout_index()
@@ -1341,33 +1348,62 @@ async fn tx_out_set_info_accumulator_updates_on_write() {
                 .entry(transaction_hash)
                 .or_default();
 
-            for output_index in 0..transaction.transparent().outputs().len() {
+            for (output_index, output) in transaction.transparent().outputs().iter().enumerate() {
                 let output_index = u32::try_from(output_index).unwrap();
 
                 assert!(
-                    unspent_output_indices.insert(output_index),
+                    unspent_output_indices
+                        .insert(output_index, *output)
+                        .is_none(),
                     "test vectors duplicate output index: transaction {transaction_hash:?}, output {output_index}"
                 );
             }
         }
     }
 
-    // Convert the expected UTXO map into the exact accumulator values stored by finalised state.
-    let expected_transaction_outputs = unspent_output_indices_by_transaction_hash
-        .values()
-        .map(|output_indices| output_indices.len() as u64)
-        .sum::<u64>();
-
-    let expected_accumulator = FinalisedTxOutSetInfoAccumulator {
-        transactions: unspent_output_indices_by_transaction_hash.len() as u64,
-        transaction_outputs: expected_transaction_outputs,
-    };
+    let expected_accumulator =
+        accumulator_from_unspent_map(&unspent_output_indices_by_transaction_hash);
 
     // Check that the accumulator maintained by write_block matches the independently
     // reconstructed expected UTXO-set counts.
     let actual_accumulator = db_reader.get_tx_out_set_info_accumulator().await.unwrap();
 
     assert_eq!(expected_accumulator, actual_accumulator);
+}
+
+/// Computes the canonical [`FinalisedTxOutSetInfoAccumulator`] for a fully-resolved UTXO set,
+/// used as the source of truth by the write/delete accumulator tests.
+fn accumulator_from_unspent_map(
+    unspent: &HashMap<TransactionHash, HashMap<u32, crate::TxOutCompact>>,
+) -> FinalisedTxOutSetInfoAccumulator {
+    use crate::chain_index::types::db::metadata::{
+        tx_out_set_entry_digest, ZAINO_TXOUTSET_ENTRY_LEN,
+    };
+    use crate::Outpoint;
+
+    let mut transaction_outputs = 0u64;
+    let mut total_zatoshis = 0u64;
+    let mut hash_serialized = [0u8; 32];
+
+    for (txid, outputs) in unspent {
+        for (output_index, out) in outputs {
+            let outpoint = Outpoint::new(txid.0, *output_index);
+            let digest = tx_out_set_entry_digest(&outpoint, out);
+            for (dst, src) in hash_serialized.iter_mut().zip(digest.iter()) {
+                *dst ^= *src;
+            }
+            transaction_outputs += 1;
+            total_zatoshis += out.value();
+        }
+    }
+
+    FinalisedTxOutSetInfoAccumulator {
+        transactions: unspent.len() as u64,
+        transaction_outputs,
+        bytes_serialized: transaction_outputs * ZAINO_TXOUTSET_ENTRY_LEN,
+        hash_serialized,
+        total_zatoshis,
+    }
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1394,11 +1430,12 @@ async fn tx_out_set_info_accumulator_updates_on_delete() {
 
     // Rebuild the expected UTXO set from the vector chain with the deleted tip excluded.
     //
-    // This verifies that delete_block reverses both accumulator fields:
-    //   transactions
-    //   transaction_outputs
-    let mut unspent_output_indices_by_transaction_hash: HashMap<TransactionHash, HashSet<u32>> =
-        HashMap::new();
+    // This verifies that delete_block reverses every accumulator field:
+    //   transactions, transaction_outputs, bytes_serialized, hash_serialized, total_zatoshis.
+    let mut unspent_output_indices_by_transaction_hash: HashMap<
+        TransactionHash,
+        HashMap<u32, crate::TxOutCompact>,
+    > = HashMap::new();
 
     let mut parent_chain_work = ChainWork::from_u256(0.into());
 
@@ -1458,7 +1495,9 @@ async fn tx_out_set_info_accumulator_updates_on_delete() {
                     });
 
                 assert!(
-                    unspent_output_indices.remove(&input.prevout_index()),
+                    unspent_output_indices
+                        .remove(&input.prevout_index())
+                        .is_some(),
                     "test vectors spend unknown output: transaction {:?}, output {}",
                     previous_transaction_hash,
                     input.prevout_index()
@@ -1480,27 +1519,21 @@ async fn tx_out_set_info_accumulator_updates_on_delete() {
                 .entry(transaction_hash)
                 .or_default();
 
-            for output_index in 0..transaction.transparent().outputs().len() {
+            for (output_index, output) in transaction.transparent().outputs().iter().enumerate() {
                 let output_index = u32::try_from(output_index).unwrap();
 
                 assert!(
-                    unspent_output_indices.insert(output_index),
+                    unspent_output_indices
+                        .insert(output_index, *output)
+                        .is_none(),
                     "test vectors duplicate output index: transaction {transaction_hash:?}, output {output_index}"
                 );
             }
         }
     }
 
-    // Expected counts after deleting the tip.
-    let expected_transaction_outputs = unspent_output_indices_by_transaction_hash
-        .values()
-        .map(|output_indices| output_indices.len() as u64)
-        .sum::<u64>();
-
-    let expected_accumulator = FinalisedTxOutSetInfoAccumulator {
-        transactions: unspent_output_indices_by_transaction_hash.len() as u64,
-        transaction_outputs: expected_transaction_outputs,
-    };
+    let expected_accumulator =
+        accumulator_from_unspent_map(&unspent_output_indices_by_transaction_hash);
 
     // Check the accumulator persisted by delete_block_at_height/delete_block.
     let actual_accumulator = db_reader.get_tx_out_set_info_accumulator().await.unwrap();

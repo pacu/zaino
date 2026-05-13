@@ -54,7 +54,7 @@ use crate::{
     error::FinalisedStateError,
     BlockHash, BlockHeaderData, CommitmentTreeData, CompactBlockStream, Height, IndexedBlock,
     OrchardCompactTx, OrchardTxList, Outpoint, SaplingCompactTx, SaplingTxList, StatusType,
-    TransparentCompactTx, TransparentTxList, TxLocation, TxidList,
+    TransparentCompactTx, TransparentTxList, TxLocation, TxOutCompact, TxidList,
 };
 
 #[cfg(feature = "transparent_address_history_experimental")]
@@ -460,6 +460,20 @@ impl DbReader {
     ) -> Result<FinalisedTxOutSetInfoAccumulator, FinalisedStateError> {
         self.db(CapabilityRequest::TransparentHistExt)?
             .get_tx_out_set_info_accumulator()
+            .await
+    }
+
+    /// Returns the previous transparent output referenced by `outpoint`.
+    ///
+    /// Routed through `BlockTransparentExt` because the lookup reads the transparent block
+    /// table via the txid index. Used by chain-level `gettxoutsetinfo` assembly to resolve
+    /// non-finalised spends against the finalised UTXO set.
+    pub(crate) async fn get_previous_output(
+        &self,
+        outpoint: Outpoint,
+    ) -> Result<TxOutCompact, FinalisedStateError> {
+        self.db(CapabilityRequest::BlockTransparentExt)?
+            .get_previous_output(outpoint)
             .await
     }
 

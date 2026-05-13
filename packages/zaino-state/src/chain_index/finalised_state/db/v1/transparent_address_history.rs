@@ -1,7 +1,9 @@
 //! ZainoDB::V1 transparent address history indexing functionality.
 
 use crate::chain_index::finalised_state::db::v1::TX_OUT_SET_INFO_ACCUMULATOR_KEY;
-use crate::chain_index::types::db::metadata::FinalisedTxOutSetInfoAccumulator;
+use crate::chain_index::types::db::metadata::{
+    tx_out_set_entry_digest, FinalisedTxOutSetInfoAccumulator, ZAINO_TXOUTSET_ENTRY_LEN,
+};
 
 use super::*;
 
@@ -957,8 +959,7 @@ impl DbV1 {
     /// Used to build addrhist records.
     ///
     /// WARNING: This is a blocking function and **MUST** be called within a blocking thread / task.
-    #[cfg(feature = "transparent_address_history_experimental")]
-    pub(super) fn get_previous_output_blocking(
+    pub(crate) fn get_previous_output_blocking(
         &self,
         outpoint: Outpoint,
     ) -> Result<TxOutCompact, FinalisedStateError> {
@@ -993,7 +994,6 @@ impl DbV1 {
     ///
     /// # Returns
     /// - `Some(TxOutCompact)` if found and present, otherwise `None`
-    #[cfg(feature = "transparent_address_history_experimental")]
     #[inline]
     fn find_txout_in_stored_transparent_tx_list(
         stored: &[u8],
@@ -1058,6 +1058,102 @@ impl DbV1 {
             }
         }
         None
+    }
+
+    /// Applies a list of UTXO entries to the multiset commitment fields of the accumulator.
+    ///
+    /// For each entry the digest is XORed into `hash_serialized` (XOR is self-inverse, so the same
+    /// call site works for both add and remove). The integer fields `total_zatoshis` and
+    /// `bytes_serialized` move in the direction selected by `adding`.
+    fn apply_tx_out_set_entries_delta(
+        accumulator: &mut FinalisedTxOutSetInfoAccumulator,
+        entries: &[(Outpoint, TxOutCompact)],
+        adding: bool,
+    ) -> Result<(), FinalisedStateError> {
+        for (outpoint, out) in entries {
+            let digest = tx_out_set_entry_digest(outpoint, out);
+            for (dst, src) in accumulator.hash_serialized.iter_mut().zip(digest.iter()) {
+                *dst ^= *src;
+            }
+
+            if adding {
+                accumulator.total_zatoshis =
+                    accumulator
+                        .total_zatoshis
+                        .checked_add(out.value())
+                        .ok_or_else(|| {
+                            FinalisedStateError::Custom(
+                                "txout-set accumulator total_zatoshis overflow".to_string(),
+                            )
+                        })?;
+                accumulator.bytes_serialized = accumulator
+                    .bytes_serialized
+                    .checked_add(ZAINO_TXOUTSET_ENTRY_LEN)
+                    .ok_or_else(|| {
+                        FinalisedStateError::Custom(
+                            "txout-set accumulator bytes_serialized overflow".to_string(),
+                        )
+                    })?;
+            } else {
+                accumulator.total_zatoshis =
+                    accumulator
+                        .total_zatoshis
+                        .checked_sub(out.value())
+                        .ok_or_else(|| {
+                            FinalisedStateError::Custom(
+                                "txout-set accumulator total_zatoshis underflow".to_string(),
+                            )
+                        })?;
+                accumulator.bytes_serialized = accumulator
+                    .bytes_serialized
+                    .checked_sub(ZAINO_TXOUTSET_ENTRY_LEN)
+                    .ok_or_else(|| {
+                        FinalisedStateError::Custom(
+                            "txout-set accumulator bytes_serialized underflow".to_string(),
+                        )
+                    })?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Resolves each spent outpoint to its previous [`TxOutCompact`].
+    ///
+    /// Same-block spends are resolved from the in-block `transparent` slice via the
+    /// `txid_to_block_index` map. Prior-block spends are resolved via
+    /// [`DbV1::get_previous_output_blocking`] inside a `block_in_place` to honour the read/write
+    /// boundary requirements documented on that method.
+    fn resolve_spent_outpoints_for_set_info(
+        &self,
+        spent_map: &HashMap<Outpoint, TxLocation>,
+        txid_to_block_index: &HashMap<TransactionHash, usize>,
+        transparent: &[Option<TransparentCompactTx>],
+    ) -> Result<Vec<(Outpoint, TxOutCompact)>, FinalisedStateError> {
+        let mut resolved = Vec::with_capacity(spent_map.len());
+
+        for outpoint in spent_map.keys().copied() {
+            let prev_txid = TransactionHash::from(*outpoint.prev_txid());
+            let prev_index = outpoint.prev_index() as usize;
+
+            let prev_out = if let Some(block_tx_index) = txid_to_block_index.get(&prev_txid) {
+                let tx = transparent[*block_tx_index].as_ref().ok_or_else(|| {
+                    FinalisedStateError::Custom(format!(
+                        "txout-set accumulator cannot be calculated: same-block spend of {prev_txid:?} has no transparent transaction data"
+                    ))
+                })?;
+                *tx.outputs().get(prev_index).ok_or_else(|| {
+                    FinalisedStateError::Custom(format!(
+                        "txout-set accumulator cannot be calculated: same-block spend of {prev_txid:?} index {prev_index} out of range"
+                    ))
+                })?
+            } else {
+                tokio::task::block_in_place(|| self.get_previous_output_blocking(outpoint))?
+            };
+
+            resolved.push((outpoint, prev_out));
+        }
+
+        Ok(resolved)
     }
 
     /// Calculates the finalised txout-set accumulator after applying the block currently being written.
@@ -1340,6 +1436,37 @@ impl DbV1 {
             }
         }
 
+        // Update bytes_serialized, hash_serialized and total_zatoshis.
+        //
+        // Created outputs are added to the multiset; spent prev outputs are removed. Same-block
+        // spends are resolved from the in-block transparent slice; prior-block spends are resolved
+        // from the finalised database.
+        let mut created_entries: Vec<(Outpoint, TxOutCompact)> = Vec::new();
+        let mut txid_to_block_index: HashMap<TransactionHash, usize> =
+            HashMap::with_capacity(txids.len());
+
+        for (transaction_index, transaction_hash) in txids.iter().copied().enumerate() {
+            txid_to_block_index.insert(transaction_hash, transaction_index);
+
+            let Some(transparent_transaction) = transparent[transaction_index].as_ref() else {
+                continue;
+            };
+
+            for (output_index, output) in transparent_transaction.outputs().iter().enumerate() {
+                let outpoint = Outpoint::new(transaction_hash.0, output_index as u32);
+                created_entries.push((outpoint, *output));
+            }
+        }
+
+        let spent_entries = self.resolve_spent_outpoints_for_set_info(
+            spent_map,
+            &txid_to_block_index,
+            transparent,
+        )?;
+
+        Self::apply_tx_out_set_entries_delta(&mut accumulator, &created_entries, true)?;
+        Self::apply_tx_out_set_entries_delta(&mut accumulator, &spent_entries, false)?;
+
         Ok(accumulator)
     }
 
@@ -1616,6 +1743,37 @@ impl DbV1 {
                     })?;
             }
         }
+
+        // Reverse the multiset commitment, byte-count and zatoshi-sum delta from this block.
+        //
+        // The block being deleted is still in the database, so prior-block prev outputs are still
+        // resolvable via `get_previous_output_blocking`. Same-block spends are resolved from the
+        // in-block transparent slice (the prev tx is created in this same block).
+        let mut created_entries: Vec<(Outpoint, TxOutCompact)> = Vec::new();
+        let mut txid_to_block_index: HashMap<TransactionHash, usize> =
+            HashMap::with_capacity(txids.len());
+
+        for (transaction_index, transaction_hash) in txids.iter().copied().enumerate() {
+            txid_to_block_index.insert(transaction_hash, transaction_index);
+
+            let Some(transparent_transaction) = transparent[transaction_index].as_ref() else {
+                continue;
+            };
+
+            for (output_index, output) in transparent_transaction.outputs().iter().enumerate() {
+                let outpoint = Outpoint::new(transaction_hash.0, output_index as u32);
+                created_entries.push((outpoint, *output));
+            }
+        }
+
+        let spent_entries = self.resolve_spent_outpoints_for_set_info(
+            spent_map,
+            &txid_to_block_index,
+            transparent,
+        )?;
+
+        Self::apply_tx_out_set_entries_delta(&mut accumulator, &created_entries, false)?;
+        Self::apply_tx_out_set_entries_delta(&mut accumulator, &spent_entries, true)?;
 
         Ok(accumulator)
     }

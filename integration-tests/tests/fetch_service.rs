@@ -750,7 +750,50 @@ async fn assert_fetch_service_gettxoutsetinfo_matches_rpc<V: ValidatorExt>(
     .unwrap();
 
     let rpc_txoutset_info = jsonrpc_client.get_tx_out_set_info().await.unwrap();
-    assert_eq!(fetch_service_txoutset_info, rpc_txoutset_info);
+
+    // Structural parity with zcashd: height, bestblock, transactions, txouts and total_amount
+    // must match. `bytes_serialized` and `hash_serialized` are Zaino-defined (see the
+    // `gettxoutsetinfo` spec in zaino-state) and intentionally diverge from zcashd; only
+    // Zaino-internal invariants are asserted on those fields.
+    use zaino_fetch::jsonrpsee::response::GetTxOutSetInfoResponse;
+    let (zaino, zcashd) = match (fetch_service_txoutset_info, rpc_txoutset_info) {
+        (GetTxOutSetInfoResponse::Info(z), GetTxOutSetInfoResponse::Info(r)) => (z, r),
+        other => panic!("expected non-empty gettxoutsetinfo from both sides, got {other:?}"),
+    };
+
+    assert_eq!(zaino.height, zcashd.height, "height differs from zcashd");
+    assert_eq!(
+        zaino.best_block, zcashd.best_block,
+        "bestblock differs from zcashd"
+    );
+    assert_eq!(
+        zaino.transactions, zcashd.transactions,
+        "transactions count differs from zcashd"
+    );
+    assert_eq!(zaino.txouts, zcashd.txouts, "txouts differs from zcashd");
+    assert!(
+        (zaino.total_amount - zcashd.total_amount).abs() < 1e-8,
+        "total_amount differs from zcashd: zaino={} zcashd={}",
+        zaino.total_amount,
+        zcashd.total_amount
+    );
+
+    // Zaino-only invariants on the redefined fields.
+    assert_eq!(
+        zaino.bytes_serialized,
+        zaino.txouts * 65,
+        "bytes_serialized must equal txouts * 65 under Zaino's UTXO entry encoding"
+    );
+    assert_eq!(
+        zaino.hash_serialized.len(),
+        64,
+        "hash_serialized must be 64 lowercase hex chars"
+    );
+    assert!(
+        zaino.hash_serialized.chars().all(|c| c.is_ascii_hexdigit()),
+        "hash_serialized must be hex: got {}",
+        zaino.hash_serialized
+    );
 }
 
 #[allow(deprecated)]
