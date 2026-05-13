@@ -1349,6 +1349,13 @@ async fn tx_out_set_info_accumulator_updates_on_write() {
                 .or_default();
 
             for (output_index, output) in transaction.transparent().outputs().iter().enumerate() {
+                // The accumulator skips NonStandard (unspendable) outputs — see
+                // `is_unspendable_tx_out` in
+                // `chain_index::types::db::metadata`. The oracle must mirror that.
+                if crate::chain_index::types::db::metadata::is_unspendable_tx_out(output) {
+                    continue;
+                }
+
                 let output_index = u32::try_from(output_index).unwrap();
 
                 assert!(
@@ -1357,6 +1364,12 @@ async fn tx_out_set_info_accumulator_updates_on_write() {
                         .is_none(),
                     "test vectors duplicate output index: transaction {transaction_hash:?}, output {output_index}"
                 );
+            }
+
+            // If the transaction had only NonStandard outputs, drop the empty entry so it
+            // doesn't inflate the expected `transactions` count.
+            if unspent_output_indices.is_empty() {
+                unspent_output_indices_by_transaction_hash.remove(&transaction_hash);
             }
         }
     }
@@ -1520,6 +1533,13 @@ async fn tx_out_set_info_accumulator_updates_on_delete() {
                 .or_default();
 
             for (output_index, output) in transaction.transparent().outputs().iter().enumerate() {
+                // The accumulator skips NonStandard (unspendable) outputs — see
+                // `is_unspendable_tx_out` in
+                // `chain_index::types::db::metadata`. The oracle must mirror that.
+                if crate::chain_index::types::db::metadata::is_unspendable_tx_out(output) {
+                    continue;
+                }
+
                 let output_index = u32::try_from(output_index).unwrap();
 
                 assert!(
@@ -1528,6 +1548,12 @@ async fn tx_out_set_info_accumulator_updates_on_delete() {
                         .is_none(),
                     "test vectors duplicate output index: transaction {transaction_hash:?}, output {output_index}"
                 );
+            }
+
+            // If the transaction had only NonStandard outputs, drop the empty entry so it
+            // doesn't inflate the expected `transactions` count.
+            if unspent_output_indices.is_empty() {
+                unspent_output_indices_by_transaction_hash.remove(&transaction_hash);
             }
         }
     }

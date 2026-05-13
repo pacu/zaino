@@ -936,8 +936,16 @@ impl<Source: BlockchainSource> NodeBackedChainIndexSubscriber<Source> {
             return Ok(0);
         };
 
-        let outpoints: Vec<Outpoint> = (0..transparent.outputs().len() as u32)
-            .map(|i| Outpoint::new(txid.0, i))
+        // Skip unspendable outputs (matches `is_unspendable_tx_out` semantics used by the
+        // accumulator). NonStandard outputs are never in the UTXO set, so they must not count
+        // toward a transaction's "remaining unspent" tally.
+        use crate::chain_index::types::db::metadata::is_unspendable_tx_out;
+        let outpoints: Vec<Outpoint> = transparent
+            .outputs()
+            .iter()
+            .enumerate()
+            .filter(|(_, out)| !is_unspendable_tx_out(out))
+            .map(|(i, _)| Outpoint::new(txid.0, i as u32))
             .collect();
 
         if outpoints.is_empty() {
@@ -2106,7 +2114,9 @@ impl<Source: BlockchainSource> ChainIndex for NodeBackedChainIndexSubscriber<Sou
     }
 
     async fn get_tx_out_set_info(&self) -> Result<GetTxOutSetInfoResponse, Self::Error> {
-        use crate::chain_index::types::db::metadata::ZAINO_TXOUTSET_ENTRY_LEN;
+        use crate::chain_index::types::db::metadata::{
+            is_unspendable_tx_out, ZAINO_TXOUTSET_ENTRY_LEN,
+        };
         use hex::ToHex as _;
         use std::collections::HashMap;
 
@@ -2169,7 +2179,14 @@ impl<Source: BlockchainSource> ChainIndex for NodeBackedChainIndexSubscriber<Sou
                 let transparent = tx.transparent();
 
                 // Created outputs enter the UTXO set.
+                //
+                // NonStandard (unspendable) outputs are skipped at every level — the accumulator
+                // never saw them on the finalised side either, so they must not contribute to
+                // `transactions` or to the resolution map for later same-NFS spends.
                 for (output_index, output) in transparent.outputs().iter().enumerate() {
+                    if is_unspendable_tx_out(output) {
+                        continue;
+                    }
                     let outpoint = Outpoint::new(txid.0, output_index as u32);
                     accumulator
                         .apply_added_output(&outpoint, output)

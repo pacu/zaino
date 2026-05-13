@@ -270,6 +270,14 @@ async fn expected_tx_out_set_info_accumulator(
             let transaction = environment.begin_ro_txn().unwrap();
 
             for (output_index, output) in transparent_transaction.outputs().iter().enumerate() {
+                // The accumulator excludes NonStandard (unspendable) outputs from every field —
+                // see `is_unspendable_tx_out`. The migration oracle must skip them too,
+                // otherwise it overcounts compared to the on-disk accumulator value the
+                // migration backfilled.
+                if crate::chain_index::types::db::metadata::is_unspendable_tx_out(output) {
+                    continue;
+                }
+
                 let output_index = u32::try_from(output_index).unwrap();
                 let outpoint = Outpoint::new(transaction_hash.0, output_index);
                 let outpoint_bytes = outpoint.to_bytes().unwrap();

@@ -11,7 +11,22 @@ use crate::{
     ZainoVersionedSerde,
 };
 
-use super::legacy::{Outpoint, TxOutCompact};
+use super::legacy::{Outpoint, ScriptType, TxOutCompact};
+
+/// Returns `true` if `out` should be excluded from the transparent UTXO set.
+///
+/// Mirrors zcashd's `IsUnspendable()` for the purposes of `gettxoutsetinfo`:
+/// only outputs whose script parses as P2PKH or P2SH are counted as part of
+/// the UTXO set. Everything else (OP_RETURN coinbase commitments, oversized
+/// or otherwise non-standard scripts) is treated as unspendable and excluded
+/// from `transactions`, `transaction_outputs`, `bytes_serialized`,
+/// `hash_serialized` and `total_zatoshis`.
+pub fn is_unspendable_tx_out(out: &TxOutCompact) -> bool {
+    !matches!(
+        out.script_type_enum(),
+        Some(ScriptType::P2PKH) | Some(ScriptType::P2SH),
+    )
+}
 
 /// Domain separator for the Zaino transparent UTXO set commitment.
 ///

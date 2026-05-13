@@ -2,7 +2,8 @@
 
 use crate::chain_index::finalised_state::db::v1::TX_OUT_SET_INFO_ACCUMULATOR_KEY;
 use crate::chain_index::types::db::metadata::{
-    tx_out_set_entry_digest, FinalisedTxOutSetInfoAccumulator, ZAINO_TXOUTSET_ENTRY_LEN,
+    is_unspendable_tx_out, tx_out_set_entry_digest, FinalisedTxOutSetInfoAccumulator,
+    ZAINO_TXOUTSET_ENTRY_LEN,
 };
 
 use super::*;
@@ -1202,18 +1203,42 @@ impl DbV1 {
             };
 
         // Record how many transparent outputs each transaction in this block creates.
+        //
+        // `created_output_count_by_transaction_hash` counts every transparent output (used for
+        // the bound check `spent_output_index < created_output_count`).
+        // `spendable_created_output_count_by_transaction_hash` excludes provably-unspendable
+        // outputs (NonStandard script types — see `is_unspendable_tx_out`) and is what drives
+        // the UTXO-set deltas: `transaction_outputs`, the 0→>0 transition, etc.
         let mut created_output_count_by_transaction_hash: HashMap<TransactionHash, u32> =
             HashMap::with_capacity(txids.len());
+        let mut spendable_created_output_count_by_transaction_hash: HashMap<
+            TransactionHash,
+            u32,
+        > = HashMap::with_capacity(txids.len());
 
         for (transaction_index, transaction_hash) in txids.iter().copied().enumerate() {
-            let output_count = transparent[transaction_index]
+            let (output_count, spendable_output_count) = transparent[transaction_index]
                 .as_ref()
-                .map(|transparent_transaction| transparent_transaction.outputs().len())
-                .unwrap_or(0);
+                .map(|transparent_transaction| {
+                    let total = transparent_transaction.outputs().len();
+                    let spendable = transparent_transaction
+                        .outputs()
+                        .iter()
+                        .filter(|out| !is_unspendable_tx_out(out))
+                        .count();
+                    (total, spendable)
+                })
+                .unwrap_or((0, 0));
 
             let output_count = u32::try_from(output_count).map_err(|_| {
                 FinalisedStateError::Custom(
                     "txout-set accumulator cannot be calculated: transparent output count does not fit into u32"
+                        .to_string(),
+                )
+            })?;
+            let spendable_output_count = u32::try_from(spendable_output_count).map_err(|_| {
+                FinalisedStateError::Custom(
+                    "txout-set accumulator cannot be calculated: spendable output count does not fit into u32"
                         .to_string(),
                 )
             })?;
@@ -1227,6 +1252,8 @@ impl DbV1 {
                 "txout-set accumulator cannot be calculated: duplicate transaction hash in block: {transaction_hash:?}"
             )));
             }
+            spendable_created_output_count_by_transaction_hash
+                .insert(transaction_hash, spendable_output_count);
         }
 
         // Group this block's spent outpoints by the transaction they spend from.
@@ -1252,17 +1279,18 @@ impl DbV1 {
             spent_outpoints.push(outpoint);
         }
 
-        // Update the UTXO count using the direct output delta.
-        let created_output_count = created_output_count_by_transaction_hash.values().try_fold(
-            0u64,
-            |total, output_count| {
+        // Update the UTXO count using the direct output delta. Only spendable outputs count
+        // toward `transaction_outputs`; consensus rejects spends of unspendable outputs, so
+        // `spent_outpoints` already excludes them.
+        let created_output_count = spendable_created_output_count_by_transaction_hash
+            .values()
+            .try_fold(0u64, |total, output_count| {
                 total.checked_add(u64::from(*output_count)).ok_or_else(|| {
                     FinalisedStateError::Custom(
                         "txout-set accumulator created output count overflow".to_string(),
                     )
                 })
-            },
-        )?;
+            })?;
 
         let spent_output_count = u64::try_from(spent_outpoints.len()).map_err(|_| {
             FinalisedStateError::Custom(
@@ -1306,13 +1334,16 @@ impl DbV1 {
 
         // Count new transactions entering the UTXO set.
         //
-        // A block-created transaction is counted only if at least one of its transparent outputs
-        // survives any same-block spend.
+        // A block-created transaction is counted only if at least one of its *spendable*
+        // transparent outputs survives any same-block spend. NonStandard outputs are excluded
+        // here for consistency with `apply_added_output` further down.
         for (transaction_hash, created_output_count) in &created_output_count_by_transaction_hash {
             let spent_output_indices =
                 spent_output_indices_by_transaction_hash.get(transaction_hash);
 
             // Same-block spends must refer to outputs that this transaction actually created.
+            // The bound check uses the *full* output count (NonStandard outputs are still real
+            // outputs in the wire layout — the consensus check is positional).
             if let Some(spent_output_indices) = spent_output_indices {
                 for spent_output_index in spent_output_indices {
                     if spent_output_index >= created_output_count {
@@ -1335,8 +1366,15 @@ impl DbV1 {
                     )
                 })?;
 
+            // Use the *spendable* count for the transition: a tx with only NonStandard outputs
+            // never enters the in-set count.
+            let spendable_created_output_count = spendable_created_output_count_by_transaction_hash
+                .get(transaction_hash)
+                .copied()
+                .unwrap_or(0);
+
             // Transition: 0 unspent outputs before block -> >0 after block.
-            if *created_output_count > spent_created_output_count {
+            if spendable_created_output_count > spent_created_output_count {
                 accumulator.transactions =
                     accumulator.transactions.checked_add(1).ok_or_else(|| {
                         FinalisedStateError::Custom(
@@ -1390,10 +1428,18 @@ impl DbV1 {
                 }
             }
 
-            // Build the previous transaction's outputs that are not spent by this block.
+            // Build the previous transaction's *spendable* outputs that are not spent by this
+            // block. NonStandard outputs were never in the UTXO set, so excluding them here
+            // matches `apply_added_output`'s view.
             let mut remaining_outpoints_not_spent_by_this_block = Vec::new();
 
-            for output_index in 0..previous_output_count {
+            for (output_index, prev_output) in transparent_transaction.outputs().iter().enumerate()
+            {
+                let output_index = output_index as u32;
+
+                if is_unspendable_tx_out(prev_output) {
+                    continue;
+                }
                 if spent_output_indices_in_block.contains(&output_index) {
                     continue;
                 }
@@ -1402,7 +1448,8 @@ impl DbV1 {
                     .push(Outpoint::new(transaction_hash.0, output_index));
             }
 
-            // If this block spends every output from the previous transaction, it leaves the UTXO set.
+            // If this block spends every spendable output from the previous transaction, it
+            // leaves the UTXO set.
             if remaining_outpoints_not_spent_by_this_block.is_empty() {
                 accumulator.transactions =
                     accumulator.transactions.checked_sub(1).ok_or_else(|| {
@@ -1440,7 +1487,8 @@ impl DbV1 {
         //
         // Created outputs are added to the multiset; spent prev outputs are removed. Same-block
         // spends are resolved from the in-block transparent slice; prior-block spends are resolved
-        // from the finalised database.
+        // from the finalised database. NonStandard (unspendable) outputs are skipped — they were
+        // never counted on the way in, so they must not be counted on the way out either.
         let mut created_entries: Vec<(Outpoint, TxOutCompact)> = Vec::new();
         let mut txid_to_block_index: HashMap<TransactionHash, usize> =
             HashMap::with_capacity(txids.len());
@@ -1453,6 +1501,9 @@ impl DbV1 {
             };
 
             for (output_index, output) in transparent_transaction.outputs().iter().enumerate() {
+                if is_unspendable_tx_out(output) {
+                    continue;
+                }
                 let outpoint = Outpoint::new(transaction_hash.0, output_index as u32);
                 created_entries.push((outpoint, *output));
             }
@@ -1502,19 +1553,40 @@ impl DbV1 {
                 Err(error) => return Err(error),
             };
 
-        // Record how many transparent outputs each transaction in this block creates.
+        // See `calculate_tx_out_set_info_accumulator_after_block` for the rationale on having
+        // a `created_output_count_by_transaction_hash` (full count, used for the bound check)
+        // alongside a `spendable_created_output_count_by_transaction_hash` (excludes NonStandard
+        // outputs, used for the UTXO-set deltas).
         let mut created_output_count_by_transaction_hash: HashMap<TransactionHash, u32> =
             HashMap::with_capacity(txids.len());
+        let mut spendable_created_output_count_by_transaction_hash: HashMap<
+            TransactionHash,
+            u32,
+        > = HashMap::with_capacity(txids.len());
 
         for (transaction_index, transaction_hash) in txids.iter().copied().enumerate() {
-            let output_count = transparent[transaction_index]
+            let (output_count, spendable_output_count) = transparent[transaction_index]
                 .as_ref()
-                .map(|transparent_transaction| transparent_transaction.outputs().len())
-                .unwrap_or(0);
+                .map(|transparent_transaction| {
+                    let total = transparent_transaction.outputs().len();
+                    let spendable = transparent_transaction
+                        .outputs()
+                        .iter()
+                        .filter(|out| !is_unspendable_tx_out(out))
+                        .count();
+                    (total, spendable)
+                })
+                .unwrap_or((0, 0));
 
             let output_count = u32::try_from(output_count).map_err(|_| {
                 FinalisedStateError::Custom(
                     "txout-set accumulator cannot be calculated: transparent output count does not fit into u32"
+                        .to_string(),
+                )
+            })?;
+            let spendable_output_count = u32::try_from(spendable_output_count).map_err(|_| {
+                FinalisedStateError::Custom(
+                    "txout-set accumulator cannot be calculated: spendable output count does not fit into u32"
                         .to_string(),
                 )
             })?;
@@ -1528,6 +1600,8 @@ impl DbV1 {
                 "txout-set accumulator cannot be calculated: duplicate transaction hash in block: {transaction_hash:?}"
             )));
             }
+            spendable_created_output_count_by_transaction_hash
+                .insert(transaction_hash, spendable_output_count);
         }
 
         // Group this block's spent outpoints by the transaction they spend from.
@@ -1554,17 +1628,17 @@ impl DbV1 {
             spent_outpoints.push((*outpoint, *tx_location));
         }
 
-        // Update the UTXO count using the direct output delta.
-        let created_output_count = created_output_count_by_transaction_hash.values().try_fold(
-            0u64,
-            |total, output_count| {
+        // Update the UTXO count using the direct output delta. Spendable outputs only;
+        // `spent_outpoints` already excludes unspendable outputs by consensus.
+        let created_output_count = spendable_created_output_count_by_transaction_hash
+            .values()
+            .try_fold(0u64, |total, output_count| {
                 total.checked_add(u64::from(*output_count)).ok_or_else(|| {
                     FinalisedStateError::Custom(
                         "txout-set accumulator created output count overflow".to_string(),
                     )
                 })
-            },
-        )?;
+            })?;
 
         let spent_output_count = u64::try_from(spent_outpoints.len()).map_err(|_| {
             FinalisedStateError::Custom(
@@ -1612,15 +1686,13 @@ impl DbV1 {
             }
         }
 
-        // Count new transactions entering the UTXO set.
-        //
-        // A block-created transaction is counted only if at least one of its transparent outputs
-        // survives any same-block spend.
+        // Inverse of the forward 0→>0 transition. Uses the spendable count for the comparison
+        // so that NonStandard-only transactions never appear to leave/enter the set.
         for (transaction_hash, created_output_count) in &created_output_count_by_transaction_hash {
             let spent_output_indices =
                 spent_output_indices_by_transaction_hash.get(transaction_hash);
 
-            // Same-block spends must refer to outputs that this transaction actually created.
+            // Bound check uses the full output count (positional consensus invariant).
             if let Some(spent_output_indices) = spent_output_indices {
                 for spent_output_index in spent_output_indices {
                     if spent_output_index >= created_output_count {
@@ -1643,8 +1715,14 @@ impl DbV1 {
                     )
                 })?;
 
-            // Transition: 0 unspent outputs before block -> >0 after block.
-            if *created_output_count > spent_created_output_count {
+            let spendable_created_output_count = spendable_created_output_count_by_transaction_hash
+                .get(transaction_hash)
+                .copied()
+                .unwrap_or(0);
+
+            // Inverse transition: when applied forward this tx entered the set (spendable > 0),
+            // so when reversing it now leaves the set.
+            if spendable_created_output_count > spent_created_output_count {
                 accumulator.transactions =
                     accumulator.transactions.checked_sub(1).ok_or_else(|| {
                         FinalisedStateError::Custom(
@@ -1698,10 +1776,17 @@ impl DbV1 {
                 }
             }
 
-            // Build the previous transaction's outputs that are not spent by this block.
+            // Build the previous transaction's *spendable* outputs that are not spent by this
+            // block; NonStandard outputs were never in the UTXO set.
             let mut remaining_outpoints_not_spent_by_this_block = Vec::new();
 
-            for output_index in 0..previous_output_count {
+            for (output_index, prev_output) in transparent_transaction.outputs().iter().enumerate()
+            {
+                let output_index = output_index as u32;
+
+                if is_unspendable_tx_out(prev_output) {
+                    continue;
+                }
                 if spent_output_indices_in_block.contains(&output_index) {
                     continue;
                 }
@@ -1710,7 +1795,8 @@ impl DbV1 {
                     .push(Outpoint::new(transaction_hash.0, output_index));
             }
 
-            // If this block spent every output from the previous transaction, deleting this block restores it.
+            // If this block spent every spendable output from the previous transaction, deleting
+            // this block restores it.
             if remaining_outpoints_not_spent_by_this_block.is_empty() {
                 accumulator.transactions =
                     accumulator.transactions.checked_add(1).ok_or_else(|| {
@@ -1748,7 +1834,8 @@ impl DbV1 {
         //
         // The block being deleted is still in the database, so prior-block prev outputs are still
         // resolvable via `get_previous_output_blocking`. Same-block spends are resolved from the
-        // in-block transparent slice (the prev tx is created in this same block).
+        // in-block transparent slice (the prev tx is created in this same block). NonStandard
+        // outputs are skipped — they were never added in the first place.
         let mut created_entries: Vec<(Outpoint, TxOutCompact)> = Vec::new();
         let mut txid_to_block_index: HashMap<TransactionHash, usize> =
             HashMap::with_capacity(txids.len());
@@ -1761,6 +1848,9 @@ impl DbV1 {
             };
 
             for (output_index, output) in transparent_transaction.outputs().iter().enumerate() {
+                if is_unspendable_tx_out(output) {
+                    continue;
+                }
                 let outpoint = Outpoint::new(transaction_hash.0, output_index as u32);
                 created_entries.push((outpoint, *output));
             }
