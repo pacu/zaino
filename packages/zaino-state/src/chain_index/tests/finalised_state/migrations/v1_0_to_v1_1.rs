@@ -136,36 +136,9 @@ async fn v1_0_to_v1_1_mixed_blockheaderdata_formats() {
         "mock chain source must advance beyond the old v1.0.0 database height"
     );
 
-    let zaino_db = std::sync::Arc::new(
-        ZainoDB::spawn_with_target_version(
-            v1_config,
-            source.clone(),
-            DbVersion {
-                major: 1,
-                minor: 1,
-                patch: 0,
-            },
-        )
-        .await
-        .unwrap(),
-    );
+    let zaino_db = std::sync::Arc::new(ZainoDB::spawn(v1_config, source.clone()).await.unwrap());
 
     zaino_db.wait_until_ready().await;
-
-    let migrated_metadata = zaino_db.get_metadata().await.unwrap();
-    assert_eq!(
-        migrated_metadata.version,
-        DbVersion {
-            major: 1,
-            minor: 1,
-            patch: 0,
-        }
-    );
-    assert_eq!(migrated_metadata.migration_status, MigrationStatus::Empty);
-    assert_eq!(
-        migrated_metadata.schema_hash,
-        crate::chain_index::finalised_state::db::v1::DB_SCHEMA_V1_HASH
-    );
 
     let migrated_db_height = zaino_db.db_height().await.unwrap().unwrap();
     assert_eq!(

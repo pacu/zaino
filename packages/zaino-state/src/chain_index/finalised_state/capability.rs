@@ -78,11 +78,12 @@
 use core::fmt;
 
 use crate::{
-    chain_index::types::TransactionHash, error::FinalisedStateError, read_fixed_le, read_u32_le,
-    read_u8, version, write_fixed_le, write_u32_le, write_u8, BlockHash, BlockHeaderData,
-    CommitmentTreeData, CompactBlockStream, FixedEncodedLen, Height, IndexedBlock,
-    OrchardCompactTx, OrchardTxList, Outpoint, SaplingCompactTx, SaplingTxList, StatusType,
-    TransparentCompactTx, TransparentTxList, TxLocation, TxidList, ZainoVersionedSerde,
+    chain_index::types::{db::metadata::FinalisedTxOutSetInfoAccumulator, TransactionHash},
+    error::FinalisedStateError,
+    read_fixed_le, read_u32_le, read_u8, version, write_fixed_le, write_u32_le, write_u8,
+    BlockHash, BlockHeaderData, CommitmentTreeData, CompactBlockStream, FixedEncodedLen, Height,
+    IndexedBlock, OrchardCompactTx, OrchardTxList, Outpoint, SaplingCompactTx, SaplingTxList,
+    StatusType, TransparentCompactTx, TransparentTxList, TxLocation, TxidList, ZainoVersionedSerde,
 };
 
 #[cfg(feature = "transparent_address_history_experimental")]
@@ -1029,4 +1030,17 @@ pub trait TransparentHistExt: Send + Sync {
         &self,
         outpoints: Vec<Outpoint>,
     ) -> Result<Vec<Option<TxLocation>>, FinalisedStateError>;
+
+    /// Returns the finalised-state txout-set accumulator.
+    ///
+    /// This is the finalised database portion of `gettxoutsetinfo`. It only contains values that
+    /// are maintained by the finalised state:
+    /// - number of transactions with at least one currently unspent transparent output;
+    /// - number of currently unspent transparent outputs.
+    ///
+    /// Full RPC assembly, including non-finalised state and RPC-only fields, belongs above the
+    /// finalised database layer.
+    async fn get_tx_out_set_info_accumulator(
+        &self,
+    ) -> Result<FinalisedTxOutSetInfoAccumulator, FinalisedStateError>;
 }

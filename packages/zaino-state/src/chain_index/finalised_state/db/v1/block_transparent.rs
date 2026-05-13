@@ -89,7 +89,7 @@ impl DbV1 {
                     .map_err(|e| FinalisedStateError::Custom(format!("skip entry error: {e}")))?;
             }
 
-            let start = cursor.position();
+            let option_start = cursor.position();
 
             // Peek at the 1-byte presence flag
             let mut presence = [0u8; 1];
@@ -106,14 +106,16 @@ impl DbV1 {
                 )));
             }
 
-            cursor.set_position(start);
+            let tx_start = cursor.position();
+
+            cursor.set_position(option_start);
             // Skip this entry to compute length
             Self::skip_opt_transparent_entry(&mut cursor).map_err(|e| {
                 FinalisedStateError::Custom(format!("skip entry error (second pass): {e}"))
             })?;
 
             let end = cursor.position();
-            let slice = &raw[start as usize..end as usize];
+            let slice = &raw[tx_start as usize..end as usize];
 
             Ok(Some(TransparentCompactTx::from_bytes(slice)?))
         })

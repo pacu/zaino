@@ -1,8 +1,10 @@
 //! Holds tests for the V1 database.
 
 use hex::ToHex;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use tempfile::TempDir;
 use zaino_common::network::ActivationHeights;
 use zaino_common::{DatabaseConfig, Network, StorageConfig};
@@ -20,6 +22,7 @@ use crate::chain_index::tests::vectors::{
 
 use crate::chain_index::types::TransactionHash;
 
+use crate::chain_index::types::db::metadata::FinalisedTxOutSetInfoAccumulator;
 use crate::error::FinalisedStateError;
 use crate::{BlockCacheConfig, BlockMetadata, BlockWithMetadata, ChainWork, Height, IndexedBlock};
 
@@ -1228,4 +1231,279 @@ async fn check_recipient_spent_map() {
             }
         }
     }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn tx_out_set_info_accumulator_updates_on_write() {
+    init_tracing();
+
+    // Load the regtest vectors, write every vector block into ZainoDB, and wait until the
+    // finalised state has finished its startup/background validation.
+    let (TestVectorData { blocks, .. }, _db_dir, zaino_db) =
+        load_vectors_and_spawn_and_sync_v1_zaino_db().await;
+
+    zaino_db.wait_until_ready().await;
+
+    let db_reader = Arc::new(zaino_db).to_reader();
+
+    // Build the expected UTXO set directly from the same vector blocks.
+    //
+    // Map shape:
+    //   txid -> set of currently unspent transparent output indices for that txid
+    //
+    // At the end:
+    //   transactions         = number of txids with at least one unspent output
+    //   transaction_outputs  = total number of unspent transparent outputs
+    let mut unspent_output_indices_by_transaction_hash: HashMap<TransactionHash, HashSet<u32>> =
+        HashMap::new();
+
+    // The test vectors are converted into IndexedBlock values in chain order. Each conversion
+    // needs the previous block's chainwork, so this is carried forward as we process blocks.
+    let mut parent_chain_work = ChainWork::from_u256(0.into());
+
+    for TestVectorBlockData {
+        zebra_block,
+        sapling_root,
+        sapling_tree_size,
+        orchard_root,
+        orchard_tree_size,
+        ..
+    } in blocks.iter()
+    {
+        // Rebuild the same IndexedBlock representation used by the database write path.
+        let metadata = BlockMetadata::new(
+            *sapling_root,
+            *sapling_tree_size as u32,
+            *orchard_root,
+            *orchard_tree_size as u32,
+            parent_chain_work,
+            zebra_chain::parameters::Network::new_regtest(
+                zebra_chain::parameters::testnet::ConfiguredActivationHeights {
+                    before_overwinter: Some(1),
+                    overwinter: Some(1),
+                    sapling: Some(1),
+                    blossom: Some(1),
+                    heartwood: Some(1),
+                    canopy: Some(1),
+                    nu5: Some(1),
+                    nu6: Some(1),
+                    nu6_1: None,
+                    nu7: None,
+                }
+                .into(),
+            ),
+        );
+
+        let block_with_metadata = BlockWithMetadata::new(zebra_block, metadata);
+        let chain_block = IndexedBlock::try_from(block_with_metadata).unwrap();
+
+        parent_chain_work = chain_block.context.chainwork;
+
+        for transaction in chain_block.transactions() {
+            // First apply spends, removing spent transparent outputs from the expected UTXO set.
+            for input in transaction.transparent().inputs() {
+                if input.is_null_prevout() {
+                    continue;
+                }
+
+                let previous_transaction_hash = TransactionHash::from(*input.prevout_txid());
+
+                let unspent_output_indices = unspent_output_indices_by_transaction_hash
+                    .get_mut(&previous_transaction_hash)
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "test vectors spend unknown transaction {previous_transaction_hash:?}"
+                        )
+                    });
+
+                assert!(
+                    unspent_output_indices.remove(&input.prevout_index()),
+                    "test vectors spend unknown output: transaction {:?}, output {}",
+                    previous_transaction_hash,
+                    input.prevout_index()
+                );
+
+                // If a transaction has no remaining unspent outputs, it should no longer
+                // contribute to the accumulator's `transactions` count.
+                if unspent_output_indices.is_empty() {
+                    unspent_output_indices_by_transaction_hash.remove(&previous_transaction_hash);
+                }
+            }
+
+            // Then apply outputs, adding newly-created transparent outputs to the expected UTXO set.
+            if transaction.transparent().outputs().is_empty() {
+                continue;
+            }
+
+            let transaction_hash = *transaction.txid();
+
+            let unspent_output_indices = unspent_output_indices_by_transaction_hash
+                .entry(transaction_hash)
+                .or_default();
+
+            for output_index in 0..transaction.transparent().outputs().len() {
+                let output_index = u32::try_from(output_index).unwrap();
+
+                assert!(
+                    unspent_output_indices.insert(output_index),
+                    "test vectors duplicate output index: transaction {transaction_hash:?}, output {output_index}"
+                );
+            }
+        }
+    }
+
+    // Convert the expected UTXO map into the exact accumulator values stored by finalised state.
+    let expected_transaction_outputs = unspent_output_indices_by_transaction_hash
+        .values()
+        .map(|output_indices| output_indices.len() as u64)
+        .sum::<u64>();
+
+    let expected_accumulator = FinalisedTxOutSetInfoAccumulator {
+        transactions: unspent_output_indices_by_transaction_hash.len() as u64,
+        transaction_outputs: expected_transaction_outputs,
+    };
+
+    // Check that the accumulator maintained by write_block matches the independently
+    // reconstructed expected UTXO-set counts.
+    let actual_accumulator = db_reader.get_tx_out_set_info_accumulator().await.unwrap();
+
+    assert_eq!(expected_accumulator, actual_accumulator);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn tx_out_set_info_accumulator_updates_on_delete() {
+    init_tracing();
+
+    // Load and write all vector blocks, then delete the current tip block.
+    // The accumulator should end up matching the UTXO set for all blocks except the deleted tip.
+    let (TestVectorData { blocks, .. }, _db_dir, zaino_db) =
+        load_vectors_and_spawn_and_sync_v1_zaino_db().await;
+
+    zaino_db.wait_until_ready().await;
+
+    let deleted_block_height = Height(blocks.last().unwrap().height);
+
+    zaino_db
+        .delete_block_at_height(deleted_block_height)
+        .await
+        .unwrap();
+
+    zaino_db.wait_until_ready().await;
+
+    let db_reader = Arc::new(zaino_db).to_reader();
+
+    // Rebuild the expected UTXO set from the vector chain with the deleted tip excluded.
+    //
+    // This verifies that delete_block reverses both accumulator fields:
+    //   transactions
+    //   transaction_outputs
+    let mut unspent_output_indices_by_transaction_hash: HashMap<TransactionHash, HashSet<u32>> =
+        HashMap::new();
+
+    let mut parent_chain_work = ChainWork::from_u256(0.into());
+
+    for TestVectorBlockData {
+        zebra_block,
+        sapling_root,
+        sapling_tree_size,
+        orchard_root,
+        orchard_tree_size,
+        ..
+    } in blocks[..blocks.len() - 1].iter()
+    {
+        // Rebuild the IndexedBlock values exactly as the DB write path sees them.
+        let metadata = BlockMetadata::new(
+            *sapling_root,
+            *sapling_tree_size as u32,
+            *orchard_root,
+            *orchard_tree_size as u32,
+            parent_chain_work,
+            zebra_chain::parameters::Network::new_regtest(
+                zebra_chain::parameters::testnet::ConfiguredActivationHeights {
+                    before_overwinter: Some(1),
+                    overwinter: Some(1),
+                    sapling: Some(1),
+                    blossom: Some(1),
+                    heartwood: Some(1),
+                    canopy: Some(1),
+                    nu5: Some(1),
+                    nu6: Some(1),
+                    nu6_1: None,
+                    nu7: None,
+                }
+                .into(),
+            ),
+        );
+
+        let block_with_metadata = BlockWithMetadata::new(zebra_block, metadata);
+        let chain_block = IndexedBlock::try_from(block_with_metadata).unwrap();
+
+        parent_chain_work = chain_block.context.chainwork;
+
+        for transaction in chain_block.transactions() {
+            // Remove any transparent outputs spent by this transaction.
+            for input in transaction.transparent().inputs() {
+                if input.is_null_prevout() {
+                    continue;
+                }
+
+                let previous_transaction_hash = TransactionHash::from(*input.prevout_txid());
+
+                let unspent_output_indices = unspent_output_indices_by_transaction_hash
+                    .get_mut(&previous_transaction_hash)
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "test vectors spend unknown transaction {previous_transaction_hash:?}"
+                        )
+                    });
+
+                assert!(
+                    unspent_output_indices.remove(&input.prevout_index()),
+                    "test vectors spend unknown output: transaction {:?}, output {}",
+                    previous_transaction_hash,
+                    input.prevout_index()
+                );
+
+                if unspent_output_indices.is_empty() {
+                    unspent_output_indices_by_transaction_hash.remove(&previous_transaction_hash);
+                }
+            }
+
+            // Add this transaction's newly-created transparent outputs.
+            if transaction.transparent().outputs().is_empty() {
+                continue;
+            }
+
+            let transaction_hash = *transaction.txid();
+
+            let unspent_output_indices = unspent_output_indices_by_transaction_hash
+                .entry(transaction_hash)
+                .or_default();
+
+            for output_index in 0..transaction.transparent().outputs().len() {
+                let output_index = u32::try_from(output_index).unwrap();
+
+                assert!(
+                    unspent_output_indices.insert(output_index),
+                    "test vectors duplicate output index: transaction {transaction_hash:?}, output {output_index}"
+                );
+            }
+        }
+    }
+
+    // Expected counts after deleting the tip.
+    let expected_transaction_outputs = unspent_output_indices_by_transaction_hash
+        .values()
+        .map(|output_indices| output_indices.len() as u64)
+        .sum::<u64>();
+
+    let expected_accumulator = FinalisedTxOutSetInfoAccumulator {
+        transactions: unspent_output_indices_by_transaction_hash.len() as u64,
+        transaction_outputs: expected_transaction_outputs,
+    };
+
+    // Check the accumulator persisted by delete_block_at_height/delete_block.
+    let actual_accumulator = db_reader.get_tx_out_set_info_accumulator().await.unwrap();
+
+    assert_eq!(expected_accumulator, actual_accumulator);
 }

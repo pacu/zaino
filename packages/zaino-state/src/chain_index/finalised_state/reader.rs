@@ -47,7 +47,10 @@
 use zaino_proto::proto::utils::PoolTypeFilter;
 
 use crate::{
-    chain_index::{finalised_state::capability::CapabilityRequest, types::TransactionHash},
+    chain_index::{
+        finalised_state::capability::CapabilityRequest,
+        types::{db::metadata::FinalisedTxOutSetInfoAccumulator, TransactionHash},
+    },
     error::FinalisedStateError,
     BlockHash, BlockHeaderData, CommitmentTreeData, CompactBlockStream, Height, IndexedBlock,
     OrchardCompactTx, OrchardTxList, Outpoint, SaplingCompactTx, SaplingTxList, StatusType,
@@ -445,6 +448,18 @@ impl DbReader {
     ) -> Result<Vec<Option<TxLocation>>, FinalisedStateError> {
         self.db(CapabilityRequest::TransparentHistExt)?
             .get_outpoint_spenders(outpoints)
+            .await
+    }
+
+    /// Returns the finalised-state txout-set accumulator.
+    ///
+    /// This is routed through `TransparentHistExt` because the accumulator is only correct for
+    /// database versions that maintain transparent spent indexing.
+    pub(crate) async fn get_tx_out_set_info_accumulator(
+        &self,
+    ) -> Result<FinalisedTxOutSetInfoAccumulator, FinalisedStateError> {
+        self.db(CapabilityRequest::TransparentHistExt)?
+            .get_tx_out_set_info_accumulator()
             .await
     }
 

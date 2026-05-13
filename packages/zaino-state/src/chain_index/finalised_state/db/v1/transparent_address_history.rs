@@ -1,5 +1,8 @@
 //! ZainoDB::V1 transparent address history indexing functionality.
 
+use crate::chain_index::finalised_state::db::v1::TX_OUT_SET_INFO_ACCUMULATOR_KEY;
+use crate::chain_index::types::db::metadata::FinalisedTxOutSetInfoAccumulator;
+
 use super::*;
 
 /// [`TransparentHistExt`] capability implementation for [`DbV1`].
@@ -70,6 +73,12 @@ impl TransparentHistExt for DbV1 {
         outpoints: Vec<Outpoint>,
     ) -> Result<Vec<Option<TxLocation>>, FinalisedStateError> {
         self.get_outpoint_spenders(outpoints).await
+    }
+
+    async fn get_tx_out_set_info_accumulator(
+        &self,
+    ) -> Result<FinalisedTxOutSetInfoAccumulator, FinalisedStateError> {
+        self.get_tx_out_set_info_accumulator().await
     }
 }
 
@@ -460,6 +469,47 @@ impl DbV1 {
                     }
                 })
                 .collect()
+        })
+    }
+
+    /// Returns the finalised-state txout-set accumulator.
+    ///
+    /// This reads the singleton accumulator entry. It does not compute or repair the accumulator;
+    /// accumulator creation, backfill, and updates are handled by migrations and write paths.
+    async fn get_tx_out_set_info_accumulator(
+        &self,
+    ) -> Result<FinalisedTxOutSetInfoAccumulator, FinalisedStateError> {
+        tokio::task::block_in_place(|| {
+            let transaction = self.env.begin_ro_txn()?;
+
+            let raw_accumulator = match transaction.get(
+                self.tx_out_set_info_accumulator,
+                &TX_OUT_SET_INFO_ACCUMULATOR_KEY,
+            ) {
+                Ok(value) => value,
+                Err(lmdb::Error::NotFound) => {
+                    return Err(FinalisedStateError::DataUnavailable(
+                        "finalised txout-set accumulator missing from database".to_string(),
+                    ));
+                }
+                Err(error) => return Err(FinalisedStateError::LmdbError(error)),
+            };
+
+            let accumulator_entry =
+                StoredEntryFixed::<FinalisedTxOutSetInfoAccumulator>::from_bytes(raw_accumulator)
+                    .map_err(|error| {
+                    FinalisedStateError::Custom(format!(
+                        "txout-set accumulator decode error: {error}"
+                    ))
+                })?;
+
+            if !accumulator_entry.verify(TX_OUT_SET_INFO_ACCUMULATOR_KEY) {
+                return Err(FinalisedStateError::Custom(
+                    "txout-set accumulator checksum mismatch".to_string(),
+                ));
+            }
+
+            Ok(accumulator_entry.item)
         })
     }
 
@@ -1008,5 +1058,565 @@ impl DbV1 {
             }
         }
         None
+    }
+
+    /// Calculates the finalised txout-set accumulator after applying the block currently being written.
+    ///
+    /// This method uses the data already built by `write_block`:
+    /// - `txids`: block-local transaction hashes in transaction-index order.
+    /// - `transparent`: block-local transparent transaction data in transaction-index order.
+    /// - `spent_map`: distinct transparent outpoints spent by this block.
+    ///
+    /// Missing accumulator data is only valid for a completely empty database before writing genesis.
+    /// In every other case, a missing accumulator is treated as database corruption / failed migration.
+    ///
+    /// The returned accumulator must be written inside the same LMDB write transaction as the block.
+    pub(crate) async fn calculate_tx_out_set_info_accumulator_after_block(
+        &self,
+        block_height: Height,
+        txids: &[TransactionHash],
+        transparent: &[Option<TransparentCompactTx>],
+        spent_map: &HashMap<Outpoint, TxLocation>,
+    ) -> Result<FinalisedTxOutSetInfoAccumulator, FinalisedStateError> {
+        // The block-local transaction arrays must stay index-aligned.
+        if txids.len() != transparent.len() {
+            return Err(FinalisedStateError::Custom(format!(
+            "txout-set accumulator cannot be calculated: txid count ({}) does not match transparent transaction count ({})",
+            txids.len(),
+            transparent.len()
+        )));
+        }
+
+        // Load the existing accumulator. Only a fresh empty DB writing genesis may start from zero.
+        let mut accumulator =
+            match <Self as TransparentHistExt>::get_tx_out_set_info_accumulator(self).await {
+                Ok(accumulator) => accumulator,
+                Err(FinalisedStateError::DataUnavailable(_)) => {
+                    let current_tip = self.tip_height().await?;
+
+                    if current_tip.is_none() && block_height == GENESIS_HEIGHT {
+                        FinalisedTxOutSetInfoAccumulator::empty()
+                    } else {
+                        return Err(FinalisedStateError::Custom(
+                            "txout-set accumulator missing from non-empty database".to_string(),
+                        ));
+                    }
+                }
+                Err(error) => return Err(error),
+            };
+
+        // Record how many transparent outputs each transaction in this block creates.
+        let mut created_output_count_by_transaction_hash: HashMap<TransactionHash, u32> =
+            HashMap::with_capacity(txids.len());
+
+        for (transaction_index, transaction_hash) in txids.iter().copied().enumerate() {
+            let output_count = transparent[transaction_index]
+                .as_ref()
+                .map(|transparent_transaction| transparent_transaction.outputs().len())
+                .unwrap_or(0);
+
+            let output_count = u32::try_from(output_count).map_err(|_| {
+                FinalisedStateError::Custom(
+                    "txout-set accumulator cannot be calculated: transparent output count does not fit into u32"
+                        .to_string(),
+                )
+            })?;
+
+            // Duplicate txids would make the transaction-level accumulator ambiguous.
+            if created_output_count_by_transaction_hash
+                .insert(transaction_hash, output_count)
+                .is_some()
+            {
+                return Err(FinalisedStateError::Custom(format!(
+                "txout-set accumulator cannot be calculated: duplicate transaction hash in block: {transaction_hash:?}"
+            )));
+            }
+        }
+
+        // Group this block's spent outpoints by the transaction they spend from.
+        let mut spent_output_indices_by_transaction_hash: HashMap<TransactionHash, HashSet<u32>> =
+            HashMap::new();
+        let mut spent_outpoints = Vec::with_capacity(spent_map.len());
+
+        for outpoint in spent_map.keys().copied() {
+            let previous_transaction_hash = TransactionHash::from(*outpoint.prev_txid());
+
+            let inserted = spent_output_indices_by_transaction_hash
+                .entry(previous_transaction_hash)
+                .or_default()
+                .insert(outpoint.prev_index());
+
+            // A single block must not spend the same outpoint twice.
+            if !inserted {
+                return Err(FinalisedStateError::Custom(format!(
+                "txout-set accumulator cannot be calculated: duplicate transparent spend for outpoint {outpoint:?}"
+            )));
+            }
+
+            spent_outpoints.push(outpoint);
+        }
+
+        // Update the UTXO count using the direct output delta.
+        let created_output_count = created_output_count_by_transaction_hash.values().try_fold(
+            0u64,
+            |total, output_count| {
+                total.checked_add(u64::from(*output_count)).ok_or_else(|| {
+                    FinalisedStateError::Custom(
+                        "txout-set accumulator created output count overflow".to_string(),
+                    )
+                })
+            },
+        )?;
+
+        let spent_output_count = u64::try_from(spent_outpoints.len()).map_err(|_| {
+            FinalisedStateError::Custom(
+                "txout-set accumulator spent output count does not fit into u64".to_string(),
+            )
+        })?;
+
+        accumulator.transaction_outputs = accumulator
+            .transaction_outputs
+            .checked_add(created_output_count)
+            .and_then(|transaction_outputs| transaction_outputs.checked_sub(spent_output_count))
+            .ok_or_else(|| {
+                FinalisedStateError::Custom(
+                    "txout-set accumulator transaction output count underflow or overflow"
+                        .to_string(),
+                )
+            })?;
+
+        // Validate that old outpoints spent by this block are not already spent in finalised state.
+        if !spent_outpoints.is_empty() {
+            let existing_spenders =
+                <Self as TransparentHistExt>::get_outpoint_spenders(self, spent_outpoints.clone())
+                    .await?;
+
+            for (spent_outpoint, existing_spender) in spent_outpoints.iter().zip(existing_spenders)
+            {
+                // Same-block spends are not in the finalised spent table yet, so skip this check.
+                if created_output_count_by_transaction_hash
+                    .contains_key(&TransactionHash::from(*spent_outpoint.prev_txid()))
+                {
+                    continue;
+                }
+
+                if let Some(existing_spender) = existing_spender {
+                    return Err(FinalisedStateError::Custom(format!(
+                    "txout-set accumulator cannot be calculated: block spends already-spent outpoint {spent_outpoint:?}; existing spender is {existing_spender:?}"
+                )));
+                }
+            }
+        }
+
+        // Count new transactions entering the UTXO set.
+        //
+        // A block-created transaction is counted only if at least one of its transparent outputs
+        // survives any same-block spend.
+        for (transaction_hash, created_output_count) in &created_output_count_by_transaction_hash {
+            let spent_output_indices =
+                spent_output_indices_by_transaction_hash.get(transaction_hash);
+
+            // Same-block spends must refer to outputs that this transaction actually created.
+            if let Some(spent_output_indices) = spent_output_indices {
+                for spent_output_index in spent_output_indices {
+                    if spent_output_index >= created_output_count {
+                        return Err(FinalisedStateError::Custom(format!(
+                        "txout-set accumulator cannot be calculated: transaction {transaction_hash:?} spends same-block output index {spent_output_index}, but the transaction only has {created_output_count} transparent outputs"
+                    )));
+                    }
+                }
+            }
+
+            let spent_created_output_count = spent_output_indices
+                .map(|spent_output_indices| spent_output_indices.len())
+                .unwrap_or(0);
+
+            let spent_created_output_count =
+                u32::try_from(spent_created_output_count).map_err(|_| {
+                    FinalisedStateError::Custom(
+                        "txout-set accumulator same-block spent output count does not fit into u32"
+                            .to_string(),
+                    )
+                })?;
+
+            // Transition: 0 unspent outputs before block -> >0 after block.
+            if *created_output_count > spent_created_output_count {
+                accumulator.transactions =
+                    accumulator.transactions.checked_add(1).ok_or_else(|| {
+                        FinalisedStateError::Custom(
+                            "txout-set accumulator transaction count overflow".to_string(),
+                        )
+                    })?;
+            }
+        }
+
+        // Count old transactions leaving the UTXO set.
+        //
+        // Only transactions not created by this block can leave the existing finalised UTXO set.
+        for (transaction_hash, spent_output_indices_in_block) in
+            &spent_output_indices_by_transaction_hash
+        {
+            if created_output_count_by_transaction_hash.contains_key(transaction_hash) {
+                continue;
+            }
+
+            // Fetch the previous transaction so we can inspect all of its transparent outputs.
+            let Some(transaction_location) =
+                <Self as BlockCoreExt>::get_tx_location(self, transaction_hash).await?
+            else {
+                return Err(FinalisedStateError::Custom(format!(
+                "txout-set accumulator cannot be calculated: spent transaction {transaction_hash:?} is missing from the txid index"
+            )));
+            };
+
+            let Some(transparent_transaction) =
+                <Self as BlockTransparentExt>::get_transparent(self, transaction_location).await?
+            else {
+                return Err(FinalisedStateError::Custom(format!(
+                "txout-set accumulator cannot be calculated: spent transaction {transaction_hash:?} has no transparent transaction data"
+            )));
+            };
+
+            let previous_output_count = u32::try_from(transparent_transaction.outputs().len())
+                .map_err(|_| {
+                    FinalisedStateError::Custom(
+                    "txout-set accumulator previous transparent output count does not fit into u32"
+                        .to_string(),
+                )
+                })?;
+
+            // This block must not spend an output index beyond the previous transaction's outputs.
+            for spent_output_index in spent_output_indices_in_block {
+                if *spent_output_index >= previous_output_count {
+                    return Err(FinalisedStateError::Custom(format!(
+                    "txout-set accumulator cannot be calculated: transaction {transaction_hash:?} spends output index {spent_output_index}, but the previous transaction only has {previous_output_count} transparent outputs"
+                )));
+                }
+            }
+
+            // Build the previous transaction's outputs that are not spent by this block.
+            let mut remaining_outpoints_not_spent_by_this_block = Vec::new();
+
+            for output_index in 0..previous_output_count {
+                if spent_output_indices_in_block.contains(&output_index) {
+                    continue;
+                }
+
+                remaining_outpoints_not_spent_by_this_block
+                    .push(Outpoint::new(transaction_hash.0, output_index));
+            }
+
+            // If this block spends every output from the previous transaction, it leaves the UTXO set.
+            if remaining_outpoints_not_spent_by_this_block.is_empty() {
+                accumulator.transactions =
+                    accumulator.transactions.checked_sub(1).ok_or_else(|| {
+                        FinalisedStateError::Custom(
+                            "txout-set accumulator transaction count underflow".to_string(),
+                        )
+                    })?;
+
+                continue;
+            }
+
+            // Check whether any output not spent by this block was still unspent before this block.
+            let remaining_spenders = <Self as TransparentHistExt>::get_outpoint_spenders(
+                self,
+                remaining_outpoints_not_spent_by_this_block,
+            )
+            .await?;
+
+            let has_remaining_unspent_output = remaining_spenders
+                .into_iter()
+                .any(|spender| spender.is_none());
+
+            // Transition: >0 unspent outputs before block -> 0 after block.
+            if !has_remaining_unspent_output {
+                accumulator.transactions =
+                    accumulator.transactions.checked_sub(1).ok_or_else(|| {
+                        FinalisedStateError::Custom(
+                            "txout-set accumulator transaction count underflow".to_string(),
+                        )
+                    })?;
+            }
+        }
+
+        Ok(accumulator)
+    }
+
+    /// Calculates the finalised txout-set accumulator after deleting the tip block.
+    ///
+    /// This is the exact inverse of `calculate_tx_out_set_info_accumulator_after_block`.
+    ///
+    /// The database must still contain the block being deleted when this method is called.
+    /// The returned accumulator must be written inside the same LMDB transaction that deletes the block.
+    pub(crate) async fn calculate_tx_out_set_info_accumulator_after_delete_block(
+        &self,
+        txids: &[TransactionHash],
+        transparent: &[Option<TransparentCompactTx>],
+        spent_map: &HashMap<Outpoint, TxLocation>,
+    ) -> Result<FinalisedTxOutSetInfoAccumulator, FinalisedStateError> {
+        // The block-local transaction arrays must stay index-aligned.
+        if txids.len() != transparent.len() {
+            return Err(FinalisedStateError::Custom(format!(
+            "txout-set accumulator cannot be calculated: txid count ({}) does not match transparent transaction count ({})",
+            txids.len(),
+            transparent.len()
+        )));
+        }
+
+        let mut accumulator =
+            match <Self as TransparentHistExt>::get_tx_out_set_info_accumulator(self).await {
+                Ok(accumulator) => accumulator,
+                Err(FinalisedStateError::DataUnavailable(_)) => {
+                    return Err(FinalisedStateError::Custom(
+                        "txout-set accumulator missing while deleting block".to_string(),
+                    ));
+                }
+                Err(error) => return Err(error),
+            };
+
+        // Record how many transparent outputs each transaction in this block creates.
+        let mut created_output_count_by_transaction_hash: HashMap<TransactionHash, u32> =
+            HashMap::with_capacity(txids.len());
+
+        for (transaction_index, transaction_hash) in txids.iter().copied().enumerate() {
+            let output_count = transparent[transaction_index]
+                .as_ref()
+                .map(|transparent_transaction| transparent_transaction.outputs().len())
+                .unwrap_or(0);
+
+            let output_count = u32::try_from(output_count).map_err(|_| {
+                FinalisedStateError::Custom(
+                    "txout-set accumulator cannot be calculated: transparent output count does not fit into u32"
+                        .to_string(),
+                )
+            })?;
+
+            // Duplicate txids would make the transaction-level accumulator ambiguous.
+            if created_output_count_by_transaction_hash
+                .insert(transaction_hash, output_count)
+                .is_some()
+            {
+                return Err(FinalisedStateError::Custom(format!(
+                "txout-set accumulator cannot be calculated: duplicate transaction hash in block: {transaction_hash:?}"
+            )));
+            }
+        }
+
+        // Group this block's spent outpoints by the transaction they spend from.
+        let mut spent_output_indices_by_transaction_hash: HashMap<TransactionHash, HashSet<u32>> =
+            HashMap::new();
+
+        let mut spent_outpoints = Vec::with_capacity(spent_map.len());
+
+        for (outpoint, tx_location) in spent_map.iter() {
+            let previous_transaction_hash = TransactionHash::from(*outpoint.prev_txid());
+
+            let inserted = spent_output_indices_by_transaction_hash
+                .entry(previous_transaction_hash)
+                .or_default()
+                .insert(outpoint.prev_index());
+
+            // This is defensive; duplicate outpoints should already be rejected when building spent_map.
+            if !inserted {
+                return Err(FinalisedStateError::Custom(format!(
+            "txout-set accumulator cannot be reversed: duplicate transparent spend for outpoint {outpoint:?}"
+        )));
+            }
+
+            spent_outpoints.push((*outpoint, *tx_location));
+        }
+
+        // Update the UTXO count using the direct output delta.
+        let created_output_count = created_output_count_by_transaction_hash.values().try_fold(
+            0u64,
+            |total, output_count| {
+                total.checked_add(u64::from(*output_count)).ok_or_else(|| {
+                    FinalisedStateError::Custom(
+                        "txout-set accumulator created output count overflow".to_string(),
+                    )
+                })
+            },
+        )?;
+
+        let spent_output_count = u64::try_from(spent_outpoints.len()).map_err(|_| {
+            FinalisedStateError::Custom(
+                "txout-set accumulator spent output count does not fit into u64".to_string(),
+            )
+        })?;
+
+        accumulator.transaction_outputs = accumulator
+            .transaction_outputs
+            .checked_sub(created_output_count)
+            .and_then(|transaction_outputs| transaction_outputs.checked_add(spent_output_count))
+            .ok_or_else(|| {
+                FinalisedStateError::Custom(
+                    "txout-set accumulator transaction output count underflow or overflow"
+                        .to_string(),
+                )
+            })?;
+
+        // The block being deleted has already been applied, so every spent outpoint from this block
+        // must exist in the spent index and must point to this block's TxLocation.
+        if !spent_outpoints.is_empty() {
+            let spent_outpoints_to_check: Vec<Outpoint> = spent_outpoints
+                .iter()
+                .map(|(outpoint, _tx_location)| *outpoint)
+                .collect();
+
+            let existing_spenders =
+                <Self as TransparentHistExt>::get_outpoint_spenders(self, spent_outpoints_to_check)
+                    .await?;
+
+            for ((spent_outpoint, expected_tx_location), existing_spender) in
+                spent_outpoints.iter().zip(existing_spenders)
+            {
+                let Some(existing_spender) = existing_spender else {
+                    return Err(FinalisedStateError::Custom(format!(
+                "txout-set accumulator cannot be reversed: spent index missing outpoint {spent_outpoint:?}"
+            )));
+                };
+
+                if existing_spender != *expected_tx_location {
+                    return Err(FinalisedStateError::Custom(format!(
+                "txout-set accumulator cannot be reversed: outpoint {spent_outpoint:?} is spent by {existing_spender:?}, expected {expected_tx_location:?}"
+            )));
+                }
+            }
+        }
+
+        // Count new transactions entering the UTXO set.
+        //
+        // A block-created transaction is counted only if at least one of its transparent outputs
+        // survives any same-block spend.
+        for (transaction_hash, created_output_count) in &created_output_count_by_transaction_hash {
+            let spent_output_indices =
+                spent_output_indices_by_transaction_hash.get(transaction_hash);
+
+            // Same-block spends must refer to outputs that this transaction actually created.
+            if let Some(spent_output_indices) = spent_output_indices {
+                for spent_output_index in spent_output_indices {
+                    if spent_output_index >= created_output_count {
+                        return Err(FinalisedStateError::Custom(format!(
+                        "txout-set accumulator cannot be calculated: transaction {transaction_hash:?} spends same-block output index {spent_output_index}, but the transaction only has {created_output_count} transparent outputs"
+                    )));
+                    }
+                }
+            }
+
+            let spent_created_output_count = spent_output_indices
+                .map(|spent_output_indices| spent_output_indices.len())
+                .unwrap_or(0);
+
+            let spent_created_output_count =
+                u32::try_from(spent_created_output_count).map_err(|_| {
+                    FinalisedStateError::Custom(
+                        "txout-set accumulator same-block spent output count does not fit into u32"
+                            .to_string(),
+                    )
+                })?;
+
+            // Transition: 0 unspent outputs before block -> >0 after block.
+            if *created_output_count > spent_created_output_count {
+                accumulator.transactions =
+                    accumulator.transactions.checked_sub(1).ok_or_else(|| {
+                        FinalisedStateError::Custom(
+                            "txout-set accumulator transaction count underflow".to_string(),
+                        )
+                    })?;
+            }
+        }
+
+        // Count old transactions leaving the UTXO set.
+        //
+        // Only transactions not created by this block can leave the existing finalised UTXO set.
+        for (transaction_hash, spent_output_indices_in_block) in
+            &spent_output_indices_by_transaction_hash
+        {
+            if created_output_count_by_transaction_hash.contains_key(transaction_hash) {
+                continue;
+            }
+
+            // Fetch the previous transaction so we can inspect all of its transparent outputs.
+            let Some(transaction_location) =
+                <Self as BlockCoreExt>::get_tx_location(self, transaction_hash).await?
+            else {
+                return Err(FinalisedStateError::Custom(format!(
+                "txout-set accumulator cannot be calculated: spent transaction {transaction_hash:?} is missing from the txid index"
+            )));
+            };
+
+            let Some(transparent_transaction) =
+                <Self as BlockTransparentExt>::get_transparent(self, transaction_location).await?
+            else {
+                return Err(FinalisedStateError::Custom(format!(
+                "txout-set accumulator cannot be calculated: spent transaction {transaction_hash:?} has no transparent transaction data"
+            )));
+            };
+
+            let previous_output_count = u32::try_from(transparent_transaction.outputs().len())
+                .map_err(|_| {
+                    FinalisedStateError::Custom(
+                    "txout-set accumulator previous transparent output count does not fit into u32"
+                        .to_string(),
+                )
+                })?;
+
+            // This block must not spend an output index beyond the previous transaction's outputs.
+            for spent_output_index in spent_output_indices_in_block {
+                if *spent_output_index >= previous_output_count {
+                    return Err(FinalisedStateError::Custom(format!(
+                    "txout-set accumulator cannot be calculated: transaction {transaction_hash:?} spends output index {spent_output_index}, but the previous transaction only has {previous_output_count} transparent outputs"
+                )));
+                }
+            }
+
+            // Build the previous transaction's outputs that are not spent by this block.
+            let mut remaining_outpoints_not_spent_by_this_block = Vec::new();
+
+            for output_index in 0..previous_output_count {
+                if spent_output_indices_in_block.contains(&output_index) {
+                    continue;
+                }
+
+                remaining_outpoints_not_spent_by_this_block
+                    .push(Outpoint::new(transaction_hash.0, output_index));
+            }
+
+            // If this block spent every output from the previous transaction, deleting this block restores it.
+            if remaining_outpoints_not_spent_by_this_block.is_empty() {
+                accumulator.transactions =
+                    accumulator.transactions.checked_add(1).ok_or_else(|| {
+                        FinalisedStateError::Custom(
+                            "txout-set accumulator transaction count overflow".to_string(),
+                        )
+                    })?;
+
+                continue;
+            }
+
+            // Check whether any output not spent by this block was still unspent before this block.
+            let remaining_spenders = <Self as TransparentHistExt>::get_outpoint_spenders(
+                self,
+                remaining_outpoints_not_spent_by_this_block,
+            )
+            .await?;
+
+            let has_remaining_unspent_output = remaining_spenders
+                .into_iter()
+                .any(|spender| spender.is_none());
+
+            // Transition: >0 unspent outputs before block -> 0 after block.
+            if !has_remaining_unspent_output {
+                accumulator.transactions =
+                    accumulator.transactions.checked_add(1).ok_or_else(|| {
+                        FinalisedStateError::Custom(
+                            "txout-set accumulator transaction count overflow".to_string(),
+                        )
+                    })?;
+            }
+        }
+
+        Ok(accumulator)
     }
 }

@@ -66,7 +66,7 @@ use crate::{
             BlockCoreExt, BlockShieldedExt, BlockTransparentExt, CompactBlockExt, DbCore,
             DbMetadata, DbRead, DbWrite, IndexedBlockExt, TransparentHistExt,
         },
-        types::TransactionHash,
+        types::{db::metadata::FinalisedTxOutSetInfoAccumulator, TransactionHash},
     },
     config::BlockCacheConfig,
     error::FinalisedStateError,
@@ -300,6 +300,16 @@ impl DbBackend {
         match self {
             Self::V1(db) => Ok(db.spent_db()),
             Self::V0(_) => Err(FinalisedStateError::FeatureUnavailable("v1 spent db")),
+        }
+    }
+
+    /// Provides access to the finalised txout-set accumulator DB table.
+    pub(crate) fn tx_out_set_info_accumulator_db(&self) -> Result<Database, FinalisedStateError> {
+        match self {
+            Self::V1(database) => Ok(database.tx_out_set_info_accumulator_db()),
+            Self::V0(_) => Err(FinalisedStateError::FeatureUnavailable(
+                "v1 tx_out_set_info_accumulator db",
+            )),
         }
     }
 }
@@ -759,6 +769,17 @@ impl TransparentHistExt for DbBackend {
     ) -> Result<Vec<Option<TxLocation>>, FinalisedStateError> {
         match self {
             Self::V1(db) => db.get_outpoint_spenders(outpoints).await,
+            _ => Err(FinalisedStateError::FeatureUnavailable(
+                "transparent_history",
+            )),
+        }
+    }
+
+    async fn get_tx_out_set_info_accumulator(
+        &self,
+    ) -> Result<FinalisedTxOutSetInfoAccumulator, FinalisedStateError> {
+        match self {
+            Self::V1(database) => database.get_tx_out_set_info_accumulator().await,
             _ => Err(FinalisedStateError::FeatureUnavailable(
                 "transparent_history",
             )),

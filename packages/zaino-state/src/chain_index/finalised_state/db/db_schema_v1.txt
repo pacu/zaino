@@ -89,12 +89,19 @@
 #    Val : 0x01 + CS n + n × TxLocation
 #           TxLocation = LE(u32) height  LE(u32) tx_index
 #
-# 9. address_history  ―  AddrScript  ->  StoredEntryFixed<AddrEventBytes>
+# 9. tx_out_set_info_accumulator  ―  "tx_out_set_info_accumulator" (ASCII)
+#       ->  StoredEntryFixed<FinalisedTxOutSetInfoAccumulator>  (singleton)
+#    Val : 0x01 + FinalisedTxOutSetInfoAccumulator V1 body + [32] checksum
+#    FinalisedTxOutSetInfoAccumulator V1 body =
+#        LE(u64) transactions
+#        LE(u64) transaction_outputs
+#
+# 10. address_history  ―  AddrScript  ->  StoredEntryFixed<AddrEventBytes>
 #    Key : 0x01 + AddrScript
 #           AddrScript = [20] hash  u8 script_type
 #    Val : 0x01 + CS len + raw event bytes  (multiple entries may share the key)
 #
-# 10. metadata  ―  "metadata" (ASCII)  ->  StoredEntryFixed<DbMetadata>  (singleton)
+# 11. metadata  ―  "metadata" (ASCII)  ->  StoredEntryFixed<DbMetadata>  (singleton)
 #    Val : 0x01 + DbMetadata V1 body + [32] checksum
 #    DbMetadata V1 body =
 #        DbVersion version
@@ -106,7 +113,7 @@
 #
 # ─────────────────────────── Environment settings ─────────────────────────────
 #   LMDB page-size:         platform default
-#   max_dbs:                10 (see list above)
+#   max_dbs:                11 (see list above)
 #   Flags:                  MDB_NOTLS | MDB_NORDAHEAD
 #
 #   All Databases are append-only and indexed by height -> LMDB default

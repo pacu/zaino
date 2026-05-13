@@ -136,6 +136,13 @@ pub(crate) const DB_VERSION_V1: DbVersion = DbVersion {
     patch: 0,
 };
 
+/// LMDB table name for the finalised txout-set accumulator.
+pub(crate) const TX_OUT_SET_INFO_ACCUMULATOR_DATABASE_NAME: &str =
+    "tx_out_set_info_accumulator_1_3_0";
+
+/// Singleton key for the finalised txout-set accumulator table.
+pub(crate) const TX_OUT_SET_INFO_ACCUMULATOR_KEY: &[u8] = b"tx_out_set_info_accumulator";
+
 /// [`DbCore`] capability implementation for [`DbV1`].
 ///
 /// This trait exposes lifecycle operations and a high-level status indicator.
@@ -219,6 +226,13 @@ pub(crate) struct DbV1 {
     ///
     /// Used to check spent status of given outpoints, retuning spending tx.
     spent: Database,
+
+    /// Finalised txout-set accumulator:
+    /// `"tx_out_set_info_accumulator"` -> `StoredEntryFixed<FinalisedTxOutSetInfoAccumulator>`.
+    ///
+    /// Stores the finalised-state portion of `gettxoutsetinfo` that can be maintained cheaply
+    /// without adding per-UTXO storage.
+    tx_out_set_info_accumulator: Database,
 
     /// Transparent address history: `AddrScript` -> duplicate values of `StoredEntryFixed<AddrEventBytes>`.
     ///
@@ -311,7 +325,7 @@ impl DbV1 {
 
         // Open LMDB environment and set environmental details.
         let env = Environment::new()
-            .set_max_dbs(12)
+            .set_max_dbs(15)
             .set_map_size(db_size_bytes)
             .set_max_readers(max_readers)
             .set_flags(EnvironmentFlags::NO_TLS | EnvironmentFlags::NO_READAHEAD)
@@ -333,6 +347,13 @@ impl DbV1 {
         let hashes = super::open_or_create_db(&env, "hashes_1_0_0", DatabaseFlags::empty()).await?;
 
         let spent = super::open_or_create_db(&env, "spent_1_0_0", DatabaseFlags::empty()).await?;
+
+        let tx_out_set_info_accumulator = super::open_or_create_db(
+            &env,
+            TX_OUT_SET_INFO_ACCUMULATOR_DATABASE_NAME,
+            DatabaseFlags::empty(),
+        )
+        .await?;
 
         let metadata = super::open_or_create_db(&env, "metadata", DatabaseFlags::empty()).await?;
 
@@ -359,6 +380,7 @@ impl DbV1 {
                 commitment_tree_data,
                 heights: hashes,
                 spent,
+                tx_out_set_info_accumulator,
                 address_history,
                 metadata,
                 validated_tip: Arc::new(AtomicU32::new(0)),
@@ -382,6 +404,7 @@ impl DbV1 {
                 commitment_tree_data,
                 heights: hashes,
                 spent,
+                tx_out_set_info_accumulator,
                 metadata,
                 validated_tip: Arc::new(AtomicU32::new(0)),
                 validated_set: DashSet::new(),
@@ -422,6 +445,7 @@ impl DbV1 {
             commitment_tree_data: self.commitment_tree_data,
             heights: self.heights,
             spent: self.spent,
+            tx_out_set_info_accumulator: self.tx_out_set_info_accumulator,
             #[cfg(feature = "transparent_address_history_experimental")]
             address_history: self.address_history,
             metadata: self.metadata,
@@ -602,6 +626,7 @@ impl DbV1 {
             commitment_tree_data: self.commitment_tree_data,
             heights: self.heights,
             spent: self.spent,
+            tx_out_set_info_accumulator: self.tx_out_set_info_accumulator,
             #[cfg(feature = "transparent_address_history_experimental")]
             address_history: self.address_history,
             metadata: self.metadata,
@@ -641,6 +666,11 @@ impl DbV1 {
     /// Provudes access to the spent DB table, required for Migration1_1_0To1_2_0.
     pub(crate) fn spent_db(&self) -> Database {
         self.spent
+    }
+
+    /// Provides access to the finalised txout-set accumulator DB table.
+    pub(crate) fn tx_out_set_info_accumulator_db(&self) -> Database {
+        self.tx_out_set_info_accumulator
     }
 }
 
@@ -704,7 +734,7 @@ impl DbV1 {
 
         // Open LMDB environment and set environmental details.
         let env = Environment::new()
-            .set_max_dbs(12)
+            .set_max_dbs(15)
             .set_map_size(db_size_bytes)
             .set_max_readers(max_readers)
             .set_flags(EnvironmentFlags::NO_TLS | EnvironmentFlags::NO_READAHEAD)
@@ -726,6 +756,13 @@ impl DbV1 {
         let hashes = super::open_or_create_db(&env, "hashes_1_0_0", DatabaseFlags::empty()).await?;
 
         let spent = super::open_or_create_db(&env, "spent_1_0_0", DatabaseFlags::empty()).await?;
+
+        let tx_out_set_info_accumulator = super::open_or_create_db(
+            &env,
+            TX_OUT_SET_INFO_ACCUMULATOR_DATABASE_NAME,
+            DatabaseFlags::empty(),
+        )
+        .await?;
 
         let metadata = super::open_or_create_db(&env, "metadata", DatabaseFlags::empty()).await?;
 
@@ -749,6 +786,7 @@ impl DbV1 {
                 commitment_tree_data,
                 heights: hashes,
                 spent,
+                tx_out_set_info_accumulator,
                 address_history,
                 metadata,
                 validated_tip: Arc::new(AtomicU32::new(0)),
@@ -771,6 +809,7 @@ impl DbV1 {
                 commitment_tree_data,
                 heights: hashes,
                 spent,
+                tx_out_set_info_accumulator,
                 metadata,
                 validated_tip: Arc::new(AtomicU32::new(0)),
                 validated_set: DashSet::new(),

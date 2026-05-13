@@ -67,3 +67,102 @@ impl From<MempoolInfo> for zaino_fetch::jsonrpsee::response::GetMempoolInfoRespo
         }
     }
 }
+
+/// Holds finalised-state UTXO set accumulator data for `gettxoutsetinfo`.
+///
+/// This is not the full RPC response. It only contains values that the
+/// finalised-state database can maintain cheaply and exactly.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct FinalisedTxOutSetInfoAccumulator {
+    /// Number of transactions with at least one currently unspent transparent output.
+    pub transactions: u64,
+
+    /// Number of currently unspent transparent outputs.
+    pub transaction_outputs: u64,
+}
+
+impl FinalisedTxOutSetInfoAccumulator {
+    /// Creates a new finalised txout-set accumulator.
+    pub const fn new(transactions: u64, transaction_outputs: u64) -> Self {
+        Self {
+            transactions,
+            transaction_outputs,
+        }
+    }
+
+    /// Returns an empty finalised txout-set accumulator.
+    pub const fn empty() -> Self {
+        Self {
+            transactions: 0,
+            transaction_outputs: 0,
+        }
+    }
+}
+
+impl ZainoVersionedSerde for FinalisedTxOutSetInfoAccumulator {
+    const VERSION: u8 = version::V1;
+
+    fn encode_latest<Writer: Write>(&self, writer: &mut Writer) -> io::Result<()> {
+        Self::encode_v1(self, writer)
+    }
+
+    fn decode_latest<Reader: Read>(reader: &mut Reader) -> io::Result<Self> {
+        Self::decode_v1(reader)
+    }
+
+    fn encode_v1<Writer: Write>(&self, writer: &mut Writer) -> io::Result<()> {
+        write_u64_le(&mut *writer, self.transactions)?;
+        write_u64_le(&mut *writer, self.transaction_outputs)
+    }
+
+    fn decode_v1<Reader: Read>(reader: &mut Reader) -> io::Result<Self> {
+        let transactions = read_u64_le(&mut *reader)?;
+        let transaction_outputs = read_u64_le(&mut *reader)?;
+
+        Ok(Self {
+            transactions,
+            transaction_outputs,
+        })
+    }
+}
+
+impl FixedEncodedLen for FinalisedTxOutSetInfoAccumulator {
+    /// 8 byte transactions + 8 byte transaction_outputs
+    const ENCODED_LEN: usize = 8 + 8;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn finalised_tx_out_set_info_accumulator_roundtrips() {
+        let accumulator = FinalisedTxOutSetInfoAccumulator {
+            transactions: 12,
+            transaction_outputs: 34,
+        };
+
+        let encoded_accumulator = accumulator
+            .to_bytes()
+            .expect("finalised txout set info accumulator should encode");
+
+        assert_eq!(
+            encoded_accumulator.len(),
+            FinalisedTxOutSetInfoAccumulator::VERSIONED_LEN
+        );
+
+        let decoded_accumulator =
+            FinalisedTxOutSetInfoAccumulator::from_bytes(&encoded_accumulator)
+                .expect("finalised txout set info accumulator should decode");
+
+        assert_eq!(decoded_accumulator, accumulator);
+    }
+
+    #[test]
+    fn finalised_tx_out_set_info_accumulator_empty_is_zero() {
+        let accumulator = FinalisedTxOutSetInfoAccumulator::empty();
+
+        assert_eq!(accumulator.transactions, 0);
+        assert_eq!(accumulator.transaction_outputs, 0);
+    }
+}
