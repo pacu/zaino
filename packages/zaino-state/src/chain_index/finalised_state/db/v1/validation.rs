@@ -287,7 +287,30 @@ impl DbV1 {
         }
 
         // *** spent  ***
-        {
+        let validate_spent_index = {
+            let metadata_key = b"metadata";
+
+            let raw = ro
+                .get(self.metadata, metadata_key)
+                .map_err(FinalisedStateError::LmdbError)?;
+
+            let entry = StoredEntryFixed::<DbMetadata>::from_bytes(raw)
+                .map_err(|e| FinalisedStateError::Custom(format!("metadata corrupt data: {e}")))?;
+
+            if !entry.verify(metadata_key) {
+                return Err(FinalisedStateError::Custom(
+                    "metadata checksum mismatch".to_string(),
+                ));
+            }
+
+            entry.inner().version
+                >= DbVersion {
+                    major: 1,
+                    minor: 2,
+                    patch: 0,
+                }
+        };
+        if validate_spent_index {
             let tx_list = transparent_tx_list.inner().tx();
 
             for (tx_index, tx_opt) in tx_list.iter().enumerate() {

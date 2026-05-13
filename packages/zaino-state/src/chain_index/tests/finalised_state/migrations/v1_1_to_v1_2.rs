@@ -2,15 +2,12 @@
 
 use lmdb::{Cursor as _, Transaction as _, WriteFlags};
 use std::path::PathBuf;
-use std::time::Duration;
 use tempfile::TempDir;
-use tokio::time::timeout;
 use zaino_common::network::ActivationHeights;
 use zaino_common::{DatabaseConfig, Network, StorageConfig};
 
 use crate::chain_index::finalised_state::capability::{
-    BlockTransparentExt as _, CapabilityRequest, DbCore as _, DbRead as _, DbVersion,
-    MigrationStatus,
+    BlockTransparentExt as _, CapabilityRequest, DbRead as _, DbVersion, MigrationStatus,
 };
 use crate::chain_index::finalised_state::db::v1::DB_SCHEMA_V1_HASH;
 use crate::chain_index::finalised_state::db::DbBackend;
@@ -18,187 +15,157 @@ use crate::chain_index::finalised_state::entry::StoredEntryFixed;
 use crate::chain_index::finalised_state::ZainoDB;
 use crate::chain_index::tests::init_tracing;
 use crate::chain_index::tests::vectors::{
-    build_mockchain_source, load_test_vectors, TestVectorData,
+    build_active_mockchain_source, load_test_vectors, TestVectorData,
 };
 use crate::{BlockCacheConfig, Height, Outpoint, TxLocation, ZainoVersionedSerde as _};
 
 const MIGRATION_SPENT_PROGRESS_KEY: &[u8] = b"_migration_spent_progress_1_2_0_next_height";
 
-async fn wait_for_v1_2_migration_complete(
-    zaino_db: &ZainoDB,
-    timeout_duration: Duration,
-) -> Result<(), tokio::time::error::Elapsed> {
-    timeout(timeout_duration, async {
-        loop {
-            let metadata = zaino_db.get_metadata().await.unwrap();
-
-            if metadata.version
-                == (DbVersion {
-                    major: 1,
-                    minor: 2,
-                    patch: 0,
-                })
-                && metadata.migration_status == MigrationStatus::Empty
-                && zaino_db
-                    .router()
-                    .backend(CapabilityRequest::TransparentHistExt)
-                    .is_ok()
-            {
-                assert_eq!(metadata.schema_hash, DB_SCHEMA_V1_HASH);
-                return;
-            }
-
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-    })
-    .await
-}
-
-async fn downgrade_to_v1_1_and_clear_spent_index(db: &DbBackend) {
-    let env = db.env();
-    let metadata_db = db.metadata_db().unwrap();
-    let spent_db = db.spent_db().unwrap();
-
-    let mut metadata = db.get_metadata().await.unwrap();
-    metadata.version = DbVersion {
+fn v1_1_0() -> DbVersion {
+    DbVersion {
         major: 1,
         minor: 1,
         patch: 0,
-    };
-    metadata.schema_hash = [0u8; 32];
-    metadata.migration_status = MigrationStatus::Empty;
-
-    {
-        let mut txn = env.begin_rw_txn().unwrap();
-
-        txn.clear_db(spent_db).unwrap();
-
-        let metadata_key = b"metadata";
-        let metadata_bytes = StoredEntryFixed::new(metadata_key, metadata)
-            .to_bytes()
-            .unwrap();
-
-        txn.put(
-            metadata_db,
-            metadata_key,
-            &metadata_bytes,
-            WriteFlags::empty(),
-        )
-        .unwrap();
-
-        txn.commit().unwrap();
     }
-
-    env.sync(true).unwrap();
 }
 
-async fn downgrade_to_v1_1_and_delete_spent_tail(db: &DbBackend, resume_height: Height) {
-    let env = db.env();
-    let metadata_db = db.metadata_db().unwrap();
-    let spent_db = db.spent_db().unwrap();
+fn v1_2_0() -> DbVersion {
+    DbVersion {
+        major: 1,
+        minor: 2,
+        patch: 0,
+    }
+}
+
+async fn assert_v1_2_migration_complete(zaino_database: &ZainoDB) {
+    let metadata = zaino_database.get_metadata().await.unwrap();
+
+    assert_eq!(metadata.version, v1_2_0());
+    assert_eq!(metadata.migration_status, MigrationStatus::Empty);
+    assert_eq!(metadata.schema_hash, DB_SCHEMA_V1_HASH);
+
+    assert!(
+        zaino_database
+            .router()
+            .backend(CapabilityRequest::TransparentHistExt)
+            .is_ok(),
+        "v1.2.0 database should expose TransparentHistExt after migration"
+    );
+}
+
+async fn simulate_interrupted_v1_1_to_v1_2_spent_index_migration(
+    database_backend: &DbBackend,
+    resume_height: Height,
+) {
+    let environment = database_backend.env();
+    let metadata_database = database_backend.metadata_db().unwrap();
+    let spent_database = database_backend.spent_db().unwrap();
 
     let spent_keys_to_delete: Vec<Vec<u8>> = {
-        let txn = env.begin_ro_txn().unwrap();
-        let mut cursor = txn.open_ro_cursor(spent_db).unwrap();
+        let transaction = environment.begin_ro_txn().unwrap();
+        let mut cursor = transaction.open_ro_cursor(spent_database).unwrap();
         let mut spent_keys_to_delete = Vec::new();
-        let mut kept_count = 0usize;
+        let mut kept_spent_entry_count = 0usize;
 
         for (outpoint_bytes, spent_bytes) in cursor.iter_start() {
             let spent_entry = StoredEntryFixed::<TxLocation>::from_bytes(spent_bytes).unwrap();
 
             assert!(
                 spent_entry.verify(outpoint_bytes),
-                "spent entry checksum mismatch before partial migration setup"
+                "spent entry checksum mismatch before interrupted migration setup"
             );
 
             if spent_entry.inner().block_height() >= resume_height.0 {
                 spent_keys_to_delete.push(outpoint_bytes.to_vec());
             } else {
-                kept_count += 1;
+                kept_spent_entry_count += 1;
             }
         }
 
         assert!(
-            kept_count > 0,
-            "partial migration setup did not keep any spent entries before resume height {}",
+            kept_spent_entry_count > 0,
+            "interrupted migration setup did not keep any spent entries before resume height {}",
             resume_height.0
         );
 
         assert!(
             !spent_keys_to_delete.is_empty(),
-            "partial migration setup did not find any spent entries to delete at or after resume height {}",
+            "interrupted migration setup did not find any spent entries to delete at or after resume height {}",
             resume_height.0
         );
 
         spent_keys_to_delete
     };
 
-    let mut metadata = db.get_metadata().await.unwrap();
-    metadata.version = DbVersion {
-        major: 1,
-        minor: 1,
-        patch: 0,
-    };
+    let mut metadata = database_backend.get_metadata().await.unwrap();
+    metadata.version = v1_1_0();
     metadata.schema_hash = [0u8; 32];
     metadata.migration_status = MigrationStatus::PartialBuidInProgress;
 
     {
-        let mut txn = env.begin_rw_txn().unwrap();
+        let mut transaction = environment.begin_rw_txn().unwrap();
 
         for spent_key in spent_keys_to_delete {
-            txn.del(spent_db, &spent_key, None).unwrap();
+            transaction.del(spent_database, &spent_key, None).unwrap();
         }
 
         let progress_entry = StoredEntryFixed::new(MIGRATION_SPENT_PROGRESS_KEY, resume_height);
         let progress_bytes = progress_entry.to_bytes().unwrap();
 
-        txn.put(
-            metadata_db,
-            &MIGRATION_SPENT_PROGRESS_KEY,
-            &progress_bytes,
-            WriteFlags::empty(),
-        )
-        .unwrap();
+        transaction
+            .put(
+                metadata_database,
+                &MIGRATION_SPENT_PROGRESS_KEY,
+                &progress_bytes,
+                WriteFlags::empty(),
+            )
+            .unwrap();
 
         let metadata_key = b"metadata";
         let metadata_bytes = StoredEntryFixed::new(metadata_key, metadata)
             .to_bytes()
             .unwrap();
 
-        txn.put(
-            metadata_db,
-            metadata_key,
-            &metadata_bytes,
-            WriteFlags::empty(),
-        )
-        .unwrap();
+        transaction
+            .put(
+                metadata_database,
+                metadata_key,
+                &metadata_bytes,
+                WriteFlags::empty(),
+            )
+            .unwrap();
 
-        txn.commit().unwrap();
+        transaction.commit().unwrap();
     }
 
-    env.sync(true).unwrap();
+    environment.sync(true).unwrap();
 }
 
-async fn assert_spent_index_matches_transparent_data(db: &DbBackend) {
-    let env = db.env();
-    let spent_db = db.spent_db().unwrap();
+async fn assert_spent_index_matches_transparent_data(database_backend: &DbBackend) {
+    let environment = database_backend.env();
+    let spent_database = database_backend.spent_db().unwrap();
 
-    let db_height = db.db_height().await.unwrap().unwrap();
+    let database_height = database_backend.db_height().await.unwrap().unwrap();
 
-    for height_raw in 0..=db_height.0 {
+    for height_raw in 0..=database_height.0 {
         let height = Height(height_raw);
-        let transparent_tx_list = db.get_block_transparent(height).await.unwrap();
+        let transparent_transaction_list = database_backend
+            .get_block_transparent(height)
+            .await
+            .unwrap();
 
-        let txn = env.begin_ro_txn().unwrap();
+        let transaction = environment.begin_ro_txn().unwrap();
 
-        for (tx_index, tx_opt) in transparent_tx_list.tx().iter().enumerate() {
-            let Some(transparent_tx) = tx_opt else {
+        for (transaction_index, transparent_transaction_opt) in
+            transparent_transaction_list.tx().iter().enumerate()
+        {
+            let Some(transparent_transaction) = transparent_transaction_opt else {
                 continue;
             };
 
-            let expected_tx_location = TxLocation::new(height.0, tx_index as u16);
+            let expected_transaction_location = TxLocation::new(height.0, transaction_index as u16);
 
-            for input in transparent_tx.inputs() {
+            for input in transparent_transaction.inputs() {
                 if input.is_null_prevout() {
                     continue;
                 }
@@ -206,12 +173,14 @@ async fn assert_spent_index_matches_transparent_data(db: &DbBackend) {
                 let outpoint = Outpoint::new(*input.prevout_txid(), input.prevout_index());
                 let outpoint_bytes = outpoint.to_bytes().unwrap();
 
-                let spent_bytes = txn.get(spent_db, &outpoint_bytes).unwrap_or_else(|error| {
-                    panic!(
-                        "missing spent entry for outpoint {:?} spent at height {}: {error}",
-                        outpoint, height.0
-                    )
-                });
+                let spent_bytes = transaction
+                    .get(spent_database, &outpoint_bytes)
+                    .unwrap_or_else(|error| {
+                        panic!(
+                            "missing spent entry for outpoint {:?} spent at height {}: {error}",
+                            outpoint, height.0
+                        )
+                    });
 
                 let spent_entry = StoredEntryFixed::<TxLocation>::from_bytes(spent_bytes)
                     .unwrap_or_else(|error| {
@@ -230,7 +199,7 @@ async fn assert_spent_index_matches_transparent_data(db: &DbBackend) {
 
                 assert_eq!(
                     spent_entry.inner(),
-                    &expected_tx_location,
+                    &expected_transaction_location,
                     "spent entry points to wrong TxLocation for outpoint {:?}",
                     outpoint
                 );
@@ -245,13 +214,15 @@ async fn v1_1_to_v1_2_spent_index_backfill_from_old_version() {
 
     let TestVectorData { blocks, .. } = load_test_vectors().unwrap();
 
-    let temp_dir: TempDir = tempfile::tempdir().unwrap();
-    let db_path: PathBuf = temp_dir.path().to_path_buf();
+    let initial_active_height = Height(150);
 
-    let v1_config = BlockCacheConfig {
+    let temporary_directory: TempDir = tempfile::tempdir().unwrap();
+    let database_path: PathBuf = temporary_directory.path().to_path_buf();
+
+    let database_config = BlockCacheConfig {
         storage: StorageConfig {
             database: DatabaseConfig {
-                path: db_path,
+                path: database_path,
                 ..Default::default()
             },
             ..Default::default()
@@ -260,53 +231,64 @@ async fn v1_1_to_v1_2_spent_index_backfill_from_old_version() {
         network: Network::Regtest(ActivationHeights::default()),
     };
 
-    let source = build_mockchain_source(blocks.clone());
+    let source = build_active_mockchain_source(initial_active_height.0, blocks.clone());
 
-    // Build current v1 database, then make it look like a v1.1.0 database missing spent data.
-    let db = DbBackend::spawn_v1(&v1_config).await.unwrap();
+    let old_database =
+        ZainoDB::build_db_to_version(database_config.clone(), source.clone(), v1_1_0())
+            .await
+            .unwrap();
 
-    crate::chain_index::tests::vectors::sync_db_with_blockdata(&db, blocks.clone(), None).await;
+    old_database.wait_until_ready().await;
 
-    db.wait_until_ready().await;
+    let old_metadata = old_database.get_metadata().await.unwrap();
+    assert_eq!(old_metadata.version, v1_1_0());
+    assert_eq!(old_metadata.migration_status, MigrationStatus::Empty);
+    assert_eq!(old_metadata.schema_hash, DB_SCHEMA_V1_HASH);
 
-    downgrade_to_v1_1_and_clear_spent_index(&db).await;
+    let old_database_height = old_database.db_height().await.unwrap().unwrap();
+    assert_eq!(old_database_height, initial_active_height);
 
-    dbg!(db.shutdown().await.unwrap());
+    old_database.shutdown().await.unwrap();
+    drop(old_database);
 
-    tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
+    let migrated_database =
+        ZainoDB::spawn_with_target_version(database_config.clone(), source.clone(), v1_2_0())
+            .await
+            .unwrap();
 
-    // Open through ZainoDB so the migration manager runs v1.1.0 -> v1.2.0.
-    let zaino_db = ZainoDB::spawn(v1_config.clone(), source).await.unwrap();
+    migrated_database.wait_until_ready().await;
 
-    wait_for_v1_2_migration_complete(&zaino_db, Duration::new(30, 0))
-        .await
-        .expect("migration did not complete before timeout.");
+    assert_v1_2_migration_complete(&migrated_database).await;
 
-    dbg!(zaino_db.status());
+    let migrated_database_height = migrated_database.db_height().await.unwrap().unwrap();
+    assert_eq!(migrated_database_height, initial_active_height);
 
-    let migrated_backend = zaino_db
+    let migrated_backend = migrated_database
         .router()
         .backend(CapabilityRequest::WriteCore)
         .unwrap();
 
     assert_spent_index_matches_transparent_data(&migrated_backend).await;
 
-    dbg!(zaino_db.shutdown().await.unwrap());
+    migrated_database.shutdown().await.unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn v1_1_to_v1_2_spent_index_migration_resumes_mid_build() {
+async fn v1_1_to_v1_2_spent_index_migration_resumes_after_crash() {
     init_tracing();
 
     let TestVectorData { blocks, .. } = load_test_vectors().unwrap();
 
-    let temp_dir: TempDir = tempfile::tempdir().unwrap();
-    let db_path: PathBuf = temp_dir.path().to_path_buf();
+    let initial_active_height = Height(150);
+    let resume_height = Height(145);
 
-    let v1_config = BlockCacheConfig {
+    let temporary_directory: TempDir = tempfile::tempdir().unwrap();
+    let database_path: PathBuf = temporary_directory.path().to_path_buf();
+
+    let database_config = BlockCacheConfig {
         storage: StorageConfig {
             database: DatabaseConfig {
-                path: db_path,
+                path: database_path,
                 ..Default::default()
             },
             ..Default::default()
@@ -315,40 +297,66 @@ async fn v1_1_to_v1_2_spent_index_migration_resumes_mid_build() {
         network: Network::Regtest(ActivationHeights::default()),
     };
 
-    let source = build_mockchain_source(blocks.clone());
+    let source = build_active_mockchain_source(initial_active_height.0, blocks.clone());
 
-    // Build current v1 database with a complete spent index.
-    let db = DbBackend::spawn_v1(&v1_config).await.unwrap();
+    let old_database =
+        ZainoDB::build_db_to_version(database_config.clone(), source.clone(), v1_1_0())
+            .await
+            .unwrap();
 
-    crate::chain_index::tests::vectors::sync_db_with_blockdata(&db, blocks.clone(), None).await;
+    old_database.wait_until_ready().await;
 
-    db.wait_until_ready().await;
+    let old_metadata = old_database.get_metadata().await.unwrap();
+    assert_eq!(old_metadata.version, v1_1_0());
+    assert_eq!(old_metadata.migration_status, MigrationStatus::Empty);
+    assert_eq!(old_metadata.schema_hash, DB_SCHEMA_V1_HASH);
 
-    // Simulate an interrupted v1.1.0 -> v1.2.0 migration:
-    // heights below resume_height are already migrated, and the spent tail must be rebuilt.
-    let resume_height = Height(51);
+    old_database.shutdown().await.unwrap();
+    drop(old_database);
 
-    downgrade_to_v1_1_and_delete_spent_tail(&db, resume_height).await;
+    let complete_migration_database =
+        ZainoDB::spawn_with_target_version(database_config.clone(), source.clone(), v1_2_0())
+            .await
+            .unwrap();
 
-    dbg!(db.shutdown().await.unwrap());
+    complete_migration_database.wait_until_ready().await;
 
-    tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
+    assert_v1_2_migration_complete(&complete_migration_database).await;
 
-    // Open through ZainoDB so the migration resumes from the stored progress height.
-    let zaino_db = ZainoDB::spawn(v1_config.clone(), source).await.unwrap();
+    {
+        let complete_migration_backend = complete_migration_database
+            .router()
+            .backend(CapabilityRequest::WriteCore)
+            .unwrap();
 
-    wait_for_v1_2_migration_complete(&zaino_db, Duration::new(30, 0))
-        .await
-        .expect("migration did not complete before timeout.");
+        simulate_interrupted_v1_1_to_v1_2_spent_index_migration(
+            &complete_migration_backend,
+            resume_height,
+        )
+        .await;
+    }
 
-    dbg!(zaino_db.status());
+    complete_migration_database.shutdown().await.unwrap();
+    drop(complete_migration_database);
 
-    let migrated_backend = zaino_db
+    let resumed_database =
+        ZainoDB::spawn_with_target_version(database_config.clone(), source.clone(), v1_2_0())
+            .await
+            .unwrap();
+
+    resumed_database.wait_until_ready().await;
+
+    assert_v1_2_migration_complete(&resumed_database).await;
+
+    let resumed_database_height = resumed_database.db_height().await.unwrap().unwrap();
+    assert_eq!(resumed_database_height, initial_active_height);
+
+    let resumed_backend = resumed_database
         .router()
         .backend(CapabilityRequest::WriteCore)
         .unwrap();
 
-    assert_spent_index_matches_transparent_data(&migrated_backend).await;
+    assert_spent_index_matches_transparent_data(&resumed_backend).await;
 
-    dbg!(zaino_db.shutdown().await.unwrap());
+    resumed_database.shutdown().await.unwrap();
 }
