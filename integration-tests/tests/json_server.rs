@@ -511,7 +511,7 @@ async fn get_tx_out_set_info_inner() {
         other => panic!("expected non-empty gettxoutsetinfo from both sides, got {other:?}"),
     };
 
-    assert_eq!(zaino.height, zcashd.height, "height differs from zcashd");
+    assert_eq!(zaino.height, zcashd.height, "`height` differs from zcashd");
     assert_eq!(
         zaino.best_block, zcashd.best_block,
         "`bestblock` differs from zcashd"
