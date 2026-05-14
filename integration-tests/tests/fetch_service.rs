@@ -782,7 +782,7 @@ async fn assert_fetch_service_gettxoutsetinfo_matches_rpc<V: ValidatorExt>(
     assert_eq!(
         zaino.bytes_serialized,
         zaino.txouts * 65,
-        "bytes_serialized must equal txouts * 65 under Zaino's UTXO entry encoding"
+        "`bytes_serialized` must equal `txouts * 65` under Zaino's UTXO entry encoding"
     );
     assert_eq!(
         zaino.hash_serialized.len(),
