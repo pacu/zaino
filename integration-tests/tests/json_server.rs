@@ -514,7 +514,7 @@ async fn get_tx_out_set_info_inner() {
     assert_eq!(zaino.height, zcashd.height, "height differs from zcashd");
     assert_eq!(
         zaino.best_block, zcashd.best_block,
-        "bestblock differs from zcashd"
+        "`bestblock` differs from zcashd"
     );
     assert_eq!(
         zaino.transactions, zcashd.transactions,
