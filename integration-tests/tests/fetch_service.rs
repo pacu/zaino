@@ -791,7 +791,7 @@ async fn assert_fetch_service_gettxoutsetinfo_matches_rpc<V: ValidatorExt>(
     );
     assert!(
         zaino.hash_serialized.chars().all(|c| c.is_ascii_hexdigit()),
-        "hash_serialized must be hex: got {}",
+        "`hash_serialized` must be hex: got {}",
         zaino.hash_serialized
     );
 }
