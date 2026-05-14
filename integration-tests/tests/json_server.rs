@@ -536,7 +536,7 @@ async fn get_tx_out_set_info_inner() {
     assert_eq!(
         zaino.hash_serialized.len(),
         64,
-        "hash_serialized must be 64 lowercase hex chars"
+        "`hash_serialized` must be 64 lowercase hex chars"
     );
     assert!(
         zaino.hash_serialized.chars().all(|c| c.is_ascii_hexdigit()),
