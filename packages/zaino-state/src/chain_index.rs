@@ -2170,8 +2170,7 @@ impl<Source: BlockchainSource> ChainIndex for NodeBackedChainIndexSubscriber<Sou
             let Some(block) = non_finalized_snapshot.get_chainblock_by_height(&height) else {
                 return Err(ChainIndexError::internal(format!(
                     "get_tx_out_set_info: non-finalised snapshot height {height:?} has no block"
-                ))
-                .into());
+                )));
             };
 
             for tx in block.transactions() {
@@ -2236,7 +2235,7 @@ impl<Source: BlockchainSource> ChainIndex for NodeBackedChainIndexSubscriber<Sou
                         .map_err(|e| ChainIndexError::internal(e.to_string()))?;
 
                     // Seed the prev_txid unspent counter if this is the first time we touch it.
-                    if !tx_unspent_count.contains_key(&prev_txid) {
+                    if let std::collections::hash_map::Entry::Vacant(e) = tx_unspent_count.entry(prev_txid) {
                         let seed = self
                             .count_finalised_unspent_outputs(prev_txid)
                             .await
@@ -2245,15 +2244,14 @@ impl<Source: BlockchainSource> ChainIndex for NodeBackedChainIndexSubscriber<Sou
                                     "get_tx_out_set_info: cannot seed unspent counter for {prev_txid:?}: {e}"
                                 ))
                             })?;
-                        tx_unspent_count.insert(prev_txid, seed);
+                        e.insert(seed);
                     }
 
                     let entry = tx_unspent_count.get_mut(&prev_txid).expect("seeded above");
                     if *entry == 0 {
                         return Err(ChainIndexError::internal(format!(
                             "get_tx_out_set_info: tx {prev_txid:?} unspent counter underflow"
-                        ))
-                        .into());
+                        )));
                     }
                     *entry -= 1;
                     if *entry == 0 {
@@ -2282,8 +2280,7 @@ impl<Source: BlockchainSource> ChainIndex for NodeBackedChainIndexSubscriber<Sou
             return Err(ChainIndexError::internal(format!(
                 "get_tx_out_set_info: bytes_serialized invariant violated (got {}, expected {})",
                 accumulator.bytes_serialized, expected_bytes
-            ))
-            .into());
+            )));
         }
 
         let total_amount = accumulator.total_zatoshis as f64 / 1e8;

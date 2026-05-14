@@ -1089,15 +1089,14 @@ impl DbV1 {
             }
 
             if adding {
-                accumulator.total_zatoshis =
-                    accumulator
-                        .total_zatoshis
-                        .checked_add(out.value())
-                        .ok_or_else(|| {
-                            FinalisedStateError::Custom(
-                                "txout-set accumulator total_zatoshis overflow".to_string(),
-                            )
-                        })?;
+                accumulator.total_zatoshis = accumulator
+                    .total_zatoshis
+                    .checked_add(out.value())
+                    .ok_or_else(|| {
+                        FinalisedStateError::Custom(
+                            "txout-set accumulator total_zatoshis overflow".to_string(),
+                        )
+                    })?;
                 accumulator.bytes_serialized = accumulator
                     .bytes_serialized
                     .checked_add(ZAINO_TXOUTSET_ENTRY_LEN)
@@ -1107,15 +1106,14 @@ impl DbV1 {
                         )
                     })?;
             } else {
-                accumulator.total_zatoshis =
-                    accumulator
-                        .total_zatoshis
-                        .checked_sub(out.value())
-                        .ok_or_else(|| {
-                            FinalisedStateError::Custom(
-                                "txout-set accumulator total_zatoshis underflow".to_string(),
-                            )
-                        })?;
+                accumulator.total_zatoshis = accumulator
+                    .total_zatoshis
+                    .checked_sub(out.value())
+                    .ok_or_else(|| {
+                        FinalisedStateError::Custom(
+                            "txout-set accumulator total_zatoshis underflow".to_string(),
+                        )
+                    })?;
                 accumulator.bytes_serialized = accumulator
                     .bytes_serialized
                     .checked_sub(ZAINO_TXOUTSET_ENTRY_LEN)
@@ -1175,15 +1173,11 @@ impl DbV1 {
     ///   consensus bound checks.
     /// - `spendable_count_by_tx` excludes provably-unspendable outputs (see
     ///   [`is_unspendable_tx_out`]) and is what drives UTXO-set deltas.
+    #[allow(clippy::type_complexity)]
     fn index_created_outputs(
         transactions: &[(TransactionHash, Option<TransparentCompactTx>)],
-    ) -> Result<
-        (
-            HashMap<TransactionHash, u32>,
-            HashMap<TransactionHash, u32>,
-        ),
-        FinalisedStateError,
-    > {
+    ) -> Result<(HashMap<TransactionHash, u32>, HashMap<TransactionHash, u32>), FinalisedStateError>
+    {
         let mut total_by_tx: HashMap<TransactionHash, u32> =
             HashMap::with_capacity(transactions.len());
         let mut spendable_by_tx: HashMap<TransactionHash, u32> =
@@ -1233,6 +1227,7 @@ impl DbV1 {
     /// Returns `(spent_indices_by_tx, spent_outpoints_with_locations)`. The forward path
     /// projects out just the outpoints; the reverse path needs the locations to verify the
     /// spent index points to this block.
+    #[allow(clippy::type_complexity)]
     fn index_spent_outpoints(
         spent_map: &HashMap<Outpoint, TxLocation>,
     ) -> Result<
@@ -1279,16 +1274,15 @@ impl DbV1 {
         spent_total_outputs: u64,
         direction: AccumulatorDirection,
     ) -> Result<(), FinalisedStateError> {
-        let created_total =
-            spendable_counts
-                .values()
-                .try_fold(0u64, |total, output_count| {
-                    total.checked_add(u64::from(*output_count)).ok_or_else(|| {
-                        FinalisedStateError::Custom(
-                            "txout-set accumulator created output count overflow".to_string(),
-                        )
-                    })
-                })?;
+        let created_total = spendable_counts
+            .values()
+            .try_fold(0u64, |total, output_count| {
+                total.checked_add(u64::from(*output_count)).ok_or_else(|| {
+                    FinalisedStateError::Custom(
+                        "txout-set accumulator created output count overflow".to_string(),
+                    )
+                })
+            })?;
 
         accumulator.transaction_outputs = match direction {
             AccumulatorDirection::Apply => accumulator
@@ -1302,8 +1296,7 @@ impl DbV1 {
         }
         .ok_or_else(|| {
             FinalisedStateError::Custom(
-                "txout-set accumulator transaction output count underflow or overflow"
-                    .to_string(),
+                "txout-set accumulator transaction output count underflow or overflow".to_string(),
             )
         })?;
 
@@ -1328,10 +1321,7 @@ impl DbV1 {
                 )
             })?;
 
-            let spendable_count = spendable_counts
-                .get(transaction_hash)
-                .copied()
-                .unwrap_or(0);
+            let spendable_count = spendable_counts.get(transaction_hash).copied().unwrap_or(0);
 
             if spendable_count > spent_count {
                 accumulator.transactions = match direction {
@@ -1340,8 +1330,7 @@ impl DbV1 {
                 }
                 .ok_or_else(|| {
                     FinalisedStateError::Custom(
-                        "txout-set accumulator transaction count underflow or overflow"
-                            .to_string(),
+                        "txout-set accumulator transaction count underflow or overflow".to_string(),
                     )
                 })?;
             }
@@ -1419,11 +1408,9 @@ impl DbV1 {
             let leaves_set = if remaining_outpoints.is_empty() {
                 true
             } else {
-                let remaining_spenders = <Self as TransparentHistExt>::get_outpoint_spenders(
-                    self,
-                    remaining_outpoints,
-                )
-                .await?;
+                let remaining_spenders =
+                    <Self as TransparentHistExt>::get_outpoint_spenders(self, remaining_outpoints)
+                        .await?;
                 !remaining_spenders.into_iter().any(|s| s.is_none())
             };
 
@@ -1434,8 +1421,7 @@ impl DbV1 {
                 }
                 .ok_or_else(|| {
                     FinalisedStateError::Custom(
-                        "txout-set accumulator transaction count underflow or overflow"
-                            .to_string(),
+                        "txout-set accumulator transaction count underflow or overflow".to_string(),
                     )
                 })?;
             }
@@ -1546,14 +1532,12 @@ impl DbV1 {
         // spent in finalised state (same-block spends are not in the finalised spent table
         // yet and are skipped).
         if !spent_outpoints.is_empty() {
-            let outpoints: Vec<Outpoint> =
-                spent_outpoints.iter().map(|(o, _)| *o).collect();
+            let outpoints: Vec<Outpoint> = spent_outpoints.iter().map(|(o, _)| *o).collect();
             let existing_spenders =
                 <Self as TransparentHistExt>::get_outpoint_spenders(self, outpoints.clone())
                     .await?;
             for (spent_outpoint, existing_spender) in outpoints.iter().zip(existing_spenders) {
-                if created_counts
-                    .contains_key(&TransactionHash::from(*spent_outpoint.prev_txid()))
+                if created_counts.contains_key(&TransactionHash::from(*spent_outpoint.prev_txid()))
                 {
                     continue;
                 }
@@ -1624,8 +1608,7 @@ impl DbV1 {
         // Reverse-direction validation: every spent outpoint from this block must be in the
         // finalised spent index and must point to this block's TxLocation.
         if !spent_outpoints.is_empty() {
-            let outpoints: Vec<Outpoint> =
-                spent_outpoints.iter().map(|(o, _)| *o).collect();
+            let outpoints: Vec<Outpoint> = spent_outpoints.iter().map(|(o, _)| *o).collect();
             let existing_spenders =
                 <Self as TransparentHistExt>::get_outpoint_spenders(self, outpoints).await?;
             for ((spent_outpoint, expected_tx_location), existing_spender) in
