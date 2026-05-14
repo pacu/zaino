@@ -531,7 +531,7 @@ async fn get_tx_out_set_info_inner() {
     assert_eq!(
         zaino.bytes_serialized,
         zaino.txouts * 65,
-        "bytes_serialized must equal txouts * 65 under Zaino's UTXO entry encoding"
+        "`bytes_serialized` must equal txouts * 65 under Zaino's UTXO entry encoding"
     );
     assert_eq!(
         zaino.hash_serialized.len(),
