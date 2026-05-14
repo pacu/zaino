@@ -540,7 +540,7 @@ async fn get_tx_out_set_info_inner() {
     );
     assert!(
         zaino.hash_serialized.chars().all(|c| c.is_ascii_hexdigit()),
-        "hash_serialized must be hex: got {}",
+        "`hash_serialized` must be hex: got {}",
         zaino.hash_serialized
     );
 
