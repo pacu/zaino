@@ -770,7 +770,7 @@ async fn assert_fetch_service_gettxoutsetinfo_matches_rpc<V: ValidatorExt>(
         zaino.transactions, zcashd.transactions,
         "`transactions` count differs from zcashd"
     );
-    assert_eq!(zaino.txouts, zcashd.txouts, "txouts differs from zcashd");
+    assert_eq!(zaino.txouts, zcashd.txouts, "`txouts` differs from zcashd");
     assert!(
         (zaino.total_amount - zcashd.total_amount).abs() < 1e-8,
         "total_amount differs from zcashd: zaino={} zcashd={}",
