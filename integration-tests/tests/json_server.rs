@@ -518,7 +518,7 @@ async fn get_tx_out_set_info_inner() {
     );
     assert_eq!(
         zaino.transactions, zcashd.transactions,
-        "transactions count differs from zcashd"
+        "`transactions` count differs from zcashd"
     );
     assert_eq!(zaino.txouts, zcashd.txouts, "txouts differs from zcashd");
     assert!(
