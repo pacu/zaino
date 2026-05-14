@@ -523,7 +523,7 @@ async fn get_tx_out_set_info_inner() {
     assert_eq!(zaino.txouts, zcashd.txouts, "`txouts` differs from zcashd");
     assert!(
         (zaino.total_amount - zcashd.total_amount).abs() < 1e-8,
-        "total_amount differs from zcashd: zaino={} zcashd={}",
+        "`total_amount` differs from zcashd: zaino={} zcashd={}",
         zaino.total_amount,
         zcashd.total_amount
     );
