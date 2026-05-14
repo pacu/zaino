@@ -184,7 +184,7 @@ use crate::{
     config::BlockCacheConfig,
     error::FinalisedStateError,
     BlockHash, BlockMetadata, BlockWithMetadata, ChainWork, Height, IndexedBlock, Outpoint,
-    TxLocation, ZainoVersionedSerde as _,
+    TransactionHash, TransparentCompactTx, TxLocation, ZainoVersionedSerde as _,
 };
 
 use lmdb::{Transaction, WriteFlags};
@@ -843,11 +843,24 @@ impl<T: BlockchainSource> Migration<T> for Migration1_1_0To1_2_0 {
 
                         let tx_out_set_info_accumulator = match backend.as_ref() {
                             DbBackend::V1(database) => {
+                                // Pair `txids` and `transparent` for the accumulator API.
+                                // The structural source-pairing guarantee from `write_block`
+                                // does not apply here — both vectors are populated from two
+                                // different backend lookups keyed by tx_index — but the
+                                // accumulator's input shape is the same paired slice.
+                                let transactions: Vec<(
+                                    TransactionHash,
+                                    Option<TransparentCompactTx>,
+                                )> = txids
+                                    .iter()
+                                    .copied()
+                                    .zip(transparent.iter().cloned())
+                                    .collect();
+
                                 database
                                     .calculate_tx_out_set_info_accumulator_after_block(
                                         height,
-                                        &txids,
-                                        &transparent,
+                                        &transactions,
                                         &spent_map,
                                     )
                                     .await?

@@ -129,11 +129,17 @@ impl DbV1 {
         let commitment_tree_entry =
             StoredEntryFixed::new(&block_height_bytes, *block.commitment_tree_data());
 
-        // Build transaction indexes
+        // Build transaction indexes.
+        //
+        // `transactions` pairs each transaction hash with its transparent data. Both halves
+        // are sourced from the same `tx` in the loop below, so misalignment is structurally
+        // impossible — the pair shares one binding. Downstream the accumulator consumes the
+        // paired slice; for storage we `unzip` into the existing `TxidList` / `TransparentTxList`
+        // shapes.
         let tx_len = block.transactions().len();
-        let mut txids = Vec::with_capacity(tx_len);
+        let mut transactions: Vec<(TransactionHash, Option<TransparentCompactTx>)> =
+            Vec::with_capacity(tx_len);
         let mut txid_set: HashSet<TransactionHash> = HashSet::with_capacity(tx_len);
-        let mut transparent = Vec::with_capacity(tx_len);
         let mut sapling = Vec::with_capacity(tx_len);
         let mut orchard = Vec::with_capacity(tx_len);
 
@@ -161,16 +167,14 @@ impl DbV1 {
                 });
             }
 
-            txids.push(*hash);
-
-            // Transparent transactions
+            // Transparent transactions — paired with the txid at the source binding.
             let transparent_data =
                 if tx.transparent().inputs().is_empty() && tx.transparent().outputs().is_empty() {
                     None
                 } else {
                     Some(tx.transparent().clone())
                 };
-            transparent.push(transparent_data);
+            transactions.push((*hash, transparent_data));
 
             // Sapling transactions
             let sapling_data =
@@ -237,26 +241,27 @@ impl DbV1 {
                     // Check if output is in *this* block, else fetch from DB.
                     let prev_tx_hash = TransactionHash(*prev_outpoint.prev_txid());
                     if txid_set.contains(&prev_tx_hash) {
-                        // Fetch transaction index within block
-                        if let Some(tx_index) = txids.iter().position(|h| h == &prev_tx_hash) {
-                            // Fetch Transparent data for transaction
-                            if let Some(Some(prev_transparent)) = transparent.get(tx_index) {
-                                // Fetch output from transaction
-                                if let Some(prev_output) = prev_transparent
-                                    .outputs()
-                                    .get(prev_outpoint.prev_index() as usize)
-                                {
-                                    let prev_output_tx_location =
-                                        TxLocation::new(block_height.0, tx_index as u16);
-                                    DbV1::build_input_history(
-                                        &mut addrhist_inputs_map,
-                                        tx_location,
-                                        input_index as u16,
-                                        input,
-                                        prev_output,
-                                        prev_output_tx_location,
-                                    );
-                                }
+                        // Locate the paired (txid, transparent_data) within this block.
+                        if let Some((tx_index, (_, Some(prev_transparent)))) = transactions
+                            .iter()
+                            .enumerate()
+                            .find(|(_, (h, _))| h == &prev_tx_hash)
+                        {
+                            // Fetch output from transaction
+                            if let Some(prev_output) = prev_transparent
+                                .outputs()
+                                .get(prev_outpoint.prev_index() as usize)
+                            {
+                                let prev_output_tx_location =
+                                    TxLocation::new(block_height.0, tx_index as u16);
+                                DbV1::build_input_history(
+                                    &mut addrhist_inputs_map,
+                                    tx_location,
+                                    input_index as u16,
+                                    input,
+                                    prev_output,
+                                    prev_output_tx_location,
+                                );
                             }
                         }
                     } else if let Ok((prev_output, prev_output_tx_location)) =
@@ -297,11 +302,14 @@ impl DbV1 {
         let tx_out_set_info_accumulator = self
             .calculate_tx_out_set_info_accumulator_after_block(
                 block_height,
-                &txids,
-                &transparent,
+                &transactions,
                 &spent_map,
             )
             .await?;
+
+        // Split the paired vector into the per-table shapes used for storage.
+        let (txids, transparent): (Vec<TransactionHash>, Vec<Option<TransparentCompactTx>>) =
+            transactions.into_iter().unzip();
 
         let txid_entry = StoredEntryVar::new(&block_height_bytes, TxidList::new(txids));
         let transparent_entry =
@@ -757,11 +765,14 @@ impl DbV1 {
                     reason: "Corrupt block data: failed to serialise hash".to_string(),
                 })?;
 
-        // Build transaction indexes
+        // Build transaction indexes.
+        //
+        // See `write_block` for the rationale on pairing the txid and transparent data at
+        // construction. Same source-pairing guarantee here.
         let tx_len = block.transactions().len();
-        let mut txids = Vec::with_capacity(tx_len);
+        let mut transactions: Vec<(TransactionHash, Option<TransparentCompactTx>)> =
+            Vec::with_capacity(tx_len);
         let mut txid_set: HashSet<TransactionHash> = HashSet::with_capacity(tx_len);
-        let mut transparent = Vec::with_capacity(tx_len);
 
         let mut spent_map: HashMap<Outpoint, TxLocation> = HashMap::new();
 
@@ -780,17 +791,16 @@ impl DbV1 {
             let hash = tx.txid();
 
             if txid_set.insert(*hash) {
-                txids.push(*hash);
-            }
-
-            // Transparent transactions
-            let transparent_data =
-                if tx.transparent().inputs().is_empty() && tx.transparent().outputs().is_empty() {
+                // Transparent transactions — paired with the txid at the source binding.
+                let transparent_data = if tx.transparent().inputs().is_empty()
+                    && tx.transparent().outputs().is_empty()
+                {
                     None
                 } else {
                     Some(tx.transparent().clone())
                 };
-            transparent.push(transparent_data);
+                transactions.push((*hash, transparent_data));
+            }
 
             // Transaction location
             let tx_location = TxLocation::new(block_height.into(), _tx_index as u16);
@@ -834,26 +844,27 @@ impl DbV1 {
                     //Check if output is in *this* block, else fetch from DB.
                     let prev_tx_hash = TransactionHash(*prev_outpoint.prev_txid());
                     if txid_set.contains(&prev_tx_hash) {
-                        // Fetch transaction index within block
-                        if let Some(tx_index) = txids.iter().position(|h| h == &prev_tx_hash) {
-                            // Fetch Transparent data for transaction
-                            if let Some(Some(prev_transparent)) = transparent.get(tx_index) {
-                                // Fetch output from transaction
-                                if let Some(prev_output) = prev_transparent
-                                    .outputs()
-                                    .get(prev_outpoint.prev_index() as usize)
-                                {
-                                    let prev_output_tx_location =
-                                        TxLocation::new(block_height.0, tx_index as u16);
-                                    DbV1::build_input_history(
-                                        &mut addrhist_inputs_map,
-                                        tx_location,
-                                        input_index as u16,
-                                        input,
-                                        prev_output,
-                                        prev_output_tx_location,
-                                    );
-                                }
+                        // Locate the paired (txid, transparent_data) within this block.
+                        if let Some((tx_index, (_, Some(prev_transparent)))) = transactions
+                            .iter()
+                            .enumerate()
+                            .find(|(_, (h, _))| h == &prev_tx_hash)
+                        {
+                            // Fetch output from transaction
+                            if let Some(prev_output) = prev_transparent
+                                .outputs()
+                                .get(prev_outpoint.prev_index() as usize)
+                            {
+                                let prev_output_tx_location =
+                                    TxLocation::new(block_height.0, tx_index as u16);
+                                DbV1::build_input_history(
+                                    &mut addrhist_inputs_map,
+                                    tx_location,
+                                    input_index as u16,
+                                    input,
+                                    prev_output,
+                                    prev_output_tx_location,
+                                );
                             }
                         }
                     } else if let Ok((prev_output, prev_output_tx_location)) =
@@ -901,11 +912,7 @@ impl DbV1 {
         }
 
         let tx_out_set_info_accumulator = self
-            .calculate_tx_out_set_info_accumulator_after_delete_block(
-                &txids,
-                &transparent,
-                &spent_map,
-            )
+            .calculate_tx_out_set_info_accumulator_after_delete_block(&transactions, &spent_map)
             .await?;
 
         // Delete all block data from db.
