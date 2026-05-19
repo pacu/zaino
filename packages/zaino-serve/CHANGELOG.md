@@ -17,24 +17,18 @@ and this library adheres to Rust's notion of
 
 ### Added
 
-Four new JSON-RPC handlers on `pub trait ZcashIndexerRpc`, each
-delegating to the matching `JsonRpSeeConnector` method in
-`zaino-fetch` 0.1.1:
-
-- `z_validateaddress` (#389) — shipped pre-deprecated; logs the
+- `z_validateaddress` handler on `pub trait ZcashIndexerRpc`,
+  delegating to `zaino_fetch::JsonRpSeeConnector::z_validate_address`
+  (#389). Shipped pre-deprecated; logs
   `zaino_fetch::jsonrpsee::response::z_validate_address::DEPRECATION_NOTICE`
   on every call.
-- `gettxout` (#1085).
-- `getchaintips` (#1092).
-- `getspentinfo` (#1093).
 
 ### Changed
 
 - **Breaking** — `pub trait ZcashIndexerRpc` (annotated with
-  `#[rpc(server)]`) gains four required methods without default
-  bodies, listed above. Downstream crates that implement the trait
-  directly must add `z_validate_address`, `get_tx_out`,
-  `get_chain_tips`, and `get_spent_info`.
+  `#[rpc(server)]`) gains a required `z_validate_address` method
+  without a default body. Downstream crates that implement the trait
+  directly must add this method.
 
 ## [0.1.0] - 2026-03-26
 

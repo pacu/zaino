@@ -20,8 +20,6 @@ and this library adheres to Rust's notion of
 #### New methods on the `ChainIndex` trait
 - Transparent-address queries (#1065): `get_address_balance`,
   `get_address_deltas`, `get_address_txids`, `get_address_utxos`.
-- Chain-tip / fork accounting (#1092): `branch_len_to_active_chain`,
-  `chain_tips_from_nonfinalized_snapshot`.
 - Block lookups (#1000): `get_block_hash`,
   `get_indexed_block_by_hash`, `get_indexed_block_by_height`.
 - Subtree-root reporting (#853): `get_subtree_roots`, `pool_string`.

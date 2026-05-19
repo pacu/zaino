@@ -17,26 +17,15 @@ and this library adheres to Rust's notion of
 
 ### Added
 
-New JSON-RPC passthrough methods on `JsonRpSeeConnector`, each with at
-least one response type (and where relevant a typed error) under
-`jsonrpsee::response`:
-
-- `z_validate_address` → `ZValidateAddressResponse`,
-  `KnownZValidateAddress`, `ValidZValidateAddress`,
-  `InvalidZValidateAddress`, `ZValidateAddressType`,
-  `ZValidateAddressError`, and the `DEPRECATION_NOTICE` constant.
-  Shipped pre-deprecated; emits `tracing::warn!(DEPRECATION_NOTICE)` on
-  every call and exists only for zcashd `z_validateaddress` bugwards
-  compatibility (#389).
-- `get_tx_out` → `GetTxOutResponse` (#1085).
-- `get_chain_tips` → `GetChainTipsResponse`, `ChainTip`,
-  `ChainTipStatus` (#1092).
-- `get_spent_info` → `GetSpentInfoResponse`, `GetSpentInfoRequest`,
-  `GetSpentInfoError` (#1093).
-
-Other supporting additions to `jsonrpsee::response`:
-- `AddressData`.
-- `CommonFields` re-export.
+- New JSON-RPC passthrough method `JsonRpSeeConnector::z_validate_address`
+  under `jsonrpsee::response::z_validate_address`, with response and
+  error types `ZValidateAddressResponse`, `KnownZValidateAddress`,
+  `ValidZValidateAddress`, `InvalidZValidateAddress`,
+  `ZValidateAddressType`, `ZValidateAddressError`, the supporting
+  `AddressData` / `CommonFields` types, and the `DEPRECATION_NOTICE`
+  constant. Shipped pre-deprecated; emits
+  `tracing::warn!(DEPRECATION_NOTICE)` on every call and exists only
+  for zcashd `z_validateaddress` bugwards compatibility (#389).
 
 ## [0.1.0] - 2026-03-25
 
