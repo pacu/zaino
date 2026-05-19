@@ -80,12 +80,12 @@ async fn fetch_service_get_address_balance<V: ValidatorExt>(validator: &Validato
 
     if matches!(validator, ValidatorKind::Zebrad) {
         test_manager
-            .generate_blocks_and_poll_indexer(100, &fetch_service_subscriber)
+            .generate_blocks_and_wait_for_tip(100, &fetch_service_subscriber)
             .await;
         clients.faucet.sync_and_await().await.unwrap();
         clients.faucet.quick_shield(AccountId::ZERO).await.unwrap();
         test_manager
-            .generate_blocks_and_poll_indexer(1, &fetch_service_subscriber)
+            .generate_blocks_and_wait_for_tip(1, &fetch_service_subscriber)
             .await;
         clients.faucet.sync_and_await().await.unwrap();
     };
@@ -104,7 +104,7 @@ async fn fetch_service_get_address_balance<V: ValidatorExt>(validator: &Validato
     .await
     .unwrap();
     test_manager
-        .generate_blocks_and_poll_indexer(1, &fetch_service_subscriber)
+        .generate_blocks_and_wait_for_tip(1, &fetch_service_subscriber)
         .await;
 
     clients.recipient.sync_and_await().await.unwrap();
@@ -203,24 +203,24 @@ async fn fetch_service_get_raw_mempool<V: ValidatorExt>(validator: &ValidatorKin
     .unwrap();
 
     test_manager
-        .generate_blocks_and_poll_indexer(1, &fetch_service_subscriber)
+        .generate_blocks_and_wait_for_tip(1, &fetch_service_subscriber)
         .await;
 
     clients.faucet.sync_and_await().await.unwrap();
 
     if matches!(validator, ValidatorKind::Zebrad) {
         test_manager
-            .generate_blocks_and_poll_indexer(100, &fetch_service_subscriber)
+            .generate_blocks_and_wait_for_tip(100, &fetch_service_subscriber)
             .await;
         clients.faucet.sync_and_await().await.unwrap();
         clients.faucet.quick_shield(AccountId::ZERO).await.unwrap();
         test_manager
-            .generate_blocks_and_poll_indexer(100, &fetch_service_subscriber)
+            .generate_blocks_and_wait_for_tip(100, &fetch_service_subscriber)
             .await;
         clients.faucet.sync_and_await().await.unwrap();
         clients.faucet.quick_shield(AccountId::ZERO).await.unwrap();
         test_manager
-            .generate_blocks_and_poll_indexer(1, &fetch_service_subscriber)
+            .generate_blocks_and_wait_for_tip(1, &fetch_service_subscriber)
             .await;
         clients.faucet.sync_and_await().await.unwrap();
     };
@@ -270,26 +270,26 @@ pub async fn test_get_mempool_info<V: ValidatorExt>(validator: &ValidatorKind) {
         .expect("Clients are not initialized");
 
     test_manager
-        .generate_blocks_and_poll_indexer(1, &fetch_service_subscriber)
+        .generate_blocks_and_wait_for_tip(1, &fetch_service_subscriber)
         .await;
     clients.faucet.sync_and_await().await.unwrap();
 
     // Zebra cannot mine directly to Orchard in this setup, so shield funds first.
     if matches!(validator, ValidatorKind::Zebrad) {
         test_manager
-            .generate_blocks_and_poll_indexer(100, &fetch_service_subscriber)
+            .generate_blocks_and_wait_for_tip(100, &fetch_service_subscriber)
             .await;
         clients.faucet.sync_and_await().await.unwrap();
         clients.faucet.quick_shield(AccountId::ZERO).await.unwrap();
 
         test_manager
-            .generate_blocks_and_poll_indexer(100, &fetch_service_subscriber)
+            .generate_blocks_and_wait_for_tip(100, &fetch_service_subscriber)
             .await;
         clients.faucet.sync_and_await().await.unwrap();
         clients.faucet.quick_shield(AccountId::ZERO).await.unwrap();
 
         test_manager
-            .generate_blocks_and_poll_indexer(1, &fetch_service_subscriber)
+            .generate_blocks_and_wait_for_tip(1, &fetch_service_subscriber)
             .await;
         clients.faucet.sync_and_await().await.unwrap();
     }
@@ -373,12 +373,12 @@ async fn fetch_service_z_get_treestate<V: ValidatorExt>(validator: &ValidatorKin
     if matches!(validator, ValidatorKind::Zebrad) {
         // TODO: investigate why 101 blocks are needed instead of the previous 100 blocks (chain index integration related?)
         test_manager
-            .generate_blocks_and_poll_indexer(101, &fetch_service_subscriber)
+            .generate_blocks_and_wait_for_tip(101, &fetch_service_subscriber)
             .await;
         clients.faucet.sync_and_await().await.unwrap();
         clients.faucet.quick_shield(AccountId::ZERO).await.unwrap();
         test_manager
-            .generate_blocks_and_poll_indexer(1, &fetch_service_subscriber)
+            .generate_blocks_and_wait_for_tip(1, &fetch_service_subscriber)
             .await;
         clients.faucet.sync_and_await().await.unwrap();
     };
@@ -392,7 +392,7 @@ async fn fetch_service_z_get_treestate<V: ValidatorExt>(validator: &ValidatorKin
     .unwrap();
 
     test_manager
-        .generate_blocks_and_poll_indexer(1, &fetch_service_subscriber)
+        .generate_blocks_and_wait_for_tip(1, &fetch_service_subscriber)
         .await;
 
     let chain_height = dbg!(fetch_service_subscriber.chain_height().await.unwrap()).0;
@@ -422,12 +422,12 @@ async fn fetch_service_z_get_subtrees_by_index<V: ValidatorExt>(validator: &Vali
 
     if matches!(validator, ValidatorKind::Zebrad) {
         test_manager
-            .generate_blocks_and_poll_indexer(100, &fetch_service_subscriber)
+            .generate_blocks_and_wait_for_tip(100, &fetch_service_subscriber)
             .await;
         clients.faucet.sync_and_await().await.unwrap();
         clients.faucet.quick_shield(AccountId::ZERO).await.unwrap();
         test_manager
-            .generate_blocks_and_poll_indexer(1, &fetch_service_subscriber)
+            .generate_blocks_and_wait_for_tip(1, &fetch_service_subscriber)
             .await;
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
         clients.faucet.sync_and_await().await.unwrap();
@@ -442,7 +442,7 @@ async fn fetch_service_z_get_subtrees_by_index<V: ValidatorExt>(validator: &Vali
     .unwrap();
 
     test_manager
-        .generate_blocks_and_poll_indexer(1, &fetch_service_subscriber)
+        .generate_blocks_and_wait_for_tip(1, &fetch_service_subscriber)
         .await;
 
     dbg!(fetch_service_subscriber
@@ -470,12 +470,12 @@ async fn fetch_service_get_raw_transaction<V: ValidatorExt>(validator: &Validato
 
     if matches!(validator, ValidatorKind::Zebrad) {
         test_manager
-            .generate_blocks_and_poll_indexer(100, &fetch_service_subscriber)
+            .generate_blocks_and_wait_for_tip(100, &fetch_service_subscriber)
             .await;
         clients.faucet.sync_and_await().await.unwrap();
         clients.faucet.quick_shield(AccountId::ZERO).await.unwrap();
         test_manager
-            .generate_blocks_and_poll_indexer(1, &fetch_service_subscriber)
+            .generate_blocks_and_wait_for_tip(1, &fetch_service_subscriber)
             .await;
         clients.faucet.sync_and_await().await.unwrap();
     };
@@ -489,7 +489,7 @@ async fn fetch_service_get_raw_transaction<V: ValidatorExt>(validator: &Validato
     .unwrap();
 
     test_manager
-        .generate_blocks_and_poll_indexer(1, &fetch_service_subscriber)
+        .generate_blocks_and_wait_for_tip(1, &fetch_service_subscriber)
         .await;
 
     dbg!(fetch_service_subscriber
@@ -519,12 +519,12 @@ async fn fetch_service_get_address_tx_ids<V: ValidatorExt>(validator: &Validator
 
     if matches!(validator, ValidatorKind::Zebrad) {
         test_manager
-            .generate_blocks_and_poll_indexer(100, &fetch_service_subscriber)
+            .generate_blocks_and_wait_for_tip(100, &fetch_service_subscriber)
             .await;
         clients.faucet.sync_and_await().await.unwrap();
         clients.faucet.quick_shield(AccountId::ZERO).await.unwrap();
         test_manager
-            .generate_blocks_and_poll_indexer(1, &fetch_service_subscriber)
+            .generate_blocks_and_wait_for_tip(1, &fetch_service_subscriber)
             .await;
         clients.faucet.sync_and_await().await.unwrap();
     };
@@ -536,7 +536,7 @@ async fn fetch_service_get_address_tx_ids<V: ValidatorExt>(validator: &Validator
     .await
     .unwrap();
     test_manager
-        .generate_blocks_and_poll_indexer(1, &fetch_service_subscriber)
+        .generate_blocks_and_wait_for_tip(1, &fetch_service_subscriber)
         .await;
 
     let chain_height: u32 = {
@@ -580,12 +580,12 @@ async fn fetch_service_get_address_utxos<V: ValidatorExt>(validator: &ValidatorK
 
     if matches!(validator, ValidatorKind::Zebrad) {
         test_manager
-            .generate_blocks_and_poll_indexer(100, &fetch_service_subscriber)
+            .generate_blocks_and_wait_for_tip(100, &fetch_service_subscriber)
             .await;
         clients.faucet.sync_and_await().await.unwrap();
         clients.faucet.quick_shield(AccountId::ZERO).await.unwrap();
         test_manager
-            .generate_blocks_and_poll_indexer(1, &fetch_service_subscriber)
+            .generate_blocks_and_wait_for_tip(1, &fetch_service_subscriber)
             .await;
         clients.faucet.sync_and_await().await.unwrap();
     };
@@ -597,7 +597,7 @@ async fn fetch_service_get_address_utxos<V: ValidatorExt>(validator: &ValidatorK
     .await
     .unwrap();
     test_manager
-        .generate_blocks_and_poll_indexer(1, &fetch_service_subscriber)
+        .generate_blocks_and_wait_for_tip(1, &fetch_service_subscriber)
         .await;
 
     clients.faucet.sync_and_await().await.unwrap();
@@ -625,7 +625,7 @@ async fn fetch_service_get_latest_block<V: ValidatorExt>(validator: &ValidatorKi
     let fetch_service_subscriber = test_manager.service_subscriber.take().unwrap();
 
     test_manager
-        .generate_blocks_and_poll_indexer(1, &fetch_service_subscriber)
+        .generate_blocks_and_wait_for_tip(1, &fetch_service_subscriber)
         .await;
 
     let json_service = JsonRpSeeConnector::new_with_basic_auth(
@@ -851,7 +851,7 @@ async fn fetch_service_get_block_subsidy<V: ValidatorExt>(validator: &ValidatorK
 
     for i in 0..block_limit {
         test_manager
-            .generate_blocks_and_poll_indexer(1, &fetch_service_subscriber)
+            .generate_blocks_and_wait_for_tip(1, &fetch_service_subscriber)
             .await;
         let fetch_service_get_block_subsidy =
             fetch_service_subscriber.get_block_subsidy(i).await.unwrap();
@@ -921,7 +921,7 @@ async fn fetch_service_get_block_header<V: ValidatorExt>(validator: &ValidatorKi
 
     for i in 0..BLOCK_LIMIT {
         test_manager
-            .generate_blocks_and_poll_indexer(1, &fetch_service_subscriber)
+            .generate_blocks_and_wait_for_tip(1, &fetch_service_subscriber)
             .await;
 
         let block = fetch_service_subscriber
@@ -985,7 +985,7 @@ async fn fetch_service_get_best_blockhash<V: ValidatorExt>(validator: &Validator
     let fetch_service_subscriber = test_manager.service_subscriber.take().unwrap();
 
     test_manager
-        .generate_blocks_and_poll_indexer(5, &fetch_service_subscriber)
+        .generate_blocks_and_wait_for_tip(5, &fetch_service_subscriber)
         .await;
 
     let inspected_block: GetBlock = fetch_service_subscriber
@@ -1020,7 +1020,7 @@ async fn fetch_service_get_block_count<V: ValidatorExt>(validator: &ValidatorKin
     let fetch_service_subscriber = test_manager.service_subscriber.take().unwrap();
 
     test_manager
-        .generate_blocks_and_poll_indexer(5, &fetch_service_subscriber)
+        .generate_blocks_and_wait_for_tip(5, &fetch_service_subscriber)
         .await;
 
     let block_id = BlockId {
@@ -1112,7 +1112,7 @@ async fn fetch_service_get_block_range<V: ValidatorExt>(validator: &ValidatorKin
     let fetch_service_subscriber = test_manager.service_subscriber.take().unwrap();
 
     test_manager
-        .generate_blocks_and_poll_indexer(10, &fetch_service_subscriber)
+        .generate_blocks_and_wait_for_tip(10, &fetch_service_subscriber)
         .await;
 
     let block_range = BlockRange {
@@ -1163,21 +1163,21 @@ async fn fetch_service_get_block_range_returns_all_pools<V: ValidatorExt>(
 
     if matches!(validator, ValidatorKind::Zebrad) {
         test_manager
-            .generate_blocks_and_poll_indexer(100, &fetch_service_subscriber)
+            .generate_blocks_and_wait_for_tip(100, &fetch_service_subscriber)
             .await;
         clients.faucet.sync_and_await().await.unwrap();
         for _ in 1..4 {
             clients.faucet.quick_shield(AccountId::ZERO).await.unwrap();
 
             test_manager
-                .generate_blocks_and_poll_indexer(1, &fetch_service_subscriber)
+                .generate_blocks_and_wait_for_tip(1, &fetch_service_subscriber)
                 .await;
             clients.faucet.sync_and_await().await.unwrap();
         }
     } else {
         // zcashd
         test_manager
-            .generate_blocks_and_poll_indexer(14, &fetch_service_subscriber)
+            .generate_blocks_and_wait_for_tip(14, &fetch_service_subscriber)
             .await;
 
         clients.faucet.sync_and_await().await.unwrap();
@@ -1211,7 +1211,7 @@ async fn fetch_service_get_block_range_returns_all_pools<V: ValidatorExt>(
     .head;
 
     test_manager
-        .generate_blocks_and_poll_indexer(1, &fetch_service_subscriber)
+        .generate_blocks_and_wait_for_tip(1, &fetch_service_subscriber)
         .await;
 
     let start_height: u64 = if matches!(validator, ValidatorKind::Zebrad) {
@@ -1318,21 +1318,21 @@ async fn fetch_service_get_block_range_no_pools_returns_sapling_orchard<V: Valid
 
     if matches!(validator, ValidatorKind::Zebrad) {
         test_manager
-            .generate_blocks_and_poll_indexer(100, &fetch_service_subscriber)
+            .generate_blocks_and_wait_for_tip(100, &fetch_service_subscriber)
             .await;
         clients.faucet.sync_and_await().await.unwrap();
         for _ in 1..4 {
             clients.faucet.quick_shield(AccountId::ZERO).await.unwrap();
 
             test_manager
-                .generate_blocks_and_poll_indexer(1, &fetch_service_subscriber)
+                .generate_blocks_and_wait_for_tip(1, &fetch_service_subscriber)
                 .await;
             clients.faucet.sync_and_await().await.unwrap();
         }
     } else {
         // zcashd
         test_manager
-            .generate_blocks_and_poll_indexer(14, &fetch_service_subscriber)
+            .generate_blocks_and_wait_for_tip(14, &fetch_service_subscriber)
             .await;
 
         clients.faucet.sync_and_await().await.unwrap();
@@ -1366,7 +1366,7 @@ async fn fetch_service_get_block_range_no_pools_returns_sapling_orchard<V: Valid
     .head;
 
     test_manager
-        .generate_blocks_and_poll_indexer(1, &fetch_service_subscriber)
+        .generate_blocks_and_wait_for_tip(1, &fetch_service_subscriber)
         .await;
 
     let start_height: u64 = if matches!(validator, ValidatorKind::Zebrad) {
@@ -1459,7 +1459,7 @@ async fn fetch_service_get_block_range_nullifiers<V: ValidatorExt>(validator: &V
     let fetch_service_subscriber = test_manager.service_subscriber.take().unwrap();
 
     test_manager
-        .generate_blocks_and_poll_indexer(10, &fetch_service_subscriber)
+        .generate_blocks_and_wait_for_tip(10, &fetch_service_subscriber)
         .await;
 
     let block_range = BlockRange {
@@ -1511,12 +1511,12 @@ async fn fetch_service_get_transaction_mined<V: ValidatorExt>(validator: &Valida
 
     if matches!(validator, ValidatorKind::Zebrad) {
         test_manager
-            .generate_blocks_and_poll_indexer(100, &fetch_service_subscriber)
+            .generate_blocks_and_wait_for_tip(100, &fetch_service_subscriber)
             .await;
         clients.faucet.sync_and_await().await.unwrap();
         clients.faucet.quick_shield(AccountId::ZERO).await.unwrap();
         test_manager
-            .generate_blocks_and_poll_indexer(1, &fetch_service_subscriber)
+            .generate_blocks_and_wait_for_tip(1, &fetch_service_subscriber)
             .await;
         clients.faucet.sync_and_await().await.unwrap();
     };
@@ -1529,7 +1529,7 @@ async fn fetch_service_get_transaction_mined<V: ValidatorExt>(validator: &Valida
     .await
     .unwrap();
     test_manager
-        .generate_blocks_and_poll_indexer(1, &fetch_service_subscriber)
+        .generate_blocks_and_wait_for_tip(1, &fetch_service_subscriber)
         .await;
 
     let tx_filter = TxFilter {
@@ -1565,12 +1565,12 @@ async fn fetch_service_get_transaction_mempool<V: ValidatorExt>(validator: &Vali
 
     if matches!(validator, ValidatorKind::Zebrad) {
         test_manager
-            .generate_blocks_and_poll_indexer(100, &fetch_service_subscriber)
+            .generate_blocks_and_wait_for_tip(100, &fetch_service_subscriber)
             .await;
         clients.faucet.sync_and_await().await.unwrap();
         clients.faucet.quick_shield(AccountId::ZERO).await.unwrap();
         test_manager
-            .generate_blocks_and_poll_indexer(1, &fetch_service_subscriber)
+            .generate_blocks_and_wait_for_tip(1, &fetch_service_subscriber)
             .await;
         clients.faucet.sync_and_await().await.unwrap();
     };
@@ -1620,12 +1620,12 @@ async fn fetch_service_get_taddress_txids<V: ValidatorExt>(validator: &Validator
 
     if matches!(validator, ValidatorKind::Zebrad) {
         test_manager
-            .generate_blocks_and_poll_indexer(100, &fetch_service_subscriber)
+            .generate_blocks_and_wait_for_tip(100, &fetch_service_subscriber)
             .await;
         clients.faucet.sync_and_await().await.unwrap();
         clients.faucet.quick_shield(AccountId::ZERO).await.unwrap();
         test_manager
-            .generate_blocks_and_poll_indexer(1, &fetch_service_subscriber)
+            .generate_blocks_and_wait_for_tip(1, &fetch_service_subscriber)
             .await;
         clients.faucet.sync_and_await().await.unwrap();
     };
@@ -1637,7 +1637,7 @@ async fn fetch_service_get_taddress_txids<V: ValidatorExt>(validator: &Validator
     .await
     .unwrap();
     test_manager
-        .generate_blocks_and_poll_indexer(1, &fetch_service_subscriber)
+        .generate_blocks_and_wait_for_tip(1, &fetch_service_subscriber)
         .await;
 
     let chain_height: u32 = {
@@ -1701,12 +1701,12 @@ async fn fetch_service_get_taddress_balance<V: ValidatorExt>(validator: &Validat
 
     if matches!(validator, ValidatorKind::Zebrad) {
         test_manager
-            .generate_blocks_and_poll_indexer(100, &fetch_service_subscriber)
+            .generate_blocks_and_wait_for_tip(100, &fetch_service_subscriber)
             .await;
         clients.faucet.sync_and_await().await.unwrap();
         clients.faucet.quick_shield(AccountId::ZERO).await.unwrap();
         test_manager
-            .generate_blocks_and_poll_indexer(1, &fetch_service_subscriber)
+            .generate_blocks_and_wait_for_tip(1, &fetch_service_subscriber)
             .await;
         clients.faucet.sync_and_await().await.unwrap();
     };
@@ -1718,7 +1718,7 @@ async fn fetch_service_get_taddress_balance<V: ValidatorExt>(validator: &Validat
     .await
     .unwrap();
     test_manager
-        .generate_blocks_and_poll_indexer(1, &fetch_service_subscriber)
+        .generate_blocks_and_wait_for_tip(1, &fetch_service_subscriber)
         .await;
 
     clients.recipient.sync_and_await().await.unwrap();
@@ -1760,23 +1760,23 @@ async fn fetch_service_get_mempool_tx<V: ValidatorExt>(validator: &ValidatorKind
         .take()
         .expect("Clients are not initialized");
     test_manager
-        .generate_blocks_and_poll_indexer(1, &fetch_service_subscriber)
+        .generate_blocks_and_wait_for_tip(1, &fetch_service_subscriber)
         .await;
     clients.faucet.sync_and_await().await.unwrap();
 
     if matches!(validator, ValidatorKind::Zebrad) {
         test_manager
-            .generate_blocks_and_poll_indexer(100, &fetch_service_subscriber)
+            .generate_blocks_and_wait_for_tip(100, &fetch_service_subscriber)
             .await;
         clients.faucet.sync_and_await().await.unwrap();
         clients.faucet.quick_shield(AccountId::ZERO).await.unwrap();
         test_manager
-            .generate_blocks_and_poll_indexer(100, &fetch_service_subscriber)
+            .generate_blocks_and_wait_for_tip(100, &fetch_service_subscriber)
             .await;
         clients.faucet.sync_and_await().await.unwrap();
         clients.faucet.quick_shield(AccountId::ZERO).await.unwrap();
         test_manager
-            .generate_blocks_and_poll_indexer(1, &fetch_service_subscriber)
+            .generate_blocks_and_wait_for_tip(1, &fetch_service_subscriber)
             .await;
         clients.faucet.sync_and_await().await.unwrap();
     };
@@ -1868,23 +1868,23 @@ async fn fetch_service_get_mempool_stream<V: ValidatorExt>(validator: &Validator
         .take()
         .expect("Clients are not initialized");
     test_manager
-        .generate_blocks_and_poll_indexer(1, &fetch_service_subscriber)
+        .generate_blocks_and_wait_for_tip(1, &fetch_service_subscriber)
         .await;
     clients.faucet.sync_and_await().await.unwrap();
 
     if matches!(validator, ValidatorKind::Zebrad) {
         test_manager
-            .generate_blocks_and_poll_indexer(100, &fetch_service_subscriber)
+            .generate_blocks_and_wait_for_tip(100, &fetch_service_subscriber)
             .await;
         clients.faucet.sync_and_await().await.unwrap();
         clients.faucet.quick_shield(AccountId::ZERO).await.unwrap();
         test_manager
-            .generate_blocks_and_poll_indexer(100, &fetch_service_subscriber)
+            .generate_blocks_and_wait_for_tip(100, &fetch_service_subscriber)
             .await;
         clients.faucet.sync_and_await().await.unwrap();
         clients.faucet.quick_shield(AccountId::ZERO).await.unwrap();
         test_manager
-            .generate_blocks_and_poll_indexer(1, &fetch_service_subscriber)
+            .generate_blocks_and_wait_for_tip(1, &fetch_service_subscriber)
             .await;
         clients.faucet.sync_and_await().await.unwrap();
     };
@@ -1921,7 +1921,7 @@ async fn fetch_service_get_mempool_stream<V: ValidatorExt>(validator: &Validator
 
     tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
     test_manager
-        .generate_blocks_and_poll_indexer(1, &fetch_service_subscriber)
+        .generate_blocks_and_wait_for_tip(1, &fetch_service_subscriber)
         .await;
 
     let fetch_mempool_tx = fetch_service_handle.await.unwrap();
@@ -2026,12 +2026,12 @@ async fn fetch_service_get_taddress_utxos<V: ValidatorExt>(validator: &Validator
 
     if matches!(validator, ValidatorKind::Zebrad) {
         test_manager
-            .generate_blocks_and_poll_indexer(100, &fetch_service_subscriber)
+            .generate_blocks_and_wait_for_tip(100, &fetch_service_subscriber)
             .await;
         clients.faucet.sync_and_await().await.unwrap();
         clients.faucet.quick_shield(AccountId::ZERO).await.unwrap();
         test_manager
-            .generate_blocks_and_poll_indexer(1, &fetch_service_subscriber)
+            .generate_blocks_and_wait_for_tip(1, &fetch_service_subscriber)
             .await;
         clients.faucet.sync_and_await().await.unwrap();
     };
@@ -2043,7 +2043,7 @@ async fn fetch_service_get_taddress_utxos<V: ValidatorExt>(validator: &Validator
     .await
     .unwrap();
     test_manager
-        .generate_blocks_and_poll_indexer(1, &fetch_service_subscriber)
+        .generate_blocks_and_wait_for_tip(1, &fetch_service_subscriber)
         .await;
 
     let utxos_arg = GetAddressUtxosArg {
@@ -2081,12 +2081,12 @@ async fn fetch_service_get_taddress_utxos_stream<V: ValidatorExt>(validator: &Va
 
     if matches!(validator, ValidatorKind::Zebrad) {
         test_manager
-            .generate_blocks_and_poll_indexer(100, &fetch_service_subscriber)
+            .generate_blocks_and_wait_for_tip(100, &fetch_service_subscriber)
             .await;
         clients.faucet.sync_and_await().await.unwrap();
         clients.faucet.quick_shield(AccountId::ZERO).await.unwrap();
         test_manager
-            .generate_blocks_and_poll_indexer(1, &fetch_service_subscriber)
+            .generate_blocks_and_wait_for_tip(1, &fetch_service_subscriber)
             .await;
         clients.faucet.sync_and_await().await.unwrap();
     };
@@ -2098,7 +2098,7 @@ async fn fetch_service_get_taddress_utxos_stream<V: ValidatorExt>(validator: &Va
     .await
     .unwrap();
     test_manager
-        .generate_blocks_and_poll_indexer(1, &fetch_service_subscriber)
+        .generate_blocks_and_wait_for_tip(1, &fetch_service_subscriber)
         .await;
 
     let utxos_arg = GetAddressUtxosArg {
