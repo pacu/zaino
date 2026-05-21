@@ -46,11 +46,12 @@ use zebra_rpc::{
 use zebra_state::HashOrHeight;
 
 pub mod encoding;
-/// All state at least 100 blocks old
+/// All state below [`NON_FINALIZED_DEPTH`] blocks of the best-known chain tip.
 pub mod finalised_state;
 /// State in the mempool, not yet on-chain
 pub mod mempool;
-/// State less than 100 blocks old, stored separately as it may be reorged
+/// State within [`NON_FINALIZED_DEPTH`] blocks of the best-known chain tip;
+/// stored separately as it may be reorged.
 pub mod non_finalised_state;
 /// BlockchainSource
 pub mod source;
@@ -59,6 +60,27 @@ pub mod types;
 
 #[cfg(test)]
 mod tests;
+
+/// Distance (in blocks) between the best-known chain tip and the
+/// highest block that zaino treats as part of the finalized DB.
+///
+/// Sourced from Zebra's protocol-derived reorg bound. The `+ 1`
+/// preserves the original literal-`100` behavior; deriving the
+/// depth from an explicit wider-consensus reference is tracked in
+/// zingolabs/zaino#1130.
+pub(crate) const NON_FINALIZED_DEPTH: u32 = zebra_state::MAX_BLOCK_REORG_HEIGHT + 1;
+
+/// Lower bound on zaino's finalized-DB tip, derived from the current
+/// best-known chain tip.
+///
+/// After a chain-shortening reorg this floor can move backwards while
+/// the on-disk `finalized_height` does not — finalized blocks are
+/// never evicted. Callers comparing this floor against
+/// `finalized_height` should account for the asymmetry
+/// (see zingolabs/zaino#1128).
+pub(crate) fn finalized_height_floor(chain_tip: u32) -> crate::Height {
+    crate::Height(chain_tip.saturating_sub(NON_FINALIZED_DEPTH))
+}
 
 /// Builds a zcashd-compatible `getchaintips` response from the local non-finalized snapshot.
 ///
@@ -810,7 +832,7 @@ impl<Source: BlockchainSource> NodeBackedChainIndex<Source> {
                                 "node returned no best block height",
                             ))
                         })?;
-                    let finalised_height = crate::Height(chain_height.0.saturating_sub(100));
+                    let finalised_height = finalized_height_floor(chain_height.0);
 
                     fs.sync_to_height(finalised_height, &source)
                         .await
@@ -1136,7 +1158,7 @@ impl<Source: BlockchainSource> ChainIndex for NodeBackedChainIndexSubscriber<Sou
                         "validator has no best block",
                         None,
                     ))?;
-                let validator_finalized_height = types::Height(height.0.saturating_sub(100));
+                let validator_finalized_height = finalized_height_floor(height.0);
                 Ok(ChainIndexSnapshot::StillSyncingFinalizedState {
                     validator_finalized_height,
                 })
@@ -2235,7 +2257,9 @@ impl<Source: BlockchainSource> ChainIndex for NodeBackedChainIndexSubscriber<Sou
                         .map_err(|e| ChainIndexError::internal(e.to_string()))?;
 
                     // Seed the prev_txid unspent counter if this is the first time we touch it.
-                    if let std::collections::hash_map::Entry::Vacant(e) = tx_unspent_count.entry(prev_txid) {
+                    if let std::collections::hash_map::Entry::Vacant(e) =
+                        tx_unspent_count.entry(prev_txid)
+                    {
                         let seed = self
                             .count_finalised_unspent_outputs(prev_txid)
                             .await
