@@ -21,7 +21,7 @@
 //! would create immediate test churn at the refactor PR.
 
 use super::{load_test_vectors_and_sync_chain_index, poll::poll_until};
-use crate::chain_index::ChainIndex;
+use crate::chain_index::{finalized_height_floor, ChainIndex};
 use std::time::Duration;
 use tokio::time::sleep;
 
@@ -39,7 +39,7 @@ async fn nfs_lowest_block_matches_finalized_db_tip() {
         .get_nfs_snapshot()
         .expect("NFS exists after harness completes finalized sync");
 
-    let seam_height = crate::Height(mockchain.active_height() - 100);
+    let seam_height = finalized_height_floor(mockchain.active_height());
     let nfs_seam_hash = nfs
         .heights_to_hashes
         .get(&seam_height)
@@ -70,7 +70,7 @@ async fn block_is_evicted_from_nfs_when_finalized_advances_past_it() {
     let (_blocks, _indexer, index_reader, mockchain) =
         load_test_vectors_and_sync_chain_index(true).await;
 
-    let initial_seam_height = crate::Height(mockchain.active_height() - 100);
+    let initial_seam_height = finalized_height_floor(mockchain.active_height());
 
     let initial_snapshot = index_reader.snapshot_nonfinalized_state().await.unwrap();
     let initial_nfs = initial_snapshot

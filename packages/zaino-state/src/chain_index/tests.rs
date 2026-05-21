@@ -29,6 +29,7 @@ use zaino_common::{network::ActivationHeights, DatabaseConfig, Network, StorageC
 
 use crate::{
     chain_index::{
+        finalized_height_floor,
         source::mockchain_source::MockchainSource,
         tests::vectors::{
             build_active_mockchain_source, build_mockchain_source, load_test_vectors,
@@ -122,7 +123,7 @@ async fn load_with_settings(
 
     loop {
         let check_height: u32 = match active_mockchain_source {
-            true => source.active_height() - 100,
+            true => finalized_height_floor(source.active_height()).0,
             false => 100,
         };
         if index_reader.finalized_state.db_height().await.unwrap()
