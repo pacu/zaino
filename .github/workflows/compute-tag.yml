@@ -21,7 +21,8 @@ jobs:
         id: taggen
         run: |
           source .env.testing-artifacts
+          RUST_VERSION=$(./tools/scripts/get-rust-version.sh)
           export RUST_VERSION ZCASH_VERSION ZEBRA_VERSION DOCKER_DIR_HASH
-          TAG=$(./utils/get-ci-image-tag.sh)
+          TAG=$(./tools/scripts/get-ci-image-tag.sh)
           echo "TAG=$TAG"
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"

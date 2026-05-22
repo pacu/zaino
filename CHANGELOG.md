@@ -6,19 +6,41 @@ and this library adheres to Rust's notion of
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## Unreleased
+- [943] Zallet regtest fixes
+- [1065] Move functionality to BlockChainSource: t-address rpcs
+
+### Added
+- `zaino-state::chain_index::source::BlockchainSource` and
+  `zaino-state::chain_index::ChainIndex` now expose transparent-address query
+  methods for deltas, balances, txids, and UTXOs.
+### Changed
+- Integration tests now use `corez`, with Zcash, Zebra, and Zingo dependencies
+  updated to releases and companion branches that no longer depend on the
+  yanked `core2` crate.
+- Integration tests now follow the companion Zingo corez migration branches and
+  use `zcash_client_backend` 0.22, with deprecated nullifier-range client calls
+  allowed locally until they are replaced.
+- `JsonRpSeeConnector::get_tree_state` now returns a `GetTreestateResponse`
+  whose `sapling` and `orchard` fields are optional. In regtest mode, these
+  fields may be omitted when the corresponding network upgrade activation
+  height is not configured.
+### Removed
+### Deprecated
+
+## [v0.2.0] - 2026-03-25
 - [808] Adopt lightclient-protocol v0.4.0
 
-### Added 
+### Added
 ### Changed
 - zaino-proto now references v0.4.0 files
 - `zaino_fetch::jsonrpsee::response::ErrorsTimestamp` no longer supports a String
-  variant. 
+  variant.
 ### Removed
 
 ### Deprecated
-- `zaino-fetch::chain:to_compact` in favor of `to_compact_tx` which takes an 
+- `zaino-fetch::chain:to_compact` in favor of `to_compact_tx` which takes an
   optional height and a `PoolTypeFilter` (see zaino-proto changes)
-- 
+-
 ## [v0.4.0] - 2025-12-03
 
 ### Added
