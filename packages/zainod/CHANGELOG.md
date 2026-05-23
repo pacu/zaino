@@ -14,6 +14,13 @@ and this crate adheres to Rust's notion of
 ### Removed
 ### Fixed
 
+## [0.3.1] - 2026-05-22
+
+Re-release of 0.3.0 to publish the binary's container image under the
+new `zainod` Docker Hub repository alongside the legacy `zaino`
+repository (#1133). No functional changes to the binary or
+`zainodlib` API since 0.3.0.
+
 ## [0.3.0] - 2026-05-19
 
 ### Added
