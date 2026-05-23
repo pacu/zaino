@@ -1,4 +1,4 @@
-use super::load_test_vectors_and_sync_chain_index;
+use super::{load_test_vectors_and_sync_chain_index, MockchainMode};
 use crate::{
     chain_index::{
         source::mockchain_source::MockchainSource,
@@ -61,7 +61,7 @@ fn faucet_transparent_address() -> String {
 #[tokio::test(flavor = "multi_thread")]
 async fn get_block_range() {
     let (blocks, _indexer, index_reader, _mockchain) =
-        load_test_vectors_and_sync_chain_index(false).await;
+        load_test_vectors_and_sync_chain_index(MockchainMode::Static).await;
     let nonfinalized_snapshot = index_reader.snapshot_nonfinalized_state().await.unwrap();
 
     let start = crate::Height(0);
@@ -86,7 +86,7 @@ async fn get_block_range() {
 #[tokio::test(flavor = "multi_thread")]
 async fn get_raw_transaction() {
     let (blocks, _indexer, index_reader, _mockchain) =
-        load_test_vectors_and_sync_chain_index(false).await;
+        load_test_vectors_and_sync_chain_index(MockchainMode::Static).await;
     let nonfinalized_snapshot = index_reader.snapshot_nonfinalized_state().await.unwrap();
     for (expected_transaction, height) in blocks.into_iter().flat_map(|block| {
         block
@@ -127,7 +127,7 @@ async fn get_raw_transaction() {
 #[tokio::test(flavor = "multi_thread")]
 async fn get_transaction_status() {
     let (blocks, _indexer, index_reader, _mockchain) =
-        load_test_vectors_and_sync_chain_index(false).await;
+        load_test_vectors_and_sync_chain_index(MockchainMode::Static).await;
     let nonfinalized_snapshot = index_reader.snapshot_nonfinalized_state().await.unwrap();
 
     for (expected_transaction, block_hash, block_height) in blocks.into_iter().flat_map(|block| {
@@ -169,7 +169,7 @@ async fn get_transaction_status() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
 async fn sync_blocks_after_startup() {
     let (_blocks, _indexer, index_reader, mockchain) =
-        load_test_vectors_and_sync_chain_index(true).await;
+        load_test_vectors_and_sync_chain_index(MockchainMode::Active).await;
 
     let indexer_tip = dbg!(
         &index_reader
@@ -208,7 +208,7 @@ async fn sync_blocks_after_startup() {
 #[tokio::test(flavor = "multi_thread")]
 async fn get_mempool_transaction() {
     let (blocks, _indexer, index_reader, mockchain) =
-        load_test_vectors_and_sync_chain_index(true).await;
+        load_test_vectors_and_sync_chain_index(MockchainMode::Active).await;
     let block_data: Vec<zebra_chain::block::Block> = blocks
         .iter()
         .map(|TestVectorBlockData { zebra_block, .. }| zebra_block.clone())
@@ -256,7 +256,7 @@ async fn get_mempool_transaction() {
 #[tokio::test(flavor = "multi_thread")]
 async fn get_mempool_transaction_status() {
     let (blocks, _indexer, index_reader, mockchain) =
-        load_test_vectors_and_sync_chain_index(true).await;
+        load_test_vectors_and_sync_chain_index(MockchainMode::Active).await;
     let block_data: Vec<zebra_chain::block::Block> = blocks
         .iter()
         .map(|TestVectorBlockData { zebra_block, .. }| zebra_block.clone())
@@ -302,7 +302,7 @@ async fn get_mempool_transaction_status() {
 #[tokio::test(flavor = "multi_thread")]
 async fn get_mempool_transactions() {
     let (blocks, _indexer, index_reader, mockchain) =
-        load_test_vectors_and_sync_chain_index(true).await;
+        load_test_vectors_and_sync_chain_index(MockchainMode::Active).await;
     let block_data: Vec<zebra_chain::block::Block> = blocks
         .iter()
         .map(|TestVectorBlockData { zebra_block, .. }| zebra_block.clone())
@@ -348,7 +348,7 @@ async fn get_mempool_transactions() {
 #[tokio::test(flavor = "multi_thread")]
 async fn get_filtered_mempool_transactions() {
     let (blocks, _indexer, index_reader, mockchain) =
-        load_test_vectors_and_sync_chain_index(true).await;
+        load_test_vectors_and_sync_chain_index(MockchainMode::Active).await;
     let block_data: Vec<zebra_chain::block::Block> = blocks
         .iter()
         .map(|TestVectorBlockData { zebra_block, .. }| zebra_block.clone())
@@ -397,7 +397,7 @@ async fn get_filtered_mempool_transactions() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
 async fn get_mempool_stream_no_expected_chain_tip_snapshot() {
     let (blocks, _indexer, index_reader, mockchain) =
-        load_test_vectors_and_sync_chain_index(true).await;
+        load_test_vectors_and_sync_chain_index(MockchainMode::Active).await;
 
     let block_data: Vec<zebra_chain::block::Block> = blocks
         .iter()
@@ -458,7 +458,7 @@ async fn get_mempool_stream_no_expected_chain_tip_snapshot() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
 async fn get_mempool_stream_correct_expected_chain_tip_snapshot() {
     let (blocks, _indexer, index_reader, mockchain) =
-        load_test_vectors_and_sync_chain_index(true).await;
+        load_test_vectors_and_sync_chain_index(MockchainMode::Active).await;
 
     let block_data: Vec<zebra_chain::block::Block> = blocks
         .iter()
@@ -520,7 +520,7 @@ async fn get_mempool_stream_correct_expected_chain_tip_snapshot() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
 async fn get_mempool_stream_for_stale_snapshot() {
     let (_blocks, _indexer, index_reader, mockchain) =
-        load_test_vectors_and_sync_chain_index(true).await;
+        load_test_vectors_and_sync_chain_index(MockchainMode::Active).await;
     wait_for_indexer_tip(&index_reader, mockchain.active_height()).await;
 
     let stale_nonfinalized_snapshot = index_reader.snapshot_nonfinalized_state().await.unwrap();
@@ -536,7 +536,7 @@ async fn get_mempool_stream_for_stale_snapshot() {
 #[tokio::test(flavor = "multi_thread")]
 async fn get_block_height() {
     let (blocks, _indexer, index_reader, _mockchain) =
-        load_test_vectors_and_sync_chain_index(false).await;
+        load_test_vectors_and_sync_chain_index(MockchainMode::Static).await;
     let nonfinalized_snapshot = index_reader.snapshot_nonfinalized_state().await.unwrap();
 
     // Positive cases: every known best-chain block returns its height
@@ -568,7 +568,7 @@ async fn get_block_height() {
 #[tokio::test(flavor = "multi_thread")]
 async fn get_treestate() {
     let (blocks, _indexer, index_reader, _mockchain) =
-        load_test_vectors_and_sync_chain_index(false).await;
+        load_test_vectors_and_sync_chain_index(MockchainMode::Static).await;
 
     for TestVectorBlockData {
         zebra_block,
@@ -596,7 +596,7 @@ async fn get_treestate() {
 #[tokio::test(flavor = "multi_thread")]
 async fn get_address_deltas() {
     let (_blocks, _indexer, index_reader, mockchain) =
-        load_test_vectors_and_sync_chain_index(false).await;
+        load_test_vectors_and_sync_chain_index(MockchainMode::Static).await;
 
     let transparent_address = faucet_transparent_address();
     let active_height = mockchain.active_height();
@@ -662,7 +662,7 @@ async fn get_address_deltas() {
 #[tokio::test(flavor = "multi_thread")]
 async fn get_address_balance() {
     let (_blocks, _indexer, index_reader, mockchain) =
-        load_test_vectors_and_sync_chain_index(false).await;
+        load_test_vectors_and_sync_chain_index(MockchainMode::Static).await;
 
     let transparent_address = faucet_transparent_address();
 
@@ -695,7 +695,7 @@ async fn get_address_balance() {
 #[tokio::test(flavor = "multi_thread")]
 async fn get_address_txids() {
     let (_blocks, _indexer, index_reader, mockchain) =
-        load_test_vectors_and_sync_chain_index(false).await;
+        load_test_vectors_and_sync_chain_index(MockchainMode::Static).await;
 
     let transparent_address = faucet_transparent_address();
     let active_height = mockchain.active_height();
@@ -745,7 +745,7 @@ async fn get_address_txids() {
 #[tokio::test(flavor = "multi_thread")]
 async fn get_address_utxos() {
     let (_blocks, _indexer, index_reader, mockchain) =
-        load_test_vectors_and_sync_chain_index(false).await;
+        load_test_vectors_and_sync_chain_index(MockchainMode::Static).await;
 
     let transparent_address = faucet_transparent_address();
 

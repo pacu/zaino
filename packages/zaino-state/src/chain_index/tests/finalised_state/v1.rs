@@ -2,8 +2,7 @@
 
 use hex::ToHex;
 use std::collections::HashMap;
-use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 use tempfile::TempDir;
 use zaino_common::network::ActivationHeights;
@@ -17,8 +16,8 @@ use crate::chain_index::finalised_state::ZainoDB;
 use crate::chain_index::source::mockchain_source::MockchainSource;
 use crate::chain_index::tests::init_tracing;
 use crate::chain_index::tests::vectors::{
-    build_mockchain_source, index_test_vector_blocks, indexed_block_chain, load_test_vectors,
-    TestVectorBlockData, TestVectorData,
+    build_mockchain_source, copy_dir_recursive, index_test_vector_blocks, indexed_block_chain,
+    load_test_vectors, TestVectorBlockData, TestVectorData,
 };
 
 use crate::chain_index::types::TransactionHash;
@@ -28,22 +27,6 @@ use crate::error::FinalisedStateError;
 use crate::{BlockCacheConfig, BlockMetadata, BlockWithMetadata, ChainWork, Height, IndexedBlock};
 
 use crate::{AddrScript, Outpoint};
-
-fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
-    fs::create_dir_all(dst)?;
-    for entry in fs::read_dir(src)? {
-        let entry = entry?;
-        let file_type = entry.file_type()?;
-        let dst_path = dst.join(entry.file_name());
-
-        if file_type.is_dir() {
-            copy_dir_recursive(&entry.path(), &dst_path)?;
-        } else {
-            fs::copy(entry.path(), dst_path)?;
-        }
-    }
-    Ok(())
-}
 
 pub(crate) async fn spawn_v1_zaino_db(
     source: MockchainSource,

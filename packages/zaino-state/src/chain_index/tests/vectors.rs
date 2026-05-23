@@ -2,6 +2,7 @@
 
 use corez::io::{self, Read};
 use std::collections::HashMap;
+use std::fs;
 use std::io::BufReader;
 use std::path::Path;
 use std::sync::Arc;
@@ -55,6 +56,28 @@ pub async fn sync_db_with_blockdata(
         }
         db.write_block(chain_block).await.unwrap();
     }
+}
+
+/// Recursively copies `src` into `dst`, creating `dst` if it does not exist.
+/// Used by tests to seed a fresh tempdir from a pre-built fixture DB so each
+/// test gets an isolated, writable copy without paying for a fresh ingest.
+pub(in crate::chain_index::tests) fn copy_dir_recursive(
+    src: &Path,
+    dst: &Path,
+) -> std::io::Result<()> {
+    fs::create_dir_all(dst)?;
+    for entry in fs::read_dir(src)? {
+        let entry = entry?;
+        let file_type = entry.file_type()?;
+        let dst_path = dst.join(entry.file_name());
+
+        if file_type.is_dir() {
+            copy_dir_recursive(&entry.path(), &dst_path)?;
+        } else {
+            fs::copy(entry.path(), dst_path)?;
+        }
+    }
+    Ok(())
 }
 
 /// Sole source of truth for materialising the regtest `IndexedBlock` chain
