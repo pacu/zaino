@@ -1,6 +1,7 @@
 //! Test vector creation and validity tests, MockchainSource creation.
 
 use corez::io::{self, Read};
+use std::collections::HashMap;
 use std::io::BufReader;
 use std::path::Path;
 use std::sync::Arc;
@@ -12,7 +13,7 @@ use zebra_rpc::methods::GetAddressUtxos;
 use crate::chain_index::source::mockchain_source::MockchainSource;
 use crate::{
     read_u32_le, read_u64_le, BlockHash, BlockMetadata, BlockWithMetadata, ChainWork, CompactSize,
-    IndexedBlock,
+    CompactTxData, IndexedBlock,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -92,6 +93,66 @@ pub async fn sync_db_with_blockdata(
 
         db.write_block(chain_block).await.unwrap();
     }
+}
+
+/// Builds the `IndexedBlock` chain for a sequence of test-vector blocks,
+/// threading chainwork between blocks, alongside a flat
+/// `(block_height, tx_index) → CompactTxData` lookup. Lets a test walk the
+/// indexed chain once for whatever scan it needs and then resolve
+/// spender-by-`(height, tx_index)` references in O(1) without rebuilding any
+/// `IndexedBlock`.
+pub(crate) fn index_test_vector_blocks(
+    blocks: &[TestVectorBlockData],
+) -> (Vec<IndexedBlock>, HashMap<(u32, u64), CompactTxData>) {
+    let mut indexed_blocks = Vec::with_capacity(blocks.len());
+    let mut tx_by_index: HashMap<(u32, u64), CompactTxData> = HashMap::new();
+    let mut parent_chain_work = ChainWork::from_u256(0.into());
+
+    for TestVectorBlockData {
+        zebra_block,
+        sapling_root,
+        sapling_tree_size,
+        orchard_root,
+        orchard_tree_size,
+        ..
+    } in blocks
+    {
+        let metadata = BlockMetadata::new(
+            *sapling_root,
+            *sapling_tree_size as u32,
+            *orchard_root,
+            *orchard_tree_size as u32,
+            parent_chain_work,
+            zebra_chain::parameters::Network::new_regtest(
+                zebra_chain::parameters::testnet::ConfiguredActivationHeights {
+                    before_overwinter: Some(1),
+                    overwinter: Some(1),
+                    sapling: Some(1),
+                    blossom: Some(1),
+                    heartwood: Some(1),
+                    canopy: Some(1),
+                    nu5: Some(1),
+                    nu6: Some(1),
+                    // see https://zips.z.cash/#nu6-1-candidate-zips for info on NU6.1
+                    nu6_1: None,
+                    nu7: None,
+                }
+                .into(),
+            ),
+        );
+
+        let chain_block =
+            IndexedBlock::try_from(BlockWithMetadata::new(zebra_block, metadata)).unwrap();
+        parent_chain_work = chain_block.context.chainwork;
+
+        let block_height = chain_block.context.index.height.0;
+        for tx in chain_block.transactions() {
+            tx_by_index.insert((block_height, tx.index()), tx.clone());
+        }
+        indexed_blocks.push(chain_block);
+    }
+
+    (indexed_blocks, tx_by_index)
 }
 
 // TODO: Add custom MockChain block data structs to simplify unit test interface

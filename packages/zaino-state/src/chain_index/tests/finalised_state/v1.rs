@@ -17,7 +17,8 @@ use crate::chain_index::finalised_state::ZainoDB;
 use crate::chain_index::source::mockchain_source::MockchainSource;
 use crate::chain_index::tests::init_tracing;
 use crate::chain_index::tests::vectors::{
-    build_mockchain_source, load_test_vectors, TestVectorBlockData, TestVectorData,
+    build_mockchain_source, index_test_vector_blocks, load_test_vectors, TestVectorBlockData,
+    TestVectorData,
 };
 
 use crate::chain_index::types::TransactionHash;
@@ -913,50 +914,11 @@ async fn check_faucet_spent_map() {
     let faucet_addr_script = AddrScript::from_script(faucet_script.as_raw_bytes())
         .expect("faucet script must be standard P2PKH or P2SH");
 
-    // collect faucet outpoints
+    let (indexed_blocks, tx_by_index) = index_test_vector_blocks(&blocks);
+
     let mut faucet_outpoints = Vec::new();
     let mut faucet_ouptpoints_spent_status = Vec::new();
-
-    let mut parent_chain_work = ChainWork::from_u256(0.into());
-
-    for TestVectorBlockData {
-        zebra_block,
-        sapling_root,
-        sapling_tree_size,
-        orchard_root,
-        orchard_tree_size,
-        ..
-    } in blocks.iter()
-    {
-        let metadata = BlockMetadata::new(
-            *sapling_root,
-            *sapling_tree_size as u32,
-            *orchard_root,
-            *orchard_tree_size as u32,
-            parent_chain_work,
-            zebra_chain::parameters::Network::new_regtest(
-                zebra_chain::parameters::testnet::ConfiguredActivationHeights {
-                    before_overwinter: Some(1),
-                    overwinter: Some(1),
-                    sapling: Some(1),
-                    blossom: Some(1),
-                    heartwood: Some(1),
-                    canopy: Some(1),
-                    nu5: Some(1),
-                    nu6: Some(1),
-                    // see https://zips.z.cash/#nu6-1-candidate-zips for info on NU6.1
-                    nu6_1: None,
-                    nu7: None,
-                }
-                .into(),
-            ),
-        );
-
-        let block_with_metadata = BlockWithMetadata::new(zebra_block, metadata);
-        let chain_block = IndexedBlock::try_from(block_with_metadata).unwrap();
-
-        parent_chain_work = chain_block.context.chainwork;
-
+    for chain_block in &indexed_blocks {
         for tx in chain_block.transactions() {
             let txid = tx.txid().0;
             let outputs = tx.transparent().outputs();
@@ -998,42 +960,10 @@ async fn check_faucet_spent_map() {
         );
         match spender_option {
             Some(spender_index) => {
-                let spender_tx = blocks.iter().find_map(
-                    |TestVectorBlockData {
-                         zebra_block,
-                         sapling_root,
-                         sapling_tree_size,
-                         orchard_root,
-                         orchard_tree_size,
-                         ..
-                     }| {
-                        // NOTE: Currently using default here.
-                        let parent_chain_work = ChainWork::from_u256(0.into());
-                        let metadata = BlockMetadata::new(
-                            *sapling_root,
-                            *sapling_tree_size as u32,
-                            *orchard_root,
-                            *orchard_tree_size as u32,
-                            parent_chain_work,
-                            zaino_common::Network::Regtest(ActivationHeights::default())
-                                .to_zebra_network(),
-                        );
-                        let chain_block =
-                            IndexedBlock::try_from(BlockWithMetadata::new(zebra_block, metadata))
-                                .unwrap();
-
-                        chain_block
-                            .transactions()
-                            .iter()
-                            .find(|tx| {
-                                let (block_height, tx_idx) =
-                                    (spender_index.block_height(), spender_index.tx_index());
-                                chain_block.context.index.height == Height(block_height)
-                                    && tx.index() == tx_idx as u64
-                            })
-                            .cloned()
-                    },
-                );
+                let spender_tx = tx_by_index.get(&(
+                    spender_index.block_height(),
+                    spender_index.tx_index() as u64,
+                ));
                 assert!(
                     spender_tx.is_some(),
                     "Spender transaction not found in blocks!"
@@ -1082,50 +1012,11 @@ async fn check_recipient_spent_map() {
     let recipient_addr_script = AddrScript::from_script(recipient_script.as_raw_bytes())
         .expect("faucet script must be standard P2PKH or P2SH");
 
-    // collect faucet outpoints
+    let (indexed_blocks, tx_by_index) = index_test_vector_blocks(&blocks);
+
     let mut recipient_outpoints = Vec::new();
     let mut recipient_ouptpoints_spent_status = Vec::new();
-
-    let mut parent_chain_work = ChainWork::from_u256(0.into());
-
-    for TestVectorBlockData {
-        zebra_block,
-        sapling_root,
-        sapling_tree_size,
-        orchard_root,
-        orchard_tree_size,
-        ..
-    } in blocks.iter()
-    {
-        let metadata = BlockMetadata::new(
-            *sapling_root,
-            *sapling_tree_size as u32,
-            *orchard_root,
-            *orchard_tree_size as u32,
-            parent_chain_work,
-            zebra_chain::parameters::Network::new_regtest(
-                zebra_chain::parameters::testnet::ConfiguredActivationHeights {
-                    before_overwinter: Some(1),
-                    overwinter: Some(1),
-                    sapling: Some(1),
-                    blossom: Some(1),
-                    heartwood: Some(1),
-                    canopy: Some(1),
-                    nu5: Some(1),
-                    nu6: Some(1),
-                    // see https://zips.z.cash/#nu6-1-candidate-zips for info on NU6.1
-                    nu6_1: None,
-                    nu7: None,
-                }
-                .into(),
-            ),
-        );
-
-        let block_with_metadata = BlockWithMetadata::new(zebra_block, metadata);
-        let chain_block = IndexedBlock::try_from(block_with_metadata).unwrap();
-
-        parent_chain_work = chain_block.context.chainwork;
-
+    for chain_block in &indexed_blocks {
         for tx in chain_block.transactions() {
             let txid = tx.txid().0;
             let outputs = tx.transparent().outputs();
@@ -1167,42 +1058,10 @@ async fn check_recipient_spent_map() {
         );
         match spender_option {
             Some(spender_index) => {
-                let spender_tx = blocks.iter().find_map(
-                    |TestVectorBlockData {
-                         zebra_block,
-                         sapling_root,
-                         sapling_tree_size,
-                         orchard_root,
-                         orchard_tree_size,
-                         ..
-                     }| {
-                        // NOTE: Currently using default here.
-                        let parent_chain_work = ChainWork::from_u256(0.into());
-                        let metadata = BlockMetadata::new(
-                            *sapling_root,
-                            *sapling_tree_size as u32,
-                            *orchard_root,
-                            *orchard_tree_size as u32,
-                            parent_chain_work,
-                            zaino_common::Network::Regtest(ActivationHeights::default())
-                                .to_zebra_network(),
-                        );
-                        let chain_block =
-                            IndexedBlock::try_from(BlockWithMetadata::new(zebra_block, metadata))
-                                .unwrap();
-
-                        chain_block
-                            .transactions()
-                            .iter()
-                            .find(|tx| {
-                                let (block_height, tx_idx) =
-                                    (spender_index.block_height(), spender_index.tx_index());
-                                chain_block.context.index.height == Height(block_height)
-                                    && tx.index() == tx_idx as u64
-                            })
-                            .cloned()
-                    },
-                );
+                let spender_tx = tx_by_index.get(&(
+                    spender_index.block_height(),
+                    spender_index.tx_index() as u64,
+                ));
                 assert!(
                     spender_tx.is_some(),
                     "Spender transaction not found in blocks!"
