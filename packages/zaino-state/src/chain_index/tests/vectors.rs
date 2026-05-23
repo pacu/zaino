@@ -47,81 +47,33 @@ pub async fn sync_db_with_blockdata(
     vector_data: Vec<TestVectorBlockData>,
     height_limit: Option<u32>,
 ) {
-    let mut parent_chain_work = ChainWork::from_u256(0.into());
-    for TestVectorBlockData {
-        height,
-        zebra_block,
-        sapling_root,
-        sapling_tree_size,
-        orchard_root,
-        orchard_tree_size,
-        ..
-    } in vector_data
-    {
+    for chain_block in indexed_block_chain(&vector_data) {
         if let Some(h) = height_limit {
-            if height > h {
+            if chain_block.context.index.height.0 > h {
                 break;
             }
         }
-        let metadata = BlockMetadata::new(
-            sapling_root,
-            sapling_tree_size as u32,
-            orchard_root,
-            orchard_tree_size as u32,
-            parent_chain_work,
-            zebra_chain::parameters::Network::new_regtest(
-                zebra_chain::parameters::testnet::ConfiguredActivationHeights {
-                    before_overwinter: Some(1),
-                    overwinter: Some(1),
-                    sapling: Some(1),
-                    blossom: Some(1),
-                    heartwood: Some(1),
-                    canopy: Some(1),
-                    nu5: Some(1),
-                    nu6: Some(1),
-                    // see https://zips.z.cash/#nu6-1-candidate-zips for info on NU6.1
-                    nu6_1: None,
-                    nu7: None,
-                }
-                .into(),
-            ),
-        );
-
-        let block_with_metadata = BlockWithMetadata::new(&zebra_block, metadata);
-        let chain_block = IndexedBlock::try_from(block_with_metadata).unwrap();
-        parent_chain_work = *chain_block.chainwork();
-
         db.write_block(chain_block).await.unwrap();
     }
 }
 
-/// Builds the `IndexedBlock` chain for a sequence of test-vector blocks,
-/// threading chainwork between blocks, alongside a flat
-/// `(block_height, tx_index) → CompactTxData` lookup. Lets a test walk the
-/// indexed chain once for whatever scan it needs and then resolve
-/// spender-by-`(height, tx_index)` references in O(1) without rebuilding any
-/// `IndexedBlock`.
-pub(crate) fn index_test_vector_blocks(
+/// Sole source of truth for materialising the regtest `IndexedBlock` chain
+/// from a sequence of test-vector blocks: builds each block's `BlockMetadata`
+/// (regtest activation heights, all NUs through NU6 active at height 1) and
+/// threads cumulative chainwork between successive blocks. Returned lazily so
+/// each call site picks its own consumption strategy (by-value iteration,
+/// collection, accumulator updates, etc.) without duplicating the metadata
+/// boilerplate.
+pub(in crate::chain_index::tests) fn indexed_block_chain(
     blocks: &[TestVectorBlockData],
-) -> (Vec<IndexedBlock>, HashMap<(u32, u64), CompactTxData>) {
-    let mut indexed_blocks = Vec::with_capacity(blocks.len());
-    let mut tx_by_index: HashMap<(u32, u64), CompactTxData> = HashMap::new();
+) -> impl Iterator<Item = IndexedBlock> + '_ {
     let mut parent_chain_work = ChainWork::from_u256(0.into());
-
-    for TestVectorBlockData {
-        zebra_block,
-        sapling_root,
-        sapling_tree_size,
-        orchard_root,
-        orchard_tree_size,
-        ..
-    } in blocks
-    {
+    blocks.iter().map(move |vector| {
         let metadata = BlockMetadata::new(
-            *sapling_root,
-            *sapling_tree_size as u32,
-            *orchard_root,
-            *orchard_tree_size as u32,
+            vector.sapling_root,
+            vector.sapling_tree_size as u32,
+            vector.orchard_root,
+            vector.orchard_tree_size as u32,
             parent_chain_work,
             zebra_chain::parameters::Network::new_regtest(
                 zebra_chain::parameters::testnet::ConfiguredActivationHeights {
@@ -140,18 +92,29 @@ pub(crate) fn index_test_vector_blocks(
                 .into(),
             ),
         );
-
         let chain_block =
-            IndexedBlock::try_from(BlockWithMetadata::new(zebra_block, metadata)).unwrap();
+            IndexedBlock::try_from(BlockWithMetadata::new(&vector.zebra_block, metadata)).unwrap();
         parent_chain_work = chain_block.context.chainwork;
+        chain_block
+    })
+}
 
+/// Materialises the `IndexedBlock` chain into a `Vec` and a flat
+/// `(block_height, tx_index) → CompactTxData` lookup, so a spender-symmetry
+/// test can walk the chain once for its outpoint scan and then resolve
+/// `(height, tx_index)` spender references in O(1).
+pub(in crate::chain_index::tests) fn index_test_vector_blocks(
+    blocks: &[TestVectorBlockData],
+) -> (Vec<IndexedBlock>, HashMap<(u32, u64), CompactTxData>) {
+    let mut indexed_blocks = Vec::with_capacity(blocks.len());
+    let mut tx_by_index: HashMap<(u32, u64), CompactTxData> = HashMap::new();
+    for chain_block in indexed_block_chain(blocks) {
         let block_height = chain_block.context.index.height.0;
         for tx in chain_block.transactions() {
             tx_by_index.insert((block_height, tx.index()), tx.clone());
         }
         indexed_blocks.push(chain_block);
     }
-
     (indexed_blocks, tx_by_index)
 }
 
