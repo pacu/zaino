@@ -400,9 +400,19 @@ fn make_chain() {
             let indexer = NodeBackedChainIndex::new(mockchain.clone(), config)
                 .await
                 .unwrap();
-            tokio::time::sleep(Duration::from_secs(5)).await;
             let index_reader = indexer.subscriber();
-            let snapshot = index_reader.snapshot_nonfinalized_state().await.unwrap();
+            let expected_block_count = segment_length * (branch_count + 1);
+            let snapshot = poll_until(
+                "indexer to ingest the full proptest chain",
+                Duration::from_secs(10),
+                Duration::from_millis(25),
+                || async {
+                    let snapshot = index_reader.snapshot_nonfinalized_state().await.ok()?;
+                    (snapshot.get_nfs_snapshot()?.blocks.len() == expected_block_count)
+                        .then_some(snapshot)
+                },
+            )
+            .await;
             let non_finalized_snapshot = snapshot.get_nfs_snapshot().expect("not synced");
             let best_tip_hash = non_finalized_snapshot.best_tip.hash;
             let best_tip_block = non_finalized_snapshot
