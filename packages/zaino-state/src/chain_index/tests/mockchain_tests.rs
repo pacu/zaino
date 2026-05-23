@@ -528,9 +528,24 @@ async fn get_mempool_stream_for_stale_snapshot() {
     mockchain.mine_blocks(1);
     wait_for_indexer_tip(&index_reader, mockchain.active_height()).await;
 
-    let mempool_stream = index_reader.get_mempool_stream(Some(&stale_nonfinalized_snapshot));
-
-    assert!(mempool_stream.is_none());
+    // `wait_for_indexer_tip` only confirms the chain-index NFS has caught
+    // up; the mempool serve loop polls `get_best_block_hash` on its own
+    // independent timer and may still hold the pre-mine chain tip for a
+    // tick or two. `get_mempool_stream(Some(stale))` returns `None` only
+    // once the mempool's tracked tip has moved past the stale snapshot's
+    // hash, so poll on that condition rather than asserting once.
+    poll_until(
+        "mempool to reject stale snapshot",
+        Duration::from_secs(10),
+        Duration::from_millis(25),
+        || async {
+            index_reader
+                .get_mempool_stream(Some(&stale_nonfinalized_snapshot))
+                .is_none()
+                .then_some(())
+        },
+    )
+    .await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
