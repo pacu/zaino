@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use std::collections::{HashMap, HashSet};
 use std::sync::{
     atomic::{AtomicU32, Ordering},
-    Arc,
+    Arc, Mutex,
 };
 use zaino_common::network::ActivationHeights;
 use zaino_fetch::jsonrpsee::response::address_deltas::BlockInfo;
@@ -148,6 +148,13 @@ pub(crate) struct MockchainSource {
     >,
     active_chain_height: Arc<AtomicU32>,
     force_requests_against_source_to_fail: Arc<std::sync::atomic::AtomicBool>,
+    /// One-shot test hook: fires on the first `get_block(HashOrHeight::Height(_))`
+    /// call after [`Self::arm_one_shot_get_block_hook`], regardless of which
+    /// height is requested. Used by race regression tests (#1126) to inject
+    /// a `mine_blocks` mid-iter, deterministically placing the iter into the
+    /// race window. Cleared after firing; subsequent `get_block` calls run
+    /// unaffected.
+    get_block_hook: Arc<Mutex<Option<Box<dyn FnOnce() + Send + Sync>>>>,
 }
 
 impl MockchainSource {
@@ -184,6 +191,7 @@ impl MockchainSource {
             force_requests_against_source_to_fail: Arc::new(std::sync::atomic::AtomicBool::new(
                 false,
             )),
+            get_block_hook: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -232,6 +240,7 @@ impl MockchainSource {
             force_requests_against_source_to_fail: Arc::new(std::sync::atomic::AtomicBool::new(
                 false,
             )),
+            get_block_hook: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -255,6 +264,23 @@ impl MockchainSource {
                         Some(target)
                     }
                 });
+    }
+
+    /// Arm a one-shot hook that fires the next time
+    /// `get_block(HashOrHeight::Height(_))` is called, before the source
+    /// checks its active height. Used by race regression tests (#1126) to
+    /// inject a mid-iter source advance at a precise point — when the
+    /// worker's height-keyed fetch path is about to fetch its first block
+    /// of the iter, regardless of which specific height it requests first.
+    ///
+    /// The closure runs synchronously inside `get_block`; do non-blocking
+    /// work only (e.g. [`Self::mine_blocks`]). The hook is cleared after
+    /// firing; replacing an armed hook is a silent overwrite.
+    pub(crate) fn arm_one_shot_get_block_hook(&self, f: Box<dyn FnOnce() + Send + Sync>) {
+        *self
+            .get_block_hook
+            .lock()
+            .expect("get_block_hook mutex poisoned") = Some(f);
     }
 
     pub(crate) fn max_chain_height(&self) -> u32 {
@@ -385,6 +411,17 @@ impl BlockchainSource for MockchainSource {
     ) -> BlockchainSourceResult<Option<Arc<zebra_chain::block::Block>>> {
         match id {
             HashOrHeight::Height(h) => {
+                // One-shot test hook fires before the active-height check so
+                // a hook that mutates active height (typically `mine_blocks`)
+                // is visible to this same call's `valid_height` lookup.
+                let hook = self
+                    .get_block_hook
+                    .lock()
+                    .expect("get_block_hook mutex poisoned")
+                    .take();
+                if let Some(f) = hook {
+                    f();
+                }
                 let Some(height_index) = self.valid_height(h.0) else {
                     return Ok(None);
                 };

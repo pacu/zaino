@@ -195,3 +195,94 @@ async fn shutdown_terminates_sync_loop_cleanly() {
         "sync loop returned Err on clean shutdown: {sync_result:?}",
     );
 }
+
+/// Deterministic reproducer for the race tracked in
+/// https://github.com/zingolabs/zaino/issues/1126.
+///
+/// Sibling test `block_is_evicted_from_nfs_when_finalized_advances_past_it`
+/// pokes at the same property — *blocks at the iter's pre-mine finalized
+/// height should be evicted from the NFS once the source advances past them*
+/// — but does so by calling `mine_blocks` from the test thread and racing
+/// the sync worker for the iter-start window. Whether the race fires depends
+/// on scheduler quirks; in CI it can pass while the bug is fully present.
+///
+/// This test forces the race window using the one-shot
+/// [`MockchainSource::arm_one_shot_get_block_hook`]. The hook fires the
+/// *first* time the worker requests `get_block(Height(_))`, which is the
+/// first call inside iter N's NFS-sync while loop *after* iter N has already
+/// committed to `chain_height = initial_active` and called
+/// `fs.sync_to_height(finalized_height_floor(initial_active))` as a no-op.
+/// From inside the hook the test mines 20 blocks; the same `get_block` call
+/// then reads the *new* `active_chain_height = initial_active + 20` and
+/// returns block `initial_active + 1`, which the worker's loop happily
+/// extends past the iter's commitment all the way to `initial_active + 20`.
+/// The iter's `update` step uses `finalized_height_floor(initial_active)`
+/// for the trim and publishes a snapshot whose lowest height is *below* the
+/// post-mine seam.
+///
+/// **The assertion below should pass once the race is fixed and fail every
+/// run while it is present.** While present, the published NFS contains
+/// blocks down to the pre-mine finalized height (the seam block from before
+/// the iter began), so `target_hash` — the block at that pre-mine finalized
+/// height — is still in `blocks`. After the fix, the iter would cap its NFS
+/// extension at the committed `chain_height`, so the post-mine blocks would
+/// land in iter N+1 (which would compute the correct post-mine finalized
+/// height and trim properly).
+#[tokio::test(flavor = "multi_thread")]
+async fn race_pre_mine_finalized_height_block_is_evicted_when_source_advances_mid_iter() {
+    let (_blocks, _indexer, index_reader, mockchain) =
+        load_test_vectors_and_sync_chain_index(MockchainMode::Active).await;
+
+    let initial_active = mockchain.active_height();
+    let pre_mine_finalized_height = finalized_height_floor(initial_active);
+
+    let initial_snapshot = index_reader.snapshot_nonfinalized_state().await.unwrap();
+    let initial_nfs = initial_snapshot
+        .get_nfs_snapshot()
+        .expect("NFS exists after harness");
+    let target_hash = *initial_nfs
+        .heights_to_hashes
+        .get(&pre_mine_finalized_height)
+        .expect("NFS retains the block at the finalized-DB tip height");
+    assert!(
+        initial_nfs.blocks.contains_key(&target_hash),
+        "precondition: block at pre-mine finalized height is in NFS",
+    );
+
+    // Arm the race window: when the worker's NFS-sync while loop makes its
+    // first `get_block(Height(_))` call, advance the chain by 20 from inside
+    // the hook. The advance happens before the source's `valid_height` check,
+    // so the same call returns a block at the new height and the worker's
+    // loop extends past its iter-committed `chain_height` — exactly the
+    // production scenario where the validator produces blocks while zaino is
+    // mid-iteration.
+    let advance: u32 = 20;
+    let mc = mockchain.clone();
+    mockchain.arm_one_shot_get_block_hook(Box::new(move || mc.mine_blocks(advance)));
+
+    let post_mine_active = initial_active + advance;
+    poll_until(
+        "NFS tip to reach post-mine height (race window forced)",
+        Duration::from_secs(10),
+        Duration::from_millis(25),
+        || async {
+            let snapshot = index_reader.snapshot_nonfinalized_state().await.ok()?;
+            let nfs = snapshot.get_nfs_snapshot()?;
+            (nfs.best_tip.height.0 == post_mine_active).then_some(())
+        },
+    )
+    .await;
+
+    let later_snapshot = index_reader.snapshot_nonfinalized_state().await.unwrap();
+    let later_nfs = later_snapshot
+        .get_nfs_snapshot()
+        .expect("NFS still exists after advance");
+
+    assert!(
+        !later_nfs.blocks.contains_key(&target_hash),
+        "block at pre-mine finalized height (height {}) must be evicted after the \
+         source advances mid-iter; published NFS overshoots its iter-committed \
+         seam (#1126)",
+        pre_mine_finalized_height.0,
+    );
+}

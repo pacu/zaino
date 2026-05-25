@@ -858,8 +858,13 @@ impl<Source: BlockchainSource> NodeBackedChainIndex<Source> {
                         }
                     };
 
-                    // Sync nfs to chain tip, trimming blocks to finalized tip.
-                    non_finalized_state.sync(fs.clone()).await?;
+                    // Sync nfs to the iter-committed `chain_height`, trimming
+                    // blocks to finalized tip. Passing `chain_height` rather
+                    // than letting NFS extend until `get_block` returns None
+                    // bounds the iter against mid-iter source advances (#1126).
+                    non_finalized_state
+                        .sync(fs.clone(), chain_height.into())
+                        .await?;
                     std::mem::drop(intermediate_nfs_for_scoping);
 
                     Ok(())
