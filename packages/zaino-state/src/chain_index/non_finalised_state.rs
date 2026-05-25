@@ -1,4 +1,4 @@
-use super::{finalised_state::ZainoDB, source::BlockchainSource};
+use super::{finalised_state::ZainoDB, source::BlockchainSource, NON_FINALIZED_DEPTH};
 use crate::{
     chain_index::types::{
         self, BlockHash, BlockIndex, BlockMetadata, BlockWithMetadata, Height, TreeRootData,
@@ -423,7 +423,9 @@ impl<Source: BlockchainSource> NonFinalizedState<Source> {
                 // we need to work backwards from it and update heights_to_hashes
                 // with it and all its parents.
             }
-            if initial_state.best_tip.height + 100 < working_snapshot.best_tip.height {
+            if initial_state.best_tip.height + NON_FINALIZED_DEPTH
+                < working_snapshot.best_tip.height
+            {
                 self.update(finalized_db.clone(), initial_state, working_snapshot)
                     .await?;
                 initial_state = self.current.load_full();

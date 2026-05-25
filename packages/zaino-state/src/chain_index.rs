@@ -19,7 +19,7 @@ use crate::chain_index::types::{BestChainLocation, NonBestChainLocation};
 use crate::error::{ChainIndexError, ChainIndexErrorKind, FinalisedStateError};
 use crate::status::Status;
 use crate::{CompactBlockStream, NamedAtomicStatus, NonFinalizedState, StatusType, SyncError};
-use crate::{IndexedBlock, TransactionHash};
+use crate::{IndexedBlock, Outpoint, TransactionHash, TxOutCompact};
 use std::collections::HashSet;
 use std::{sync::Arc, time::Duration};
 
@@ -30,8 +30,10 @@ use non_finalised_state::NonfinalizedBlockCacheSnapshot;
 use source::{BlockchainSource, ValidatorConnector};
 use tokio_stream::StreamExt;
 use tracing::{info, instrument};
-use zaino_fetch::jsonrpsee::response::address_deltas::{
-    GetAddressDeltasParams, GetAddressDeltasResponse,
+use zaino_fetch::jsonrpsee::response::{
+    address_deltas::{GetAddressDeltasParams, GetAddressDeltasResponse},
+    chain_tips::{ChainTip, ChainTipStatus, GetChainTipsResponse},
+    EmptyTxOutSetInfo, GetTxOutSetInfo, GetTxOutSetInfoResponse,
 };
 use zaino_proto::proto::utils::{compact_block_with_pool_types, PoolTypeFilter};
 use zebra_chain::parameters::ConsensusBranchId;
@@ -44,11 +46,12 @@ use zebra_rpc::{
 use zebra_state::HashOrHeight;
 
 pub mod encoding;
-/// All state at least 100 blocks old
+/// All state below [`NON_FINALIZED_DEPTH`] blocks of the best-known chain tip.
 pub mod finalised_state;
 /// State in the mempool, not yet on-chain
 pub mod mempool;
-/// State less than 100 blocks old, stored separately as it may be reorged
+/// State within [`NON_FINALIZED_DEPTH`] blocks of the best-known chain tip;
+/// stored separately as it may be reorged.
 pub mod non_finalised_state;
 /// BlockchainSource
 pub mod source;
@@ -57,6 +60,106 @@ pub mod types;
 
 #[cfg(test)]
 mod tests;
+
+/// Distance (in blocks) between the best-known chain tip and the
+/// highest block that zaino treats as part of the finalized DB.
+///
+/// Sourced from Zebra's protocol-derived reorg bound. The `+ 1`
+/// preserves the original literal-`100` behavior; deriving the
+/// depth from an explicit wider-consensus reference is tracked in
+/// zingolabs/zaino#1130.
+pub(crate) const NON_FINALIZED_DEPTH: u32 = zebra_state::MAX_BLOCK_REORG_HEIGHT + 1;
+
+/// Lower bound on zaino's finalized-DB tip, derived from the current
+/// best-known chain tip.
+///
+/// After a chain-shortening reorg this floor can move backwards while
+/// the on-disk `finalized_height` does not — finalized blocks are
+/// never evicted. Callers comparing this floor against
+/// `finalized_height` should account for the asymmetry
+/// (see zingolabs/zaino#1128).
+pub(crate) fn finalized_height_floor(chain_tip: u32) -> crate::Height {
+    crate::Height(chain_tip.saturating_sub(NON_FINALIZED_DEPTH))
+}
+
+/// Builds a zcashd-compatible `getchaintips` response from the local non-finalized snapshot.
+///
+/// zcashd enumerates block-tree leaves, always includes the active tip, and reports
+/// inactive fully-known branches as `valid-fork`. Zaino's non-finalized cache stores
+/// full blocks, not headers-only or invalid candidates, so those are the only statuses
+/// this conversion can currently emit.
+pub(crate) fn chain_tips_from_nonfinalized_snapshot(
+    snapshot: &NonfinalizedBlockCacheSnapshot,
+) -> GetChainTipsResponse {
+    let parent_hashes = snapshot
+        .blocks
+        .values()
+        .map(|block| *block.context.parent_hash())
+        .collect::<HashSet<_>>();
+
+    let mut tip_hashes = snapshot
+        .blocks
+        .keys()
+        .filter(|hash| !parent_hashes.contains(hash))
+        .copied()
+        .collect::<HashSet<_>>();
+    tip_hashes.insert(snapshot.best_tip.hash);
+
+    let mut tips = tip_hashes
+        .into_iter()
+        .filter_map(|hash| snapshot.blocks.get(&hash))
+        .map(|block| {
+            let is_active_tip = block.hash() == &snapshot.best_tip.hash;
+            let status = if is_active_tip {
+                ChainTipStatus::Active
+            } else {
+                ChainTipStatus::ValidFork
+            };
+            let branchlen = if is_active_tip {
+                0
+            } else {
+                branch_len_to_active_chain(snapshot, block)
+            };
+
+            ChainTip::new(
+                u32::from(block.height()),
+                block.hash().to_rpc_hex(),
+                branchlen,
+                status,
+            )
+        })
+        .collect::<Vec<_>>();
+
+    tips.sort_by(|left, right| {
+        right
+            .height
+            .cmp(&left.height)
+            .then_with(|| left.hash.cmp(&right.hash))
+    });
+    tips
+}
+
+fn branch_len_to_active_chain(
+    snapshot: &NonfinalizedBlockCacheSnapshot,
+    block: &IndexedBlock,
+) -> u32 {
+    let mut branch_len = 0;
+    let mut current = block;
+
+    loop {
+        if snapshot.heights_to_hashes.get(&current.height()) == Some(current.hash()) {
+            return branch_len;
+        }
+
+        branch_len += 1;
+
+        let parent_hash = current.context.parent_hash();
+        let Some(parent) = snapshot.blocks.get(parent_hash) else {
+            return branch_len;
+        };
+        current = parent;
+    }
+}
 
 /// The interface to the chain index.
 ///
@@ -412,6 +515,15 @@ pub trait ChainIndex {
     /// - bytes: Sum of all tx sizes
     /// - usage: Total memory usage for the mempool
     fn get_mempool_info(&self) -> impl std::future::Future<Output = MempoolInfo>;
+
+    /// Returns the full `gettxoutsetinfo` response, folding the non-finalised state on top of
+    /// the finalised txout-set accumulator.
+    ///
+    /// Returns [`GetTxOutSetInfoResponse::Empty`] while the indexer is still syncing the
+    /// finalised state (the accumulator's spent-index invariants are not yet established).
+    fn get_tx_out_set_info(
+        &self,
+    ) -> impl std::future::Future<Output = Result<GetTxOutSetInfoResponse, Self::Error>>;
 }
 
 /// The combined index. Contains a view of the mempool, and the full
@@ -720,7 +832,7 @@ impl<Source: BlockchainSource> NodeBackedChainIndex<Source> {
                                 "node returned no best block height",
                             ))
                         })?;
-                    let finalised_height = crate::Height(chain_height.0.saturating_sub(100));
+                    let finalised_height = finalized_height_floor(chain_height.0);
 
                     fs.sync_to_height(finalised_height, &source)
                         .await
@@ -817,6 +929,58 @@ impl<Source: BlockchainSource> NodeBackedChainIndexSubscriber<Source> {
             .combine(mempool_status);
         self.status.store(combined_status);
         combined_status
+    }
+
+    /// Returns the number of transparent outputs of `txid` that are currently unspent in the
+    /// finalised state. Returns 0 if `txid` is not indexed by the finalised state.
+    ///
+    /// Used by `get_tx_out_set_info` to seed the per-transaction unspent counter for prev
+    /// transactions first encountered as a non-finalised-state spend.
+    async fn count_finalised_unspent_outputs(
+        &self,
+        txid: TransactionHash,
+    ) -> Result<u64, ChainIndexError> {
+        let Some(tx_location) = self
+            .finalized_state
+            .get_tx_location(&txid)
+            .await
+            .map_err(|e| ChainIndexError::internal(e.to_string()))?
+        else {
+            return Ok(0);
+        };
+
+        let Some(transparent) = self
+            .finalized_state
+            .get_transparent(tx_location)
+            .await
+            .map_err(|e| ChainIndexError::internal(e.to_string()))?
+        else {
+            return Ok(0);
+        };
+
+        // Skip unspendable outputs (matches `is_unspendable_tx_out` semantics used by the
+        // accumulator). NonStandard outputs are never in the UTXO set, so they must not count
+        // toward a transaction's "remaining unspent" tally.
+        use crate::chain_index::types::db::metadata::is_unspendable_tx_out;
+        let outpoints: Vec<Outpoint> = transparent
+            .outputs()
+            .iter()
+            .enumerate()
+            .filter(|(_, out)| !is_unspendable_tx_out(out))
+            .map(|(i, _)| Outpoint::new(txid.0, i as u32))
+            .collect();
+
+        if outpoints.is_empty() {
+            return Ok(0);
+        }
+
+        let spenders = self
+            .finalized_state
+            .get_outpoint_spenders(outpoints)
+            .await
+            .map_err(|e| ChainIndexError::internal(e.to_string()))?;
+
+        Ok(spenders.into_iter().filter(|s| s.is_none()).count() as u64)
     }
 
     async fn get_fullblock_bytes_from_node(
@@ -994,7 +1158,7 @@ impl<Source: BlockchainSource> ChainIndex for NodeBackedChainIndexSubscriber<Sou
                         "validator has no best block",
                         None,
                     ))?;
-                let validator_finalized_height = types::Height(height.0.saturating_sub(100));
+                let validator_finalized_height = finalized_height_floor(height.0);
                 Ok(ChainIndexSnapshot::StillSyncingFinalizedState {
                     validator_finalized_height,
                 })
@@ -1969,6 +2133,193 @@ impl<Source: BlockchainSource> ChainIndex for NodeBackedChainIndexSubscriber<Sou
                 }
             }
         })
+    }
+
+    async fn get_tx_out_set_info(&self) -> Result<GetTxOutSetInfoResponse, Self::Error> {
+        use crate::chain_index::types::db::metadata::{
+            is_unspendable_tx_out, ZAINO_TXOUTSET_ENTRY_LEN,
+        };
+        use hex::ToHex as _;
+        use std::collections::HashMap;
+
+        let snapshot = self.snapshot_nonfinalized_state().await?;
+        let best_tip = self.best_chaintip(&snapshot).await?;
+
+        let non_finalized_snapshot = match &snapshot {
+            ChainIndexSnapshot::NonFinalizedStateExists {
+                non_finalized_snapshot,
+            } => non_finalized_snapshot,
+            ChainIndexSnapshot::StillSyncingFinalizedState { .. } => {
+                // Accumulator invariants are not established until the finalised state catches
+                // up. Match zcashd's "stats collection failed" empty-object shape.
+                return Ok(GetTxOutSetInfoResponse::Empty(EmptyTxOutSetInfo {}));
+            }
+        };
+
+        let mut accumulator = self
+            .finalized_state
+            .get_tx_out_set_info_accumulator()
+            .await
+            .map_err(|e| {
+                ChainIndexError::internal(format!(
+                    "get_tx_out_set_info: finalised accumulator unavailable: {e}"
+                ))
+            })?;
+
+        // Outputs created inside the non-finalised state, keyed by outpoint. Lets same-NFS
+        // spends resolve their prev output without touching the finalised database.
+        let mut nfs_created: HashMap<Outpoint, TxOutCompact> = HashMap::new();
+
+        // Per-transaction "currently-unspent transparent outputs" counter across the combined
+        // finalised + non-finalised UTXO set. Seeded lazily:
+        // - For NFS-created txs: starts at 0 and increments on each output added.
+        // - For purely-finalised prev txs first encountered as a spend: seeded by counting how
+        //   many of that tx's transparent outputs are unspent in the finalised state right now.
+        //
+        // We only modify `accumulator.transactions` on 0↔>0 transitions of this counter; the
+        // finalised accumulator already reflects the steady-state count for every tx not
+        // touched by the NFS walk.
+        let mut tx_unspent_count: HashMap<TransactionHash, u64> = HashMap::new();
+
+        let mut heights: Vec<types::Height> = non_finalized_snapshot
+            .heights_to_hashes
+            .keys()
+            .copied()
+            .collect();
+        heights.sort();
+
+        for height in heights {
+            let Some(block) = non_finalized_snapshot.get_chainblock_by_height(&height) else {
+                return Err(ChainIndexError::internal(format!(
+                    "get_tx_out_set_info: non-finalised snapshot height {height:?} has no block"
+                )));
+            };
+
+            for tx in block.transactions() {
+                let txid = *tx.txid();
+                let transparent = tx.transparent();
+
+                // Created outputs enter the UTXO set.
+                //
+                // NonStandard (unspendable) outputs are skipped at every level — the accumulator
+                // never saw them on the finalised side either, so they must not contribute to
+                // `transactions` or to the resolution map for later same-NFS spends.
+                for (output_index, output) in transparent.outputs().iter().enumerate() {
+                    if is_unspendable_tx_out(output) {
+                        continue;
+                    }
+                    let outpoint = Outpoint::new(txid.0, output_index as u32);
+                    accumulator
+                        .apply_added_output(&outpoint, output)
+                        .map_err(|e| ChainIndexError::internal(e.to_string()))?;
+                    nfs_created.insert(outpoint, *output);
+
+                    let entry = tx_unspent_count.entry(txid).or_insert(0);
+                    let prev = *entry;
+                    *entry += 1;
+                    if prev == 0 {
+                        // 0 -> >0 transition: this tx enters the in-set transaction count.
+                        accumulator.transactions =
+                            accumulator.transactions.checked_add(1).ok_or_else(|| {
+                                ChainIndexError::internal(
+                                    "get_tx_out_set_info: transactions counter overflow"
+                                        .to_string(),
+                                )
+                            })?;
+                    }
+                }
+
+                // Spent prev outputs leave the UTXO set.
+                for input in transparent.inputs() {
+                    if input.is_null_prevout() {
+                        continue;
+                    }
+
+                    let outpoint = Outpoint::new(*input.prevout_txid(), input.prevout_index());
+                    let prev_txid = TransactionHash::from(*outpoint.prev_txid());
+
+                    let prev_out_from_nfs = nfs_created.remove(&outpoint);
+                    let prev_out = match prev_out_from_nfs {
+                        Some(out) => out,
+                        None => self
+                            .finalized_state
+                            .get_previous_output(outpoint)
+                            .await
+                            .map_err(|e| {
+                                ChainIndexError::internal(format!(
+                                    "get_tx_out_set_info: finalised prev output for {outpoint:?} not found: {e}"
+                                ))
+                            })?,
+                    };
+
+                    accumulator
+                        .apply_removed_output(&outpoint, &prev_out)
+                        .map_err(|e| ChainIndexError::internal(e.to_string()))?;
+
+                    // Seed the prev_txid unspent counter if this is the first time we touch it.
+                    if let std::collections::hash_map::Entry::Vacant(e) =
+                        tx_unspent_count.entry(prev_txid)
+                    {
+                        let seed = self
+                            .count_finalised_unspent_outputs(prev_txid)
+                            .await
+                            .map_err(|e| {
+                                ChainIndexError::internal(format!(
+                                    "get_tx_out_set_info: cannot seed unspent counter for {prev_txid:?}: {e}"
+                                ))
+                            })?;
+                        e.insert(seed);
+                    }
+
+                    let entry = tx_unspent_count.get_mut(&prev_txid).expect("seeded above");
+                    if *entry == 0 {
+                        return Err(ChainIndexError::internal(format!(
+                            "get_tx_out_set_info: tx {prev_txid:?} unspent counter underflow"
+                        )));
+                    }
+                    *entry -= 1;
+                    if *entry == 0 {
+                        accumulator.transactions =
+                            accumulator.transactions.checked_sub(1).ok_or_else(|| {
+                                ChainIndexError::internal(
+                                    "get_tx_out_set_info: transactions counter underflow"
+                                        .to_string(),
+                                )
+                            })?;
+                    }
+                }
+            }
+        }
+
+        // Invariant: bytes_serialized == transaction_outputs * ZAINO_TXOUTSET_ENTRY_LEN.
+        let expected_bytes = accumulator
+            .transaction_outputs
+            .checked_mul(ZAINO_TXOUTSET_ENTRY_LEN)
+            .ok_or_else(|| {
+                ChainIndexError::internal(
+                    "get_tx_out_set_info: bytes_serialized invariant overflow".to_string(),
+                )
+            })?;
+        if accumulator.bytes_serialized != expected_bytes {
+            return Err(ChainIndexError::internal(format!(
+                "get_tx_out_set_info: bytes_serialized invariant violated (got {}, expected {})",
+                accumulator.bytes_serialized, expected_bytes
+            )));
+        }
+
+        let total_amount = accumulator.total_zatoshis as f64 / 1e8;
+        let hash_serialized: String = accumulator.hash_serialized.encode_hex();
+        let best_block: String = best_tip.hash.encode_hex();
+
+        Ok(GetTxOutSetInfoResponse::Info(GetTxOutSetInfo {
+            height: best_tip.height.0.into(),
+            best_block,
+            transactions: accumulator.transactions,
+            txouts: accumulator.transaction_outputs,
+            bytes_serialized: accumulator.bytes_serialized,
+            hash_serialized,
+            total_amount,
+        }))
     }
 }
 

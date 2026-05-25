@@ -34,13 +34,15 @@ use zaino_fetch::{
             block_deltas::{BlockDelta, BlockDeltas, InputDelta, OutputDelta},
             block_header::GetBlockHeader,
             block_subsidy::GetBlockSubsidy,
+            chain_tips::GetChainTipsResponse,
             mining_info::GetMiningInfoWire,
             peer_info::GetPeerInfo,
             z_validate_address::{
                 InvalidZValidateAddress, KnownZValidateAddress, ZValidateAddressResponse,
                 DEPRECATION_NOTICE as Z_VALIDATE_DEPRECATION,
             },
-            GetMempoolInfoResponse, GetNetworkSolPsResponse, GetSubtreesResponse,
+            GetMempoolInfoResponse, GetNetworkSolPsResponse, GetSpentInfoRequest,
+            GetSpentInfoResponse, GetSubtreesResponse, GetTxOutResponse, GetTxOutSetInfoResponse,
         },
     },
 };
@@ -1441,6 +1443,15 @@ impl ZcashIndexer for StateServiceSubscriber {
         Ok(self.rpc_client.get_mining_info().await?)
     }
 
+    /// Returns statistics about the unspent transaction output set.
+    ///
+    /// zcashd reference: [`gettxoutsetinfo`](https://zcash.github.io/rpc/gettxoutsetinfo.html)
+    /// method: post
+    /// tags: blockchain
+    async fn get_tx_out_set_info(&self) -> Result<GetTxOutSetInfoResponse, Self::Error> {
+        Ok(self.indexer.get_tx_out_set_info().await?)
+    }
+
     // No request parameters.
     /// Return the hex encoded hash of the best (tip) block, in the longest block chain.
     /// The Zcash source code is considered canonical:
@@ -1478,6 +1489,17 @@ impl ZcashIndexer for StateServiceSubscriber {
         };
         let h = non_finalized_snapshot.best_tip.height;
         Ok(h.into())
+    }
+
+    async fn get_chain_tips(&self) -> Result<GetChainTipsResponse, Self::Error> {
+        let snapshot = self.indexer.snapshot_nonfinalized_state().await?;
+        let Some(non_finalized_snapshot) = snapshot.get_nfs_snapshot() else {
+            return Ok(self.rpc_client.get_chain_tips().await?);
+        };
+
+        Ok(crate::chain_index::chain_tips_from_nonfinalized_snapshot(
+            non_finalized_snapshot,
+        ))
     }
 
     async fn validate_address(
@@ -1711,6 +1733,27 @@ impl ZcashIndexer for StateServiceSubscriber {
                 zebra_chain::transaction::Hash::from(txid),
             ),
         )))
+    }
+
+    /// Returns details about an unspent transaction output.
+    ///
+    /// zcashd reference: [`gettxout`](https://zcash.github.io/rpc/gettxout.html)
+    /// method: post
+    /// tags: transaction
+    async fn get_tx_out(
+        &self,
+        txid: String,
+        n: u32,
+        include_mempool: Option<bool>,
+    ) -> Result<GetTxOutResponse, Self::Error> {
+        Ok(self.rpc_client.get_tx_out(txid, n, include_mempool).await?)
+    }
+
+    async fn get_spent_info(
+        &self,
+        request: GetSpentInfoRequest,
+    ) -> Result<GetSpentInfoResponse, Self::Error> {
+        Ok(self.rpc_client.get_spent_info(request).await?)
     }
 
     async fn get_address_tx_ids(

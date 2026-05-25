@@ -8,6 +8,11 @@ and this library adheres to Rust's notion of
 ## [Unreleased]
 
 ### Added
+- `JsonRpSeeConnector::get_tx_out_set_info` — JSON-RPC client method for the
+  upstream `gettxoutsetinfo` call.
+- `jsonrpsee::response::GetTxOutSetInfoResponse` (`Info` | `Empty` untagged
+  enum), `GetTxOutSetInfo` and `EmptyTxOutSetInfo` types covering both the
+  populated and stats-collection-failed shapes returned by zcashd.
 ### Changed
 ### Deprecated
 ### Removed
