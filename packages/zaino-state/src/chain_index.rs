@@ -824,6 +824,10 @@ impl<Source: BlockchainSource> NodeBackedChainIndex<Source> {
         tokio::task::spawn(async move {
             let status = status.clone();
             let source = source.clone();
+            // Subscribe once to source-change notifications (mockchain
+            // sources fire on `mine_blocks`; real validators return None
+            // and the worker falls back to its interval timer).
+            let mut change_rx = source.subscribe_to_blocks_received();
             let mut consecutive_failures: u32 = 0;
             let mut current_backoff = timings.initial_backoff;
 
@@ -908,14 +912,21 @@ impl<Source: BlockchainSource> NodeBackedChainIndex<Source> {
                         consecutive_failures = 0;
                         current_backoff = timings.initial_backoff;
                         status.store(StatusType::Ready);
-                        // Race the post-success interval wait against
-                        // cancellation: `shutdown()`'s `cancel_token.cancel()`
-                        // releases this immediately so the next top-of-loop
-                        // check exits the worker.
+                        // Race the post-success wait against cancellation
+                        // and a source-change notification. `shutdown()`'s
+                        // `cancel_token.cancel()` releases this immediately
+                        // so the next top-of-loop check exits the worker;
+                        // a source change wakes the worker before the full
+                        // `timings.interval` elapses, so newly-mined
+                        // blocks land in the next iter without waiting on
+                        // the timer.
                         tokio::select! {
                             biased;
                             _ = cancel_token.cancelled() => return Ok(()),
-                            _ = tokio::time::sleep(timings.interval) => {}
+                            _ = source::wait_or_source_change(
+                                change_rx.as_mut(),
+                                timings.interval,
+                            ) => {}
                         }
                     }
                     Err(e) => {
