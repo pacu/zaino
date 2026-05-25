@@ -2,8 +2,7 @@
 
 use hex::ToHex;
 use std::collections::HashMap;
-use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 use tempfile::TempDir;
 use zaino_common::network::ActivationHeights;
@@ -17,7 +16,8 @@ use crate::chain_index::finalised_state::ZainoDB;
 use crate::chain_index::source::mockchain_source::MockchainSource;
 use crate::chain_index::tests::init_tracing;
 use crate::chain_index::tests::vectors::{
-    build_mockchain_source, load_test_vectors, TestVectorBlockData, TestVectorData,
+    build_mockchain_source, copy_dir_recursive, index_test_vector_blocks, indexed_block_chain,
+    load_test_vectors, TestVectorBlockData, TestVectorData,
 };
 
 use crate::chain_index::types::TransactionHash;
@@ -27,22 +27,6 @@ use crate::error::FinalisedStateError;
 use crate::{BlockCacheConfig, BlockMetadata, BlockWithMetadata, ChainWork, Height, IndexedBlock};
 
 use crate::{AddrScript, Outpoint};
-
-fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
-    fs::create_dir_all(dst)?;
-    for entry in fs::read_dir(src)? {
-        let entry = entry?;
-        let file_type = entry.file_type()?;
-        let dst_path = dst.join(entry.file_name());
-
-        if file_type.is_dir() {
-            copy_dir_recursive(&entry.path(), &dst_path)?;
-        } else {
-            fs::copy(entry.path(), dst_path)?;
-        }
-    }
-    Ok(())
-}
 
 pub(crate) async fn spawn_v1_zaino_db(
     source: MockchainSource,
@@ -372,53 +356,11 @@ async fn get_chain_blocks() {
     let (TestVectorData { blocks, .. }, _db_dir, _zaino_db, db_reader) =
         load_vectors_v1db_and_reader().await;
 
-    let mut parent_chain_work = ChainWork::from_u256(0.into());
-
-    for TestVectorBlockData {
-        height,
-        zebra_block,
-        sapling_root,
-        sapling_tree_size,
-        orchard_root,
-        orchard_tree_size,
-        ..
-    } in blocks.iter()
-    {
-        let metadata = BlockMetadata::new(
-            *sapling_root,
-            *sapling_tree_size as u32,
-            *orchard_root,
-            *orchard_tree_size as u32,
-            parent_chain_work,
-            zebra_chain::parameters::Network::new_regtest(
-                zebra_chain::parameters::testnet::ConfiguredActivationHeights {
-                    before_overwinter: Some(1),
-                    overwinter: Some(1),
-                    sapling: Some(1),
-                    blossom: Some(1),
-                    heartwood: Some(1),
-                    canopy: Some(1),
-                    nu5: Some(1),
-                    nu6: Some(1),
-                    // see https://zips.z.cash/#nu6-1-candidate-zips for info on NU6.1
-                    nu6_1: None,
-                    nu7: None,
-                }
-                .into(),
-            ),
-        );
-
-        let block_with_metadata = BlockWithMetadata::new(zebra_block, metadata);
-        let chain_block = IndexedBlock::try_from(block_with_metadata).unwrap();
-
-        parent_chain_work = chain_block.context.chainwork;
-
-        let reader_chain_block = db_reader
-            .get_chain_block_by_height(Height(*height))
-            .await
-            .unwrap();
+    for chain_block in indexed_block_chain(&blocks) {
+        let height = chain_block.context.index.height;
+        let reader_chain_block = db_reader.get_chain_block_by_height(height).await.unwrap();
         assert_eq!(Some(chain_block), reader_chain_block);
-        println!("IndexedBlock at height {height} OK");
+        println!("IndexedBlock at height {} OK", height.0);
     }
 }
 
@@ -429,50 +371,12 @@ async fn get_compact_blocks() {
     let (TestVectorData { blocks, .. }, _db_dir, _zaino_db, db_reader) =
         load_vectors_v1db_and_reader().await;
 
-    let mut parent_chain_work = ChainWork::from_u256(0.into());
-
-    for TestVectorBlockData {
-        height,
-        zebra_block,
-        sapling_root,
-        sapling_tree_size,
-        orchard_root,
-        orchard_tree_size,
-        ..
-    } in blocks.iter()
-    {
-        let metadata = BlockMetadata::new(
-            *sapling_root,
-            *sapling_tree_size as u32,
-            *orchard_root,
-            *orchard_tree_size as u32,
-            parent_chain_work,
-            zebra_chain::parameters::Network::new_regtest(
-                zebra_chain::parameters::testnet::ConfiguredActivationHeights {
-                    before_overwinter: Some(1),
-                    overwinter: Some(1),
-                    sapling: Some(1),
-                    blossom: Some(1),
-                    heartwood: Some(1),
-                    canopy: Some(1),
-                    nu5: Some(1),
-                    nu6: Some(1),
-                    // see https://zips.z.cash/#nu6-1-candidate-zips for info on NU6.1
-                    nu6_1: None,
-                    nu7: None,
-                }
-                .into(),
-            ),
-        );
-
-        let block_with_metadata = BlockWithMetadata::new(zebra_block, metadata);
-        let chain_block = IndexedBlock::try_from(block_with_metadata).unwrap();
+    for chain_block in indexed_block_chain(&blocks) {
+        let height = chain_block.context.index.height;
         let compact_block = chain_block.to_compact_block();
 
-        parent_chain_work = chain_block.context.chainwork;
-
         let reader_compact_block_default = db_reader
-            .get_compact_block(Height(*height), PoolTypeFilter::default())
+            .get_compact_block(height, PoolTypeFilter::default())
             .await
             .unwrap();
         let default_compact_block = compact_block_with_pool_types(
@@ -482,7 +386,7 @@ async fn get_compact_blocks() {
         assert_eq!(default_compact_block, reader_compact_block_default);
 
         let reader_compact_block_all_data = db_reader
-            .get_compact_block(Height(*height), PoolTypeFilter::includes_all())
+            .get_compact_block(height, PoolTypeFilter::includes_all())
             .await
             .unwrap();
         let all_data_compact_block = compact_block_with_pool_types(
@@ -491,7 +395,7 @@ async fn get_compact_blocks() {
         );
         assert_eq!(all_data_compact_block, reader_compact_block_all_data);
 
-        println!("CompactBlock at height {height} OK");
+        println!("CompactBlock at height {} OK", height.0);
     }
 }
 
@@ -563,49 +467,9 @@ async fn get_faucet_txids() {
     let faucet_addr_script = AddrScript::from_script(faucet_script.as_raw_bytes())
         .expect("faucet script must be standard P2PKH or P2SH");
 
-    let mut parent_chain_work = ChainWork::from_u256(0.into());
-
-    for TestVectorBlockData {
-        height,
-        zebra_block,
-        sapling_root,
-        sapling_tree_size,
-        orchard_root,
-        orchard_tree_size,
-        ..
-    } in blocks.iter()
-    {
-        let metadata = BlockMetadata::new(
-            *sapling_root,
-            *sapling_tree_size as u32,
-            *orchard_root,
-            *orchard_tree_size as u32,
-            parent_chain_work,
-            zebra_chain::parameters::Network::new_regtest(
-                zebra_chain::parameters::testnet::ConfiguredActivationHeights {
-                    before_overwinter: Some(1),
-                    overwinter: Some(1),
-                    sapling: Some(1),
-                    blossom: Some(1),
-                    heartwood: Some(1),
-                    canopy: Some(1),
-                    nu5: Some(1),
-                    nu6: Some(1),
-                    // see https://zips.z.cash/#nu6-1-candidate-zips for info on NU6.1
-                    nu6_1: None,
-                    nu7: None,
-                }
-                .into(),
-            ),
-        );
-
-        let block_with_metadata = BlockWithMetadata::new(zebra_block, metadata);
-        let chain_block = IndexedBlock::try_from(block_with_metadata).unwrap();
-
-        parent_chain_work = chain_block.context.chainwork;
-
-        println!("Checking faucet txids at height {height}");
-        let block_height = Height(*height);
+    for chain_block in indexed_block_chain(&blocks) {
+        let block_height = chain_block.context.index.height;
+        println!("Checking faucet txids at height {}", block_height.0);
         let block_txids: Vec<String> = chain_block
             .transactions()
             .iter()
@@ -671,49 +535,9 @@ async fn get_recipient_txids() {
     let recipient_addr_script = AddrScript::from_script(recipient_script.as_raw_bytes())
         .expect("faucet script must be standard P2PKH or P2SH");
 
-    let mut parent_chain_work = ChainWork::from_u256(0.into());
-
-    for TestVectorBlockData {
-        height,
-        zebra_block,
-        sapling_root,
-        sapling_tree_size,
-        orchard_root,
-        orchard_tree_size,
-        ..
-    } in blocks.iter()
-    {
-        let metadata = BlockMetadata::new(
-            *sapling_root,
-            *sapling_tree_size as u32,
-            *orchard_root,
-            *orchard_tree_size as u32,
-            parent_chain_work,
-            zebra_chain::parameters::Network::new_regtest(
-                zebra_chain::parameters::testnet::ConfiguredActivationHeights {
-                    before_overwinter: Some(1),
-                    overwinter: Some(1),
-                    sapling: Some(1),
-                    blossom: Some(1),
-                    heartwood: Some(1),
-                    canopy: Some(1),
-                    nu5: Some(1),
-                    nu6: Some(1),
-                    // see https://zips.z.cash/#nu6-1-candidate-zips for info on NU6.1
-                    nu6_1: None,
-                    nu7: None,
-                }
-                .into(),
-            ),
-        );
-
-        let block_with_metadata = BlockWithMetadata::new(zebra_block, metadata);
-        let chain_block = IndexedBlock::try_from(block_with_metadata).unwrap();
-
-        parent_chain_work = chain_block.context.chainwork;
-
-        println!("Checking recipient txids at height {height}");
-        let block_height = Height(*height);
+    for chain_block in indexed_block_chain(&blocks) {
+        let block_height = chain_block.context.index.height;
+        println!("Checking recipient txids at height {}", block_height.0);
         let block_txids: Vec<String> = chain_block
             .transactions()
             .iter()
@@ -913,50 +737,11 @@ async fn check_faucet_spent_map() {
     let faucet_addr_script = AddrScript::from_script(faucet_script.as_raw_bytes())
         .expect("faucet script must be standard P2PKH or P2SH");
 
-    // collect faucet outpoints
+    let (indexed_blocks, tx_by_index) = index_test_vector_blocks(&blocks);
+
     let mut faucet_outpoints = Vec::new();
     let mut faucet_ouptpoints_spent_status = Vec::new();
-
-    let mut parent_chain_work = ChainWork::from_u256(0.into());
-
-    for TestVectorBlockData {
-        zebra_block,
-        sapling_root,
-        sapling_tree_size,
-        orchard_root,
-        orchard_tree_size,
-        ..
-    } in blocks.iter()
-    {
-        let metadata = BlockMetadata::new(
-            *sapling_root,
-            *sapling_tree_size as u32,
-            *orchard_root,
-            *orchard_tree_size as u32,
-            parent_chain_work,
-            zebra_chain::parameters::Network::new_regtest(
-                zebra_chain::parameters::testnet::ConfiguredActivationHeights {
-                    before_overwinter: Some(1),
-                    overwinter: Some(1),
-                    sapling: Some(1),
-                    blossom: Some(1),
-                    heartwood: Some(1),
-                    canopy: Some(1),
-                    nu5: Some(1),
-                    nu6: Some(1),
-                    // see https://zips.z.cash/#nu6-1-candidate-zips for info on NU6.1
-                    nu6_1: None,
-                    nu7: None,
-                }
-                .into(),
-            ),
-        );
-
-        let block_with_metadata = BlockWithMetadata::new(zebra_block, metadata);
-        let chain_block = IndexedBlock::try_from(block_with_metadata).unwrap();
-
-        parent_chain_work = chain_block.context.chainwork;
-
+    for chain_block in &indexed_blocks {
         for tx in chain_block.transactions() {
             let txid = tx.txid().0;
             let outputs = tx.transparent().outputs();
@@ -998,42 +783,10 @@ async fn check_faucet_spent_map() {
         );
         match spender_option {
             Some(spender_index) => {
-                let spender_tx = blocks.iter().find_map(
-                    |TestVectorBlockData {
-                         zebra_block,
-                         sapling_root,
-                         sapling_tree_size,
-                         orchard_root,
-                         orchard_tree_size,
-                         ..
-                     }| {
-                        // NOTE: Currently using default here.
-                        let parent_chain_work = ChainWork::from_u256(0.into());
-                        let metadata = BlockMetadata::new(
-                            *sapling_root,
-                            *sapling_tree_size as u32,
-                            *orchard_root,
-                            *orchard_tree_size as u32,
-                            parent_chain_work,
-                            zaino_common::Network::Regtest(ActivationHeights::default())
-                                .to_zebra_network(),
-                        );
-                        let chain_block =
-                            IndexedBlock::try_from(BlockWithMetadata::new(zebra_block, metadata))
-                                .unwrap();
-
-                        chain_block
-                            .transactions()
-                            .iter()
-                            .find(|tx| {
-                                let (block_height, tx_idx) =
-                                    (spender_index.block_height(), spender_index.tx_index());
-                                chain_block.context.index.height == Height(block_height)
-                                    && tx.index() == tx_idx as u64
-                            })
-                            .cloned()
-                    },
-                );
+                let spender_tx = tx_by_index.get(&(
+                    spender_index.block_height(),
+                    spender_index.tx_index() as u64,
+                ));
                 assert!(
                     spender_tx.is_some(),
                     "Spender transaction not found in blocks!"
@@ -1082,50 +835,11 @@ async fn check_recipient_spent_map() {
     let recipient_addr_script = AddrScript::from_script(recipient_script.as_raw_bytes())
         .expect("faucet script must be standard P2PKH or P2SH");
 
-    // collect faucet outpoints
+    let (indexed_blocks, tx_by_index) = index_test_vector_blocks(&blocks);
+
     let mut recipient_outpoints = Vec::new();
     let mut recipient_ouptpoints_spent_status = Vec::new();
-
-    let mut parent_chain_work = ChainWork::from_u256(0.into());
-
-    for TestVectorBlockData {
-        zebra_block,
-        sapling_root,
-        sapling_tree_size,
-        orchard_root,
-        orchard_tree_size,
-        ..
-    } in blocks.iter()
-    {
-        let metadata = BlockMetadata::new(
-            *sapling_root,
-            *sapling_tree_size as u32,
-            *orchard_root,
-            *orchard_tree_size as u32,
-            parent_chain_work,
-            zebra_chain::parameters::Network::new_regtest(
-                zebra_chain::parameters::testnet::ConfiguredActivationHeights {
-                    before_overwinter: Some(1),
-                    overwinter: Some(1),
-                    sapling: Some(1),
-                    blossom: Some(1),
-                    heartwood: Some(1),
-                    canopy: Some(1),
-                    nu5: Some(1),
-                    nu6: Some(1),
-                    // see https://zips.z.cash/#nu6-1-candidate-zips for info on NU6.1
-                    nu6_1: None,
-                    nu7: None,
-                }
-                .into(),
-            ),
-        );
-
-        let block_with_metadata = BlockWithMetadata::new(zebra_block, metadata);
-        let chain_block = IndexedBlock::try_from(block_with_metadata).unwrap();
-
-        parent_chain_work = chain_block.context.chainwork;
-
+    for chain_block in &indexed_blocks {
         for tx in chain_block.transactions() {
             let txid = tx.txid().0;
             let outputs = tx.transparent().outputs();
@@ -1167,42 +881,10 @@ async fn check_recipient_spent_map() {
         );
         match spender_option {
             Some(spender_index) => {
-                let spender_tx = blocks.iter().find_map(
-                    |TestVectorBlockData {
-                         zebra_block,
-                         sapling_root,
-                         sapling_tree_size,
-                         orchard_root,
-                         orchard_tree_size,
-                         ..
-                     }| {
-                        // NOTE: Currently using default here.
-                        let parent_chain_work = ChainWork::from_u256(0.into());
-                        let metadata = BlockMetadata::new(
-                            *sapling_root,
-                            *sapling_tree_size as u32,
-                            *orchard_root,
-                            *orchard_tree_size as u32,
-                            parent_chain_work,
-                            zaino_common::Network::Regtest(ActivationHeights::default())
-                                .to_zebra_network(),
-                        );
-                        let chain_block =
-                            IndexedBlock::try_from(BlockWithMetadata::new(zebra_block, metadata))
-                                .unwrap();
-
-                        chain_block
-                            .transactions()
-                            .iter()
-                            .find(|tx| {
-                                let (block_height, tx_idx) =
-                                    (spender_index.block_height(), spender_index.tx_index());
-                                chain_block.context.index.height == Height(block_height)
-                                    && tx.index() == tx_idx as u64
-                            })
-                            .cloned()
-                    },
-                );
+                let spender_tx = tx_by_index.get(&(
+                    spender_index.block_height(),
+                    spender_index.tx_index() as u64,
+                ));
                 assert!(
                     spender_tx.is_some(),
                     "Spender transaction not found in blocks!"
@@ -1262,48 +944,7 @@ async fn tx_out_set_info_accumulator_updates_on_write() {
         HashMap<u32, crate::TxOutCompact>,
     > = HashMap::new();
 
-    // The test vectors are converted into IndexedBlock values in chain order. Each conversion
-    // needs the previous block's chainwork, so this is carried forward as we process blocks.
-    let mut parent_chain_work = ChainWork::from_u256(0.into());
-
-    for TestVectorBlockData {
-        zebra_block,
-        sapling_root,
-        sapling_tree_size,
-        orchard_root,
-        orchard_tree_size,
-        ..
-    } in blocks.iter()
-    {
-        // Rebuild the same IndexedBlock representation used by the database write path.
-        let metadata = BlockMetadata::new(
-            *sapling_root,
-            *sapling_tree_size as u32,
-            *orchard_root,
-            *orchard_tree_size as u32,
-            parent_chain_work,
-            zebra_chain::parameters::Network::new_regtest(
-                zebra_chain::parameters::testnet::ConfiguredActivationHeights {
-                    before_overwinter: Some(1),
-                    overwinter: Some(1),
-                    sapling: Some(1),
-                    blossom: Some(1),
-                    heartwood: Some(1),
-                    canopy: Some(1),
-                    nu5: Some(1),
-                    nu6: Some(1),
-                    nu6_1: None,
-                    nu7: None,
-                }
-                .into(),
-            ),
-        );
-
-        let block_with_metadata = BlockWithMetadata::new(zebra_block, metadata);
-        let chain_block = IndexedBlock::try_from(block_with_metadata).unwrap();
-
-        parent_chain_work = chain_block.context.chainwork;
-
+    for chain_block in indexed_block_chain(&blocks) {
         for transaction in chain_block.transactions() {
             // First apply spends, removing spent transparent outputs from the expected UTXO set.
             for input in transaction.transparent().inputs() {
@@ -1450,46 +1091,7 @@ async fn tx_out_set_info_accumulator_updates_on_delete() {
         HashMap<u32, crate::TxOutCompact>,
     > = HashMap::new();
 
-    let mut parent_chain_work = ChainWork::from_u256(0.into());
-
-    for TestVectorBlockData {
-        zebra_block,
-        sapling_root,
-        sapling_tree_size,
-        orchard_root,
-        orchard_tree_size,
-        ..
-    } in blocks[..blocks.len() - 1].iter()
-    {
-        // Rebuild the IndexedBlock values exactly as the DB write path sees them.
-        let metadata = BlockMetadata::new(
-            *sapling_root,
-            *sapling_tree_size as u32,
-            *orchard_root,
-            *orchard_tree_size as u32,
-            parent_chain_work,
-            zebra_chain::parameters::Network::new_regtest(
-                zebra_chain::parameters::testnet::ConfiguredActivationHeights {
-                    before_overwinter: Some(1),
-                    overwinter: Some(1),
-                    sapling: Some(1),
-                    blossom: Some(1),
-                    heartwood: Some(1),
-                    canopy: Some(1),
-                    nu5: Some(1),
-                    nu6: Some(1),
-                    nu6_1: None,
-                    nu7: None,
-                }
-                .into(),
-            ),
-        );
-
-        let block_with_metadata = BlockWithMetadata::new(zebra_block, metadata);
-        let chain_block = IndexedBlock::try_from(block_with_metadata).unwrap();
-
-        parent_chain_work = chain_block.context.chainwork;
-
+    for chain_block in indexed_block_chain(&blocks[..blocks.len() - 1]) {
         for transaction in chain_block.transactions() {
             // Remove any transparent outputs spent by this transaction.
             for input in transaction.transparent().inputs() {

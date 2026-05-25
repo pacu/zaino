@@ -20,7 +20,7 @@
 //! omitted: that variant is being eliminated, and pinning its shape
 //! would create immediate test churn at the refactor PR.
 
-use super::{load_test_vectors_and_sync_chain_index, poll::poll_until};
+use super::{load_test_vectors_and_sync_chain_index, poll::poll_until, MockchainMode};
 use crate::chain_index::{finalized_height_floor, ChainIndex};
 use std::time::Duration;
 use tokio::time::sleep;
@@ -32,7 +32,7 @@ use tokio::time::sleep;
 #[tokio::test(flavor = "multi_thread")]
 async fn nfs_lowest_block_matches_finalized_db_tip() {
     let (_blocks, _indexer, index_reader, mockchain) =
-        load_test_vectors_and_sync_chain_index(true).await;
+        load_test_vectors_and_sync_chain_index(MockchainMode::Active).await;
 
     let snapshot = index_reader.snapshot_nonfinalized_state().await.unwrap();
     let nfs = snapshot
@@ -68,7 +68,7 @@ async fn nfs_lowest_block_matches_finalized_db_tip() {
 #[tokio::test(flavor = "multi_thread")]
 async fn block_is_evicted_from_nfs_when_finalized_advances_past_it() {
     let (_blocks, _indexer, index_reader, mockchain) =
-        load_test_vectors_and_sync_chain_index(true).await;
+        load_test_vectors_and_sync_chain_index(MockchainMode::Active).await;
 
     let initial_seam_height = finalized_height_floor(mockchain.active_height());
 
@@ -131,7 +131,7 @@ async fn block_is_evicted_from_nfs_when_finalized_advances_past_it() {
 #[tokio::test(flavor = "multi_thread")]
 async fn nfs_slot_is_monotonic_post_init() {
     let (_blocks, _indexer, index_reader, _mockchain) =
-        load_test_vectors_and_sync_chain_index(true).await;
+        load_test_vectors_and_sync_chain_index(MockchainMode::Active).await;
 
     for i in 0..10 {
         let snapshot = index_reader.snapshot_nonfinalized_state().await.unwrap();
@@ -161,7 +161,7 @@ async fn nfs_slot_is_monotonic_post_init() {
 #[tokio::test(flavor = "multi_thread")]
 async fn shutdown_terminates_sync_loop_cleanly() {
     let (_blocks, mut indexer, index_reader, mockchain) =
-        load_test_vectors_and_sync_chain_index(true).await;
+        load_test_vectors_and_sync_chain_index(MockchainMode::Active).await;
 
     let target_tip = mockchain.active_height();
     poll_until(
