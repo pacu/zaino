@@ -68,16 +68,17 @@ async fn load_test_vectors_and_sync_chain_index(
     NodeBackedChainIndexSubscriber<MockchainSource>,
     MockchainSource,
 ) {
-    // The 2 s poll interval here is load-bearing for other tests: most
+    // 25 ms setup-poll interval mirrors `_with_timings`. The previous 2 s
+    // value was load-bearing for the teardown race tracked in #1098: most
     // callers (mockchain_tests, mempool, poll, proptest_blockgen) drop the
-    // indexer without calling `shutdown()`, relying on the background sync
-    // loop being in its post-success `interval` sleep at teardown to avoid
-    // racing with runtime shutdown. Shorter polling lets the test body
-    // return before that settle point and exposes the latent race. Tests
-    // that need faster setup should use
-    // `load_test_vectors_and_sync_chain_index_with_timings` and handle
-    // their own teardown.
-    load_with_settings(mode, SyncTimings::default(), Duration::from_secs(2)).await
+    // indexer without calling `shutdown()`, and the old worker needed to
+    // be parked in its post-success interval-sleep before runtime teardown
+    // raced a mid-iter LMDB write. With `Drop for NodeBackedChainIndex`
+    // firing `cancel_token.cancel()` and the worker's iter body wrapped in
+    // `tokio::select!` against that token, the worker now exits at its
+    // next await checkpoint on drop — the harness no longer needs to
+    // bait the timing.
+    load_with_settings(mode, SyncTimings::default(), Duration::from_millis(25)).await
 }
 
 async fn load_test_vectors_and_sync_chain_index_with_timings(
