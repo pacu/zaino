@@ -6,7 +6,7 @@ written in Rust.
 It sits between a Zcash full validator (Zebra or Zcashd) and client
 applications, serving:
 
-- the **light-wallet gRPC API** (`CompactTxStreamer`), the interface today
+- the [lightclient protocol API](https://github.com/zcash/lightwallet-protocol), the interface today
   served by [lightwalletd](https://github.com/zcash/lightwalletd), and
 - a **JSON-RPC API** covering the subset of Zcash RPCs needed by wallets and
   block explorers.
