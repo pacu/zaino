@@ -9,6 +9,7 @@ use zaino_state::{
     IndexerSubscriber, LightWalletIndexer, NamedAtomicStatus, StatusType, ZcashIndexer,
 };
 
+use zebra_chain::block::MAX_BLOCK_BYTES;
 use zebra_rpc::server::{
     cookie::{remove_from_disk, write_to_disk, Cookie},
     http_request_compatibility::HttpRequestMiddlewareLayer,
@@ -64,7 +65,8 @@ impl JsonRpcServer {
         };
 
         // Set up Zebra HTTP request compatibility middleware (handles auth and content-type issues)
-        let http_middleware_layer = HttpRequestMiddlewareLayer::new(cookie);
+        let max_request_body_size = (MAX_BLOCK_BYTES as usize) * 2 + 1024;
+        let http_middleware_layer = HttpRequestMiddlewareLayer::new(cookie, max_request_body_size);
 
         // Set up Zebra JSON-RPC call compatibility middleware (RPC version fixes)
         let rpc_middleware = RpcServiceBuilder::new()
@@ -83,16 +85,7 @@ impl JsonRpcServer {
 
         let server_handle = server.start(rpc_impl.into_rpc());
 
-        let shutdown_check_status = status.clone();
-        let mut shutdown_check_interval = interval(Duration::from_millis(100));
-        let shutdown_signal = async move {
-            loop {
-                shutdown_check_interval.tick().await;
-                if shutdown_check_status.load() == StatusType::Closing {
-                    break;
-                }
-            }
-        };
+        let shutdown_signal = shutdown_signal(status.clone());
 
         let task_status = status.clone();
         let server_task_handle = tokio::task::spawn({
@@ -147,6 +140,16 @@ impl Drop for JsonRpcServer {
             warn!(
                 "Warning: JsonRpcServer dropped without explicit shutdown. Aborting server task."
             );
+        }
+    }
+}
+
+async fn shutdown_signal(status: NamedAtomicStatus) {
+    let mut shutdown_check_interval = interval(Duration::from_millis(100));
+    loop {
+        shutdown_check_interval.tick().await;
+        if status.load() == StatusType::Closing {
+            break;
         }
     }
 }
