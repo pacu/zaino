@@ -1053,6 +1053,7 @@ async fn compact_block_from_source<Source: BlockchainSource>(
                 "orchard commitment tree size overflow",
             ))
         })?,
+        // TODO: Define an empty value https://github.com/zingolabs/zaino/issues/1158
         ChainWork::from_u256(0.into()),
         network,
     );
