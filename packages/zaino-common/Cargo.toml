@@ -28,3 +28,6 @@ time = { workspace = true }
 
 # Zingo
 zingo_common_components = { workspace = true }
+
+[dev-dependencies]
+toml = { workspace = true }
