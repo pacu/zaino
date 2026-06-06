@@ -6224,8 +6224,10 @@ dependencies = [
 [[package]]
 name = "zingo_common_components"
 version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b7ed7ebc771980a59ec5f208d5dcf40c010dce2b5d493164c9d2f7baa73e9284"
+source = "git+https://github.com/valargroup/zingo-common.git?rev=3d58a4399c00ca10779fcef5ecf8ed46f913cb84#3d58a4399c00ca10779fcef5ecf8ed46f913cb84"
+dependencies = [
+ "hex",
+]
 
 [[package]]
 name = "zip32"

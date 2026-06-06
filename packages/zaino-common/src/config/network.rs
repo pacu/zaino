@@ -142,6 +142,7 @@ impl From<ActivationHeights> for zingo_common_components::protocol::ActivationHe
             .set_nu5(val.nu5)
             .set_nu6(val.nu6)
             .set_nu6_1(val.nu6_1)
+            .set_nu6_2(val.nu6_2)
             .set_nu7(val.nu7)
             .build()
     }
@@ -222,7 +223,7 @@ impl From<zingo_common_components::protocol::ActivationHeights> for ActivationHe
             nu5: activation_heights.nu5(),
             nu6: activation_heights.nu6(),
             nu6_1: activation_heights.nu6_1(),
-            nu6_2: None,
+            nu6_2: activation_heights.nu6_2(),
             nu7: activation_heights.nu7(),
         }
     }
@@ -386,5 +387,9 @@ NU7 = 1000
         let zebra_heights: zebra_chain::parameters::testnet::ConfiguredActivationHeights =
             heights.into();
         assert_eq!(zebra_heights.nu6_2, Some(2));
+
+        let zingo_heights: zingo_common_components::protocol::ActivationHeights = heights.into();
+        let heights = ActivationHeights::from(zingo_heights);
+        assert_eq!(heights.nu6_2, Some(2));
     }
 }

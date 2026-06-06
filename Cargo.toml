@@ -28,7 +28,7 @@ license = "Apache-2.0"
 
 # Zingo
 
-zingo_common_components =  "0.3.0"
+zingo_common_components = { git = "https://github.com/valargroup/zingo-common.git", rev = "3d58a4399c00ca10779fcef5ecf8ed46f913cb84" }
 
 # Librustzcash
 incrementalmerkletree = "0.8"
