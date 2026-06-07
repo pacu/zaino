@@ -364,25 +364,20 @@ mod tests {
     use super::ActivationHeights;
 
     #[test]
-    fn activation_heights_parse_nu6_2() {
-        let heights: ActivationHeights = toml::from_str(
-            r#"
-BeforeOverwinter = 1
-Overwinter = 1
-Sapling = 1
-Blossom = 1
-Heartwood = 1
-Canopy = 1
-NU5 = 1
-NU6 = 1
-"NU6.1" = 1
-"NU6.2" = 2
-NU7 = 1000
-"#,
-        )
-        .expect("activation heights should parse");
-
-        assert_eq!(heights.nu6_2, Some(2));
+    fn activation_heights_round_trip_nu6_2() {
+        let heights = ActivationHeights {
+            before_overwinter: Some(1),
+            overwinter: Some(1),
+            sapling: Some(1),
+            blossom: Some(1),
+            heartwood: Some(1),
+            canopy: Some(1),
+            nu5: Some(1),
+            nu6: Some(1),
+            nu6_1: Some(1),
+            nu6_2: Some(2),
+            nu7: Some(1000),
+        };
 
         let zebra_heights: zebra_chain::parameters::testnet::ConfiguredActivationHeights =
             heights.into();

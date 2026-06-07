@@ -5480,7 +5480,6 @@ dependencies = [
  "serde",
  "thiserror 1.0.69",
  "time",
- "toml 0.5.11",
  "tracing",
  "tracing-subscriber",
  "tracing-tree",
