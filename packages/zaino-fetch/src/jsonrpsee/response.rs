@@ -559,6 +559,7 @@ mod get_tx_out_set_info_tests {
         assert_eq!(name, zebra_chain::parameters::NetworkUpgrade::Nu6_2);
         assert_eq!(activation_height, zebra_chain::block::Height(2));
         assert_eq!(status, zebra_rpc::methods::NetworkUpgradeStatus::Active);
+        assert_eq!(parsed.consensus.into_parts(), (0x5437f330, 0x5437f330));
     }
 }
 
