@@ -214,6 +214,9 @@ pub fn local_network_from_activation_heights(
         nu6_1: activation_heights
             .nu6_1
             .map(zcash_protocol::consensus::BlockHeight::from),
+        nu6_2: activation_heights
+            .nu6_2
+            .map(zcash_protocol::consensus::BlockHeight::from),
     }
 }
 
