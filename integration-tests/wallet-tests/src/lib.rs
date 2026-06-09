@@ -8,11 +8,16 @@
 
 #![forbid(unsafe_code)]
 
-use zaino_common::network::ActivationHeights;
+use zaino_common::network::{ActivationHeights, ZEBRAD_DEFAULT_ACTIVATION_HEIGHTS};
+use zaino_testutils::ValidatorKind;
 use zebra_chain::parameters::testnet::ConfiguredActivationHeights;
 use zingo_test_vectors::seeds;
 use zingolib::lightclient::LightClient;
 use zingolib_testutils::scenarios::ClientBuilder;
+
+/// Re-exports so relocated tests keep their original call sites.
+pub use zingolib::get_base_address_macro;
+pub use zingolib::testutils::lightclient::from_inputs;
 
 /// Holds zingo lightclients along with the lightclient builder for
 /// wallet-to-validator tests.
@@ -61,6 +66,17 @@ pub fn build_clients(zaino_grpc_listen_port: u16, activation_heights: Activation
         client_builder,
         faucet,
         recipient,
+    }
+}
+
+/// The activation heights `TestManager::launch` uses by default for a given
+/// validator (i.e. when launched with `activation_heights: None`). Relocated
+/// wallet helpers that are generic over the validator use this to build clients
+/// whose view matches the launched chain.
+pub fn default_heights(validator: &ValidatorKind) -> ActivationHeights {
+    match validator {
+        ValidatorKind::Zcashd => ActivationHeights::default(),
+        ValidatorKind::Zebrad => ZEBRAD_DEFAULT_ACTIVATION_HEIGHTS,
     }
 }
 

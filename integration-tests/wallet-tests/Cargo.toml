@@ -17,6 +17,8 @@ publish = false
 zaino-testutils = { path = "../zaino-testutils" }
 zaino-state = { path = "../../packages/zaino-state", features = ["test_dependencies"] }
 zaino-common = { path = "../../packages/zaino-common" }
+zaino-fetch = { path = "../../packages/zaino-fetch" }
+zainod = { path = "../../packages/zainod" }
 
 # Zingo wallet stack (0.14-compatible revs; this workspace owns its own lock)
 zingolib = { git = "https://github.com/zingolabs/zingolib.git", rev = "61418d6ecbc679a88da8268a2be5db3926501fc6", features = [
