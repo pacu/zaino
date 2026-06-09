@@ -232,12 +232,24 @@ impl NonfinalizedBlockCacheSnapshot {
     }
 
     fn remove_finalized_blocks(&mut self, finalized_height: Height) {
+        let top_block_hash = match self
+            .heights_to_hashes
+            .iter()
+            .max_by_key(|(height, _hash)| *height)
+        {
+            Some((_height, hash)) => *hash,
+            // We have no blocks. There's nothing to remove
+            None => return,
+        };
         // Keep the last finalized block. This means we don't have to check
         // the finalized state when the entire non-finalized state is reorged away.
-        self.blocks
-            .retain(|_hash, block| block.height() >= finalized_height);
+        // If all blocks are below the finalized height, keep the highest anyway,
+        // so we don't need to re-connect the the finalized state to get chainwork, etc.
+        self.blocks.retain(|_hash, block| {
+            block.height() >= finalized_height || block.hash() == &top_block_hash
+        });
         self.heights_to_hashes
-            .retain(|height, _hash| height >= &finalized_height);
+            .retain(|height, hash| height >= &finalized_height || hash == &top_block_hash);
     }
 
     fn add_block(&mut self, block: IndexedBlock) {
