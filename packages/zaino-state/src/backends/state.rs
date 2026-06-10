@@ -29,6 +29,7 @@ use zaino_fetch::{
     chain::{transaction::FullTransaction, utils::ParseFromSlice},
     jsonrpsee::{
         connector::{JsonRpSeeConnector, RpcError},
+        raw_transaction::validate_raw_transaction_hex,
         response::{
             address_deltas::{GetAddressDeltasParams, GetAddressDeltasResponse},
             block_deltas::{BlockDelta, BlockDeltas, InputDelta, OutputDelta},
@@ -1195,6 +1196,7 @@ impl ZcashIndexer for StateServiceSubscriber {
         &self,
         raw_transaction_hex: String,
     ) -> Result<SentTransactionHash, Self::Error> {
+        validate_raw_transaction_hex(&raw_transaction_hex).map_err(StateServiceError::RpcError)?;
         // Offload to the json rpc connector, as ReadStateService
         // doesn't yet interface with the mempool
         self.rpc_client

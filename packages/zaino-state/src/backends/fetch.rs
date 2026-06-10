@@ -26,6 +26,7 @@ use zaino_fetch::{
     chain::{transaction::FullTransaction, utils::ParseFromSlice},
     jsonrpsee::{
         connector::{JsonRpSeeConnector, RpcError},
+        raw_transaction::validate_raw_transaction_hex,
         response::{
             address_deltas::{GetAddressDeltasParams, GetAddressDeltasResponse},
             block_deltas::BlockDeltas,
@@ -391,6 +392,7 @@ impl ZcashIndexer for FetchServiceSubscriber {
         &self,
         raw_transaction_hex: String,
     ) -> Result<SentTransactionHash, Self::Error> {
+        validate_raw_transaction_hex(&raw_transaction_hex).map_err(FetchServiceError::RpcError)?;
         Ok(self
             .fetcher
             .send_raw_transaction(raw_transaction_hex)
