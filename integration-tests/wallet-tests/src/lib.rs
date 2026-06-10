@@ -59,6 +59,43 @@ impl Clients {
     }
 }
 
+/// A value pool, pairing the recipient-address kind that routes funds into it
+/// with the [`AccountBalance`] field that reflects funds received there. Lets a
+/// send-and-check test take a single `Pool` instead of an address string plus a
+/// balance-field closure.
+#[derive(Clone, Copy, Debug)]
+pub enum Pool {
+    /// Orchard (funds routed via a unified address).
+    Orchard,
+    /// Sapling.
+    Sapling,
+    /// Transparent.
+    Transparent,
+}
+
+impl Pool {
+    /// The `get_recipient_address` / `get_faucet_address` pool name that routes
+    /// funds into this pool.
+    pub fn address_kind(self) -> &'static str {
+        match self {
+            Pool::Orchard => "unified",
+            Pool::Sapling => "sapling",
+            Pool::Transparent => "transparent",
+        }
+    }
+
+    /// The balance received in this pool, in zatoshis.
+    pub fn received_balance(self, balance: &AccountBalance) -> u64 {
+        match self {
+            Pool::Orchard => balance.total_orchard_balance,
+            Pool::Sapling => balance.total_sapling_balance,
+            Pool::Transparent => balance.confirmed_transparent_balance,
+        }
+        .expect("pool balance present")
+        .into_u64()
+    }
+}
+
 /// Builds the faucet + recipient lightclients pointed at a running Zaino's
 /// gRPC port, seeded from the shared test mnemonic.
 ///

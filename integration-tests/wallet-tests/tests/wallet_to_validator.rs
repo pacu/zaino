@@ -77,12 +77,40 @@ where
     test_manager.close().await;
 }
 
-/// Send 250_000 to the recipient's `pool` address, mine a block, and assert the
-/// recipient's balance — read via `balance_of` — equals 250_000.
+/// The standard send rhythm: send `amount` to the recipient's `pool`, mine a
+/// block, sync the recipient, and assert it received `amount`. The two simple
+/// parameters (`pool`, `amount`) replace what used to be an address string plus
+/// a balance-field closure.
+async fn send_and_assert_received<V, Service>(
+    test_manager: &TestManager<V, Service>,
+    clients: &mut wallet_tests::Clients,
+    pool: wallet_tests::Pool,
+    amount: u64,
+) where
+    V: ValidatorExt,
+    Service: zaino_testutils::TestService,
+    IndexerError: From<<<Service as ZcashService>::Subscriber as ZcashIndexer>::Error>,
+    <Service as ZcashService>::Subscriber: zaino_testutils::PollableTip,
+{
+    let recipient_address = clients.get_recipient_address(pool.address_kind()).await;
+    from_inputs::quick_send(&mut clients.faucet, vec![(&recipient_address, amount, None)])
+        .await
+        .unwrap();
+    test_manager
+        .generate_blocks_and_wait_for_tip(1, test_manager.subscriber())
+        .await;
+    clients.recipient.sync_and_await().await.unwrap();
+    assert_eq!(
+        pool.received_balance(&clients.recipient_balance().await),
+        amount
+    );
+}
+
+/// Launch, fund the faucet, then run the standard send-and-check rhythm.
 async fn assert_send_to_pool<V, Service>(
     validator: &ValidatorKind,
-    pool: &str,
-    balance_of: impl Fn(&wallet_tests::AccountBalance) -> u64,
+    pool: wallet_tests::Pool,
+    amount: u64,
 ) where
     V: ValidatorExt,
     Service: zaino_testutils::TestService,
@@ -90,20 +118,8 @@ async fn assert_send_to_pool<V, Service>(
     <Service as ZcashService>::Subscriber: zaino_testutils::PollableTip,
 {
     let (mut test_manager, mut clients) = launch_and_build::<V, Service>(validator).await;
-
     fund_faucet(&test_manager, &mut clients, validator).await;
-
-    let recipient_address = clients.get_recipient_address(pool).await;
-    from_inputs::quick_send(&mut clients.faucet, vec![(&recipient_address, 250_000, None)])
-        .await
-        .unwrap();
-    test_manager
-        .generate_blocks_and_wait_for_tip(1, test_manager.subscriber())
-        .await;
-    clients.recipient.sync_and_await().await.unwrap();
-
-    assert_eq!(balance_of(&clients.recipient_balance().await), 250_000);
-
+    send_and_assert_received(&test_manager, &mut clients, pool, amount).await;
     test_manager.close().await;
 }
 
@@ -114,11 +130,7 @@ where
     IndexerError: From<<<Service as ZcashService>::Subscriber as ZcashIndexer>::Error>,
     <Service as ZcashService>::Subscriber: zaino_testutils::PollableTip,
 {
-    // Funds sent to a unified address land in the recipient's orchard pool.
-    assert_send_to_pool::<V, Service>(validator, "unified", |b| {
-        b.total_orchard_balance.unwrap().into_u64()
-    })
-    .await;
+    assert_send_to_pool::<V, Service>(validator, wallet_tests::Pool::Orchard, 250_000).await;
 }
 
 async fn send_to_sapling<V, Service>(validator: &ValidatorKind)
@@ -128,10 +140,7 @@ where
     IndexerError: From<<<Service as ZcashService>::Subscriber as ZcashIndexer>::Error>,
     <Service as ZcashService>::Subscriber: zaino_testutils::PollableTip,
 {
-    assert_send_to_pool::<V, Service>(validator, "sapling", |b| {
-        b.total_sapling_balance.unwrap().into_u64()
-    })
-    .await;
+    assert_send_to_pool::<V, Service>(validator, wallet_tests::Pool::Sapling, 250_000).await;
 }
 
 async fn send_to_transparent<V, Service>(validator: &ValidatorKind)
@@ -192,10 +201,7 @@ where
     clients.recipient.sync_and_await().await.unwrap();
 
     assert_eq!(
-        clients.recipient_balance().await
-            .confirmed_transparent_balance
-            .unwrap()
-            .into_u64(),
+        wallet_tests::Pool::Transparent.received_balance(&clients.recipient_balance().await),
         250_000
     );
 
@@ -259,27 +265,10 @@ where
         .await;
     clients.recipient.sync_and_await().await.unwrap();
 
-    assert_eq!(
-        clients.recipient_balance().await
-            .total_orchard_balance
-            .unwrap()
-            .into_u64(),
-        250_000
-    );
-    assert_eq!(
-        clients.recipient_balance().await
-            .total_sapling_balance
-            .unwrap()
-            .into_u64(),
-        250_000
-    );
-    assert_eq!(
-        clients.recipient_balance().await
-            .confirmed_transparent_balance
-            .unwrap()
-            .into_u64(),
-        250_000
-    );
+    let balance = clients.recipient_balance().await;
+    assert_eq!(wallet_tests::Pool::Orchard.received_balance(&balance), 250_000);
+    assert_eq!(wallet_tests::Pool::Sapling.received_balance(&balance), 250_000);
+    assert_eq!(wallet_tests::Pool::Transparent.received_balance(&balance), 250_000);
 
     test_manager.close().await;
 }
