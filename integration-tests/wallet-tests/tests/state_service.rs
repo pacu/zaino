@@ -112,17 +112,11 @@ async fn create_test_manager_and_services<V: ValidatorExt>(
     dbg!(&state_service_balance);
 
     assert_eq!(
-        recipient_balance
-            .confirmed_transparent_balance
-            .unwrap()
-            .into_u64(),
+        wallet_tests::Pool::Transparent.received_balance(&recipient_balance),
         250_000,
     );
     assert_eq!(
-        recipient_balance
-            .confirmed_transparent_balance
-            .unwrap()
-            .into_u64(),
+        wallet_tests::Pool::Transparent.received_balance(&recipient_balance),
         fetch_service_balance.balance(),
     );
     assert_eq!(fetch_service_balance, state_service_balance);

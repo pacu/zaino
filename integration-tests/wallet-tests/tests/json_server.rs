@@ -81,17 +81,11 @@ async fn z_get_address_balance_inner() {
     dbg!(&zaino_service_balance);
 
     assert_eq!(
-        recipient_balance
-            .confirmed_transparent_balance
-            .unwrap()
-            .into_u64(),
+        wallet_tests::Pool::Transparent.received_balance(&recipient_balance),
         250_000,
     );
     assert_eq!(
-        recipient_balance
-            .confirmed_transparent_balance
-            .unwrap()
-            .into_u64(),
+        wallet_tests::Pool::Transparent.received_balance(&recipient_balance),
         zcashd_service_balance.balance(),
     );
     assert_eq!(zcashd_service_balance, zaino_service_balance);

@@ -82,17 +82,11 @@ async fn fetch_service_get_address_balance<V: ValidatorExt>(validator: &Validato
     dbg!(fetch_service_balance);
 
     assert_eq!(
-        recipient_balance
-            .confirmed_transparent_balance
-            .unwrap()
-            .into_u64(),
+        wallet_tests::Pool::Transparent.received_balance(&recipient_balance),
         250_000,
     );
     assert_eq!(
-        recipient_balance
-            .confirmed_transparent_balance
-            .unwrap()
-            .into_u64(),
+        wallet_tests::Pool::Transparent.received_balance(&recipient_balance),
         fetch_service_balance.balance(),
     );
 
@@ -958,7 +952,7 @@ async fn fetch_service_get_taddress_balance<V: ValidatorExt>(validator: &Validat
     dbg!(&fetch_service_balance);
     assert_eq!(
         fetch_service_balance.value_zat as u64,
-        balance.confirmed_transparent_balance.unwrap().into_u64()
+        wallet_tests::Pool::Transparent.received_balance(&balance)
     );
 
     test_manager.close().await;
