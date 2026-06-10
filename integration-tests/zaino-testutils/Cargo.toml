@@ -36,6 +36,7 @@ zcash_protocol = { workspace = true }
 
 # Zebra
 zebra-chain = { workspace = true }
+zebra-state = { workspace = true }
 
 # Zingo-infra
 zcash_local_net = { workspace = true }

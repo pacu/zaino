@@ -1,20 +1,15 @@
 //! Tests that compare the output of both `zcashd` and `zainod` through `FetchService`.
 
-use zaino_common::network::ActivationHeights;
-use zaino_common::{DatabaseConfig, ServiceConfig, StorageConfig};
-
 #[allow(deprecated)]
-use zaino_state::{
-    FetchService, FetchServiceConfig, FetchServiceSubscriber, ZcashIndexer, ZcashService as _,
-};
-use zaino_testutils::{TestManager, ValidatorKind};
+use zaino_state::{FetchService, FetchServiceSubscriber, ZcashIndexer};
+use zaino_testutils::TestManager;
 use zcash_local_net::validator::zcashd::Zcashd;
 use zcash_local_net::validator::Validator as _;
 use zebra_rpc::methods::GetInfo;
 
 #[allow(deprecated)]
 async fn create_zcashd_test_manager_and_fetch_services(
-    clients: bool,
+    _clients: bool,
 ) -> (
     TestManager<Zcashd, FetchService>,
     FetchService,
@@ -22,88 +17,7 @@ async fn create_zcashd_test_manager_and_fetch_services(
     FetchService,
     FetchServiceSubscriber,
 ) {
-    println!("Launching test manager..");
-    let test_manager = TestManager::<Zcashd, FetchService>::launch(
-        &ValidatorKind::Zcashd,
-        None,
-        None,
-        None,
-        true,
-        true,
-        clients,
-    )
-    .await
-    .unwrap();
-
-    tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
-
-    println!("Launching zcashd fetch service..");
-    let zcashd_fetch_service = FetchService::spawn(FetchServiceConfig::new(
-        test_manager.full_node_rpc_listen_address.to_string(),
-        None,
-        None,
-        None,
-        ServiceConfig::default(),
-        StorageConfig {
-            database: DatabaseConfig {
-                path: test_manager
-                    .local_net
-                    .data_dir()
-                    .path()
-                    .to_path_buf()
-                    .join("zcashd-fetch-service-zaino"),
-                ..Default::default()
-            },
-            ..Default::default()
-        },
-        zaino_common::Network::Regtest(ActivationHeights::default()),
-        None,
-    ))
-    .await
-    .unwrap();
-    let zcashd_subscriber = zcashd_fetch_service.get_subscriber().inner();
-
-    tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
-
-    println!("Launching zaino fetch service..");
-    let zaino_fetch_service = FetchService::spawn(FetchServiceConfig::new(
-        test_manager
-            .zaino_json_rpc_listen_address
-            .expect("zaino jsonrpc address must be active for these tests")
-            .to_string(),
-        test_manager.json_server_cookie_dir.clone(),
-        None,
-        None,
-        ServiceConfig::default(),
-        StorageConfig {
-            database: DatabaseConfig {
-                path: test_manager
-                    .local_net
-                    .data_dir()
-                    .path()
-                    .to_path_buf()
-                    .join("zaino-fetch-service-zaino"),
-                ..Default::default()
-            },
-            ..Default::default()
-        },
-        zaino_common::Network::Regtest(ActivationHeights::default()),
-        None,
-    ))
-    .await
-    .unwrap();
-    let zaino_subscriber = zaino_fetch_service.get_subscriber().inner();
-
-    tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
-
-    println!("Testmanager launch complete!");
-    (
-        test_manager,
-        zcashd_fetch_service,
-        zcashd_subscriber,
-        zaino_fetch_service,
-        zaino_subscriber,
-    )
+    zaino_testutils::launch_zcashd_dual_fetch_services().await
 }
 
 #[allow(deprecated)]

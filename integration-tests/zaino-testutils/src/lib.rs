@@ -25,6 +25,8 @@ use zaino_state::{
     LightWalletService, NodeBackedChainIndexSubscriber, StateServiceSubscriber, ZcashIndexer,
     ZcashService,
 };
+#[allow(deprecated)]
+use zaino_state::{FetchService, FetchServiceConfig, StateService, StateServiceConfig};
 use zainodlib::{config::ZainodConfig, error::IndexerError, indexer::Indexer};
 pub use zcash_local_net as services;
 use zcash_local_net::validator::zebrad::{Zebrad, ZebradConfig};
@@ -663,6 +665,247 @@ where
             handle.abort();
         }
     }
+}
+
+/// Launch a state-backend [`TestManager`] alongside standalone [`FetchService`]
+/// and [`StateService`] instances pointed at the same validator, returning each
+/// service and its subscriber.
+///
+/// This is the shared core of the `create_test_manager_and_services` test
+/// harness used by both the walletless and wallet integration-test workspaces.
+/// Wallet callers wrap this and additionally build lightclients from the
+/// returned manager's gRPC address.
+#[allow(deprecated)]
+pub async fn launch_state_and_fetch_services<V: ValidatorExt>(
+    validator: &ValidatorKind,
+    chain_cache: Option<PathBuf>,
+    enable_zaino: bool,
+    network: Option<NetworkKind>,
+) -> (
+    TestManager<V, StateService>,
+    FetchService,
+    FetchServiceSubscriber,
+    StateService,
+    StateServiceSubscriber,
+) {
+    let test_manager = TestManager::<V, StateService>::launch(
+        validator,
+        network,
+        None,
+        chain_cache.clone(),
+        enable_zaino,
+        false,
+        false,
+    )
+    .await
+    .unwrap();
+
+    let network_type = match network {
+        Some(NetworkKind::Mainnet) => {
+            println!("Waiting for validator to spawn..");
+            tokio::time::sleep(std::time::Duration::from_millis(5000)).await;
+            Network::Mainnet
+        }
+        Some(NetworkKind::Testnet) => {
+            println!("Waiting for validator to spawn..");
+            tokio::time::sleep(std::time::Duration::from_millis(5000)).await;
+            Network::Testnet
+        }
+        _ => Network::Regtest({
+            let activation_heights = test_manager.local_net.get_activation_heights().await;
+            ActivationHeights {
+                before_overwinter: activation_heights.overwinter(),
+                overwinter: activation_heights.overwinter(),
+                sapling: activation_heights.sapling(),
+                blossom: activation_heights.blossom(),
+                heartwood: activation_heights.heartwood(),
+                canopy: activation_heights.canopy(),
+                nu5: activation_heights.nu5(),
+                nu6: activation_heights.nu6(),
+                nu6_1: activation_heights.nu6_1(),
+                nu6_2: activation_heights.nu6_2(),
+                nu7: activation_heights.nu7(),
+            }
+        }),
+    };
+
+    test_manager.local_net.print_stdout();
+
+    let fetch_service = spawn_fetch_service(
+        test_manager.full_node_rpc_listen_address.to_string(),
+        None,
+        test_manager
+            .local_net
+            .data_dir()
+            .path()
+            .join("fetch-service-zaino"),
+        network_type,
+    )
+    .await;
+
+    let fetch_subscriber = fetch_service.get_subscriber().inner();
+
+    let state_chain_cache_dir = match chain_cache {
+        Some(dir) => dir,
+        None => test_manager.data_dir.clone(),
+    };
+
+    let state_service = StateService::spawn(StateServiceConfig::new(
+        zebra_state::Config {
+            cache_dir: state_chain_cache_dir,
+            ephemeral: false,
+            delete_old_database: true,
+            debug_stop_at_height: None,
+            debug_validity_check_interval: None,
+            should_backup_non_finalized_state: false,
+            debug_skip_non_finalized_state_backup_task: false,
+        },
+        test_manager.full_node_rpc_listen_address.to_string(),
+        test_manager.full_node_grpc_listen_address,
+        false,
+        None,
+        None,
+        None,
+        ServiceConfig::default(),
+        StorageConfig {
+            database: DatabaseConfig {
+                path: test_manager
+                    .local_net
+                    .data_dir()
+                    .path()
+                    .to_path_buf()
+                    .join("state-srvice-zaino"),
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+        network_type,
+        None,
+    ))
+    .await
+    .unwrap();
+
+    let state_subscriber = state_service.get_subscriber().inner();
+
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+
+    (
+        test_manager,
+        fetch_service,
+        fetch_subscriber,
+        state_service,
+        state_subscriber,
+    )
+}
+
+/// Spawn a standalone [`FetchService`] pointed at `rpc_url`, storing its index
+/// under `db_path`. Shared by the launch helpers below.
+#[allow(deprecated)]
+async fn spawn_fetch_service(
+    rpc_url: String,
+    cookie_dir: Option<PathBuf>,
+    db_path: PathBuf,
+    network: Network,
+) -> FetchService {
+    FetchService::spawn(FetchServiceConfig::new(
+        rpc_url,
+        cookie_dir,
+        None,
+        None,
+        ServiceConfig::default(),
+        StorageConfig {
+            database: DatabaseConfig {
+                path: db_path,
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+        network,
+        None,
+    ))
+    .await
+    .unwrap()
+}
+
+/// Launch a zcashd [`TestManager`] (with the JSON-RPC server enabled) alongside
+/// two standalone [`FetchService`] instances — one pointed at zcashd directly,
+/// one at Zaino's JSON-RPC server — for tests that compare the two.
+///
+/// Shared core of the `create_zcashd_test_manager_and_fetch_services` harness in
+/// both integration-test workspaces. Wallet callers wrap this and additionally
+/// build lightclients from the returned manager's gRPC address.
+#[allow(deprecated)]
+pub async fn launch_zcashd_dual_fetch_services() -> (
+    TestManager<Zcashd, FetchService>,
+    FetchService,
+    FetchServiceSubscriber,
+    FetchService,
+    FetchServiceSubscriber,
+) {
+    let test_manager =
+        TestManager::<Zcashd, FetchService>::launch(&ValidatorKind::Zcashd, None, None, None, true, true, false)
+            .await
+            .unwrap();
+
+    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+
+    let zcashd_fetch_service = spawn_fetch_service(
+        test_manager.full_node_rpc_listen_address.to_string(),
+        None,
+        test_manager
+            .local_net
+            .data_dir()
+            .path()
+            .join("zcashd-fetch-service-zaino"),
+        Network::Regtest(ActivationHeights::default()),
+    )
+    .await;
+    let zcashd_subscriber = zcashd_fetch_service.get_subscriber().inner();
+
+    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+
+    let zaino_fetch_service = spawn_fetch_service(
+        test_manager
+            .zaino_json_rpc_listen_address
+            .expect("zaino jsonrpc address must be active for these tests")
+            .to_string(),
+        test_manager.json_server_cookie_dir.clone(),
+        test_manager
+            .local_net
+            .data_dir()
+            .path()
+            .join("zaino-fetch-service-zaino"),
+        Network::Regtest(ActivationHeights::default()),
+    )
+    .await;
+    let zaino_subscriber = zaino_fetch_service.get_subscriber().inner();
+
+    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+
+    (
+        test_manager,
+        zcashd_fetch_service,
+        zcashd_subscriber,
+        zaino_fetch_service,
+        zaino_subscriber,
+    )
+}
+
+/// Launch a fetch-backend [`TestManager`] and return it together with its own
+/// service subscriber — the shared core of the `create_test_manager_and_fetch_service`
+/// harness in both integration-test workspaces. Wallet callers wrap this and
+/// build lightclients from the returned manager's gRPC address.
+#[allow(deprecated)]
+pub async fn launch_with_fetch_subscriber<V: ValidatorExt>(
+    validator: &ValidatorKind,
+    chain_cache: Option<PathBuf>,
+) -> (TestManager<V, FetchService>, FetchServiceSubscriber) {
+    let mut test_manager =
+        TestManager::<V, FetchService>::launch(validator, None, None, chain_cache, true, false, false)
+            .await
+            .unwrap();
+    let fetch_service_subscriber = test_manager.service_subscriber.take().unwrap();
+    (test_manager, fetch_service_subscriber)
 }
 
 impl<C: Validator, Service: LightWalletService + Send + Sync + 'static> Drop

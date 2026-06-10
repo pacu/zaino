@@ -26,19 +26,8 @@ async fn create_test_manager_and_fetch_service<V: ValidatorExt>(
     FetchServiceSubscriber,
     wallet_tests::Clients,
 ) {
-    let mut test_manager = TestManager::<V, FetchService>::launch(
-        validator,
-        None,
-        None,
-        chain_cache,
-        true,
-        false,
-        false,
-    )
-    .await
-    .unwrap();
-
-    let fetch_service_subscriber = test_manager.service_subscriber.take().unwrap();
+    let (test_manager, fetch_service_subscriber) =
+        zaino_testutils::launch_with_fetch_subscriber(validator, chain_cache).await;
     let clients = wallet_tests::build_clients(
         test_manager
             .zaino_grpc_listen_address

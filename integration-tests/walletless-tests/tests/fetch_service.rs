@@ -16,22 +16,9 @@ use zebra_rpc::methods::{GetBlock, GetBlockHash};
 async fn create_test_manager_and_fetch_service<V: ValidatorExt>(
     validator: &ValidatorKind,
     chain_cache: Option<std::path::PathBuf>,
-    enable_clients: bool,
+    _enable_clients: bool,
 ) -> (TestManager<V, FetchService>, FetchServiceSubscriber) {
-    let mut test_manager = TestManager::<V, FetchService>::launch(
-        validator,
-        None,
-        None,
-        chain_cache,
-        true,
-        false,
-        enable_clients,
-    )
-    .await
-    .unwrap();
-
-    let fetch_service_subscriber = test_manager.service_subscriber.take().unwrap();
-    (test_manager, fetch_service_subscriber)
+    zaino_testutils::launch_with_fetch_subscriber(validator, chain_cache).await
 }
 
 async fn launch_fetch_service<V: ValidatorExt>(

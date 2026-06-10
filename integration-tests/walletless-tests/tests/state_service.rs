@@ -1,12 +1,9 @@
-use zaino_common::network::ActivationHeights;
-use zaino_common::{DatabaseConfig, ServiceConfig, StorageConfig};
 use zaino_fetch::jsonrpsee::response::address_deltas::GetAddressDeltasParams;
-use zaino_state::ZcashService;
 
 #[allow(deprecated)]
 use zaino_state::{
-    FetchService, FetchServiceConfig, FetchServiceSubscriber, LightWalletIndexer, StateService,
-    StateServiceConfig, StateServiceSubscriber, ZcashIndexer,
+    FetchService, FetchServiceSubscriber, LightWalletIndexer, StateService, StateServiceSubscriber,
+    ZcashIndexer,
 };
 use zaino_testutils::ValidatorExt;
 use zaino_testutils::{TestManager, ValidatorKind, ZEBRAD_TESTNET_CACHE_DIR};
@@ -22,7 +19,7 @@ async fn create_test_manager_and_services<V: ValidatorExt>(
     validator: &ValidatorKind,
     chain_cache: Option<std::path::PathBuf>,
     enable_zaino: bool,
-    enable_clients: bool,
+    _enable_clients: bool,
     network: Option<NetworkKind>,
 ) -> (
     TestManager<V, StateService>,
@@ -31,126 +28,8 @@ async fn create_test_manager_and_services<V: ValidatorExt>(
     StateService,
     StateServiceSubscriber,
 ) {
-    let test_manager = TestManager::<V, StateService>::launch(
-        validator,
-        network,
-        None,
-        chain_cache.clone(),
-        enable_zaino,
-        false,
-        enable_clients,
-    )
-    .await
-    .unwrap();
-
-    let network_type = match network {
-        Some(NetworkKind::Mainnet) => {
-            println!("Waiting for validator to spawn..");
-            tokio::time::sleep(std::time::Duration::from_millis(5000)).await;
-            zaino_common::Network::Mainnet
-        }
-        Some(NetworkKind::Testnet) => {
-            println!("Waiting for validator to spawn..");
-            tokio::time::sleep(std::time::Duration::from_millis(5000)).await;
-            zaino_common::Network::Testnet
-        }
-        _ => zaino_common::Network::Regtest({
-            let activation_heights = test_manager.local_net.get_activation_heights().await;
-            ActivationHeights {
-                before_overwinter: activation_heights.overwinter(),
-                overwinter: activation_heights.overwinter(),
-                sapling: activation_heights.sapling(),
-                blossom: activation_heights.blossom(),
-                heartwood: activation_heights.heartwood(),
-                canopy: activation_heights.canopy(),
-                nu5: activation_heights.nu5(),
-                nu6: activation_heights.nu6(),
-                nu6_1: activation_heights.nu6_1(),
-                nu6_2: activation_heights.nu6_2(),
-                nu7: activation_heights.nu7(),
-            }
-        }),
-    };
-
-    test_manager.local_net.print_stdout();
-
-    let fetch_service = FetchService::spawn(FetchServiceConfig::new(
-        test_manager.full_node_rpc_listen_address.to_string(),
-        None,
-        None,
-        None,
-        ServiceConfig::default(),
-        StorageConfig {
-            database: DatabaseConfig {
-                path: test_manager
-                    .local_net
-                    .data_dir()
-                    .path()
-                    .to_path_buf()
-                    .join("fetch-service-zaino"),
-                ..Default::default()
-            },
-            ..Default::default()
-        },
-        network_type,
-        None,
-    ))
-    .await
-    .unwrap();
-
-    let fetch_subscriber = fetch_service.get_subscriber().inner();
-
-    let state_chain_cache_dir = match chain_cache {
-        Some(dir) => dir,
-        None => test_manager.data_dir.clone(),
-    };
-
-    let state_service = StateService::spawn(StateServiceConfig::new(
-        zebra_state::Config {
-            cache_dir: state_chain_cache_dir,
-            ephemeral: false,
-            delete_old_database: true,
-            debug_stop_at_height: None,
-            debug_validity_check_interval: None,
-            should_backup_non_finalized_state: false,
-            debug_skip_non_finalized_state_backup_task: false,
-        },
-        test_manager.full_node_rpc_listen_address.to_string(),
-        test_manager.full_node_grpc_listen_address,
-        false,
-        None,
-        None,
-        None,
-        ServiceConfig::default(),
-        StorageConfig {
-            database: DatabaseConfig {
-                path: test_manager
-                    .local_net
-                    .data_dir()
-                    .path()
-                    .to_path_buf()
-                    .join("state-srvice-zaino"),
-                ..Default::default()
-            },
-            ..Default::default()
-        },
-        network_type,
-        None,
-    ))
-    .await
-    .unwrap();
-
-    let state_subscriber = state_service.get_subscriber().inner();
-
-    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-
-    (
-        test_manager,
-        fetch_service,
-        fetch_subscriber,
-        state_service,
-        state_subscriber,
-    )
+    zaino_testutils::launch_state_and_fetch_services(validator, chain_cache, enable_zaino, network)
+        .await
 }
 
 #[allow(deprecated)]async fn state_service_check_info<V: ValidatorExt>(
