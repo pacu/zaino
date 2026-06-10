@@ -3,6 +3,7 @@
 use futures::StreamExt as _;
 use hex::ToHex as _;
 use nonempty::NonEmpty;
+use zaino_proto::proto::compact_formats::CompactBlock;
 use wallet_tests::from_inputs;
 use zaino_proto::proto::service::{
     AddressList, BlockId, BlockRange, GetAddressUtxosArg, GetMempoolTxRequest, PoolType,
@@ -86,6 +87,114 @@ async fn send_and_mine<V: ValidatorExt>(
         .generate_blocks_and_wait_for_tip(1, fetch_service_subscriber)
         .await;
     tx
+}
+
+/// Launch, fund the faucet, and send 250_000 to the recipient's transparent,
+/// sapling, and unified addresses (one tx each), then mine. Returns the
+/// manager, subscriber, clients, and the three txids — the shared setup for the
+/// get_block_range tests, which differ only in the pools requested and asserted.
+#[allow(deprecated)]
+async fn block_range_fixture<V: ValidatorExt>(
+    validator: &ValidatorKind,
+) -> (
+    TestManager<V, FetchService>,
+    FetchServiceSubscriber,
+    wallet_tests::Clients,
+    TxId,
+    TxId,
+    TxId,
+) {
+    let (test_manager, fetch_service_subscriber, mut clients) =
+        create_test_manager_and_fetch_service::<V>(validator, None).await;
+
+    clients.faucet.sync_and_await().await.unwrap();
+
+    if matches!(validator, ValidatorKind::Zebrad) {
+        test_manager
+            .generate_blocks_and_wait_for_tip(100, &fetch_service_subscriber)
+            .await;
+        clients.faucet.sync_and_await().await.unwrap();
+        for _ in 1..4 {
+            clients.faucet.quick_shield(AccountId::ZERO).await.unwrap();
+            test_manager
+                .generate_blocks_and_wait_for_tip(1, &fetch_service_subscriber)
+                .await;
+            clients.faucet.sync_and_await().await.unwrap();
+        }
+    } else {
+        // zcashd
+        test_manager
+            .generate_blocks_and_wait_for_tip(14, &fetch_service_subscriber)
+            .await;
+        clients.faucet.sync_and_await().await.unwrap();
+    }
+
+    let recipient_transparent = clients.get_recipient_address("transparent").await;
+    let deshielding_txid = from_inputs::quick_send(
+        &mut clients.faucet,
+        vec![(&recipient_transparent, 250_000, None)],
+    )
+    .await
+    .unwrap()
+    .head;
+
+    let recipient_sapling = clients.get_recipient_address("sapling").await;
+    let sapling_txid =
+        from_inputs::quick_send(&mut clients.faucet, vec![(&recipient_sapling, 250_000, None)])
+            .await
+            .unwrap()
+            .head;
+
+    let recipient_ua = clients.get_recipient_address("unified").await;
+    let orchard_txid =
+        from_inputs::quick_send(&mut clients.faucet, vec![(&recipient_ua, 250_000, None)])
+            .await
+            .unwrap()
+            .head;
+
+    test_manager
+        .generate_blocks_and_wait_for_tip(1, &fetch_service_subscriber)
+        .await;
+
+    (
+        test_manager,
+        fetch_service_subscriber,
+        clients,
+        deshielding_txid,
+        sapling_txid,
+        orchard_txid,
+    )
+}
+
+/// Whether the compact tx with `txid` carries no data for `pool` (transparent
+/// `vout` / sapling `outputs` / orchard `actions`).
+fn pool_tx_field_empty(block: &CompactBlock, txid: &TxId, pool: wallet_tests::Pool) -> bool {
+    let tx = block
+        .vtx
+        .iter()
+        .find(|tx| tx.txid == txid.as_ref().to_vec())
+        .expect("sent tx present in compact block");
+    match pool {
+        wallet_tests::Pool::Transparent => tx.vout.is_empty(),
+        wallet_tests::Pool::Sapling => tx.outputs.is_empty(),
+        wallet_tests::Pool::Orchard => tx.actions.is_empty(),
+    }
+}
+
+/// Assert the compact tx with `txid` carries `pool` data.
+fn assert_pool_present(block: &CompactBlock, txid: &TxId, pool: wallet_tests::Pool) {
+    assert!(
+        !pool_tx_field_empty(block, txid, pool),
+        "{pool:?} data should be present in the compact block"
+    );
+}
+
+/// Assert the compact tx with `txid` carries no `pool` data.
+fn assert_pool_absent(block: &CompactBlock, txid: &TxId, pool: wallet_tests::Pool) {
+    assert!(
+        pool_tx_field_empty(block, txid, pool),
+        "{pool:?} data should be absent from the compact block"
+    );
 }
 
 #[allow(deprecated)]
@@ -444,61 +553,14 @@ async fn fetch_service_get_address_utxos<V: ValidatorExt>(validator: &ValidatorK
 async fn fetch_service_get_block_range_returns_all_pools<V: ValidatorExt>(
     validator: &ValidatorKind,
 ) {
-    let (mut test_manager, fetch_service_subscriber, mut clients) =
-        create_test_manager_and_fetch_service::<V>(validator, None).await;
-
-    clients.faucet.sync_and_await().await.unwrap();
-
-    if matches!(validator, ValidatorKind::Zebrad) {
-        test_manager
-            .generate_blocks_and_wait_for_tip(100, &fetch_service_subscriber)
-            .await;
-        clients.faucet.sync_and_await().await.unwrap();
-        for _ in 1..4 {
-            clients.faucet.quick_shield(AccountId::ZERO).await.unwrap();
-
-            test_manager
-                .generate_blocks_and_wait_for_tip(1, &fetch_service_subscriber)
-                .await;
-            clients.faucet.sync_and_await().await.unwrap();
-        }
-    } else {
-        // zcashd
-        test_manager
-            .generate_blocks_and_wait_for_tip(14, &fetch_service_subscriber)
-            .await;
-
-        clients.faucet.sync_and_await().await.unwrap();
-    }
-
-    let recipient_transparent = clients.get_recipient_address("transparent").await;
-    let deshielding_txid = from_inputs::quick_send(
-        &mut clients.faucet,
-        vec![(&recipient_transparent, 250_000, None)],
-    )
-    .await
-    .unwrap()
-    .head;
-
-    let recipient_sapling = clients.get_recipient_address("sapling").await;
-    let sapling_txid = from_inputs::quick_send(
-        &mut clients.faucet,
-        vec![(&recipient_sapling, 250_000, None)],
-    )
-    .await
-    .unwrap()
-    .head;
-
-    let recipient_ua = clients.get_recipient_address("unified").await;
-    let orchard_txid =
-        from_inputs::quick_send(&mut clients.faucet, vec![(&recipient_ua, 250_000, None)])
-            .await
-            .unwrap()
-            .head;
-
-    test_manager
-        .generate_blocks_and_wait_for_tip(1, &fetch_service_subscriber)
-        .await;
+    let (
+        mut test_manager,
+        fetch_service_subscriber,
+        _clients,
+        deshielding_txid,
+        sapling_txid,
+        orchard_txid,
+    ) = block_range_fixture::<V>(validator).await;
 
     let start_height: u64 = if matches!(validator, ValidatorKind::Zebrad) {
         100
@@ -537,49 +599,13 @@ async fn fetch_service_get_block_range_returns_all_pools<V: ValidatorExt>(
 
     assert_eq!(compact_block.height, end_height);
 
-    // Transparent tx are now included in compact blocks unless specified so the
-    // expected block count should be 4 (3 sent tx + coinbase)
-    let expected_transaction_count = 4;
+    // Transparent tx are included in compact blocks unless pools are specified,
+    // so expect 4 (3 sent tx + coinbase).
+    assert_eq!(compact_block.vtx.len(), 4);
 
-    // the compact block has the right number of transactions
-    assert_eq!(compact_block.vtx.len(), expected_transaction_count);
-
-    // transaction order is not guaranteed so it's necessary to look up for them by TXID
-    let deshielding_tx = compact_block
-        .vtx
-        .iter()
-        .find(|tx| tx.txid == deshielding_txid.as_ref().to_vec())
-        .unwrap();
-
-    dbg!(deshielding_tx);
-
-    assert!(
-        !deshielding_tx.vout.is_empty(),
-        "transparent data should be present when transaparent pool type is specified in the request."
-    );
-
-    // transaction order is not guaranteed so it's necessary to look up for them by TXID
-    let sapling_tx = compact_block
-        .vtx
-        .iter()
-        .find(|tx| tx.txid == sapling_txid.as_ref().to_vec())
-        .unwrap();
-
-    assert!(
-        !sapling_tx.outputs.is_empty(),
-        "sapling data should be present when all pool types are specified in the request."
-    );
-
-    let orchard_tx = compact_block
-        .vtx
-        .iter()
-        .find(|tx| tx.txid == orchard_txid.as_ref().to_vec())
-        .unwrap();
-
-    assert!(
-        !orchard_tx.actions.is_empty(),
-        "orchard data should be present when all pool types are specified in the request."
-    );
+    assert_pool_present(compact_block, &deshielding_txid, wallet_tests::Pool::Transparent);
+    assert_pool_present(compact_block, &sapling_txid, wallet_tests::Pool::Sapling);
+    assert_pool_present(compact_block, &orchard_txid, wallet_tests::Pool::Orchard);
 
     test_manager.close().await;
 }
@@ -588,61 +614,14 @@ async fn fetch_service_get_block_range_returns_all_pools<V: ValidatorExt>(
 async fn fetch_service_get_block_range_no_pools_returns_sapling_orchard<V: ValidatorExt>(
     validator: &ValidatorKind,
 ) {
-    let (mut test_manager, fetch_service_subscriber, mut clients) =
-        create_test_manager_and_fetch_service::<V>(validator, None).await;
-
-    clients.faucet.sync_and_await().await.unwrap();
-
-    if matches!(validator, ValidatorKind::Zebrad) {
-        test_manager
-            .generate_blocks_and_wait_for_tip(100, &fetch_service_subscriber)
-            .await;
-        clients.faucet.sync_and_await().await.unwrap();
-        for _ in 1..4 {
-            clients.faucet.quick_shield(AccountId::ZERO).await.unwrap();
-
-            test_manager
-                .generate_blocks_and_wait_for_tip(1, &fetch_service_subscriber)
-                .await;
-            clients.faucet.sync_and_await().await.unwrap();
-        }
-    } else {
-        // zcashd
-        test_manager
-            .generate_blocks_and_wait_for_tip(14, &fetch_service_subscriber)
-            .await;
-
-        clients.faucet.sync_and_await().await.unwrap();
-    }
-
-    let recipient_transparent = clients.get_recipient_address("transparent").await;
-    let deshielding_txid = from_inputs::quick_send(
-        &mut clients.faucet,
-        vec![(&recipient_transparent, 250_000, None)],
-    )
-    .await
-    .unwrap()
-    .head;
-
-    let recipient_sapling = clients.get_recipient_address("sapling").await;
-    let sapling_txid = from_inputs::quick_send(
-        &mut clients.faucet,
-        vec![(&recipient_sapling, 250_000, None)],
-    )
-    .await
-    .unwrap()
-    .head;
-
-    let recipient_ua = clients.get_recipient_address("unified").await;
-    let orchard_txid =
-        from_inputs::quick_send(&mut clients.faucet, vec![(&recipient_ua, 250_000, None)])
-            .await
-            .unwrap()
-            .head;
-
-    test_manager
-        .generate_blocks_and_wait_for_tip(1, &fetch_service_subscriber)
-        .await;
+    let (
+        mut test_manager,
+        fetch_service_subscriber,
+        _clients,
+        deshielding_txid,
+        sapling_txid,
+        orchard_txid,
+    ) = block_range_fixture::<V>(validator).await;
 
     let start_height: u64 = if matches!(validator, ValidatorKind::Zebrad) {
         100
@@ -682,43 +661,12 @@ async fn fetch_service_get_block_range_no_pools_returns_sapling_orchard<V: Valid
     } else {
         4 // zcashd shields coinbase and tx count will be one more than zebra's
     };
-    // the compact block has 3 transactions
     assert_eq!(compact_block.vtx.len(), expected_tx_count);
 
-    // transaction order is not guaranteed so it's necessary to look up for them by TXID
-    let deshielding_tx = compact_block
-        .vtx
-        .iter()
-        .find(|tx| tx.txid == deshielding_txid.as_ref().to_vec())
-        .unwrap();
-
-    assert!(
-        deshielding_tx.vout.is_empty(),
-        "transparent data should not be present when transaparent pool type is specified in the request."
-    );
-
-    // transaction order is not guaranteed so it's necessary to look up for them by TXID
-    let sapling_tx = compact_block
-        .vtx
-        .iter()
-        .find(|tx| tx.txid == sapling_txid.as_ref().to_vec())
-        .unwrap();
-
-    assert!(
-        !sapling_tx.outputs.is_empty(),
-        "sapling data should be present when default pool types are specified in the request."
-    );
-
-    let orchard_tx = compact_block
-        .vtx
-        .iter()
-        .find(|tx| tx.txid == orchard_txid.as_ref().to_vec())
-        .unwrap();
-
-    assert!(
-        !orchard_tx.actions.is_empty(),
-        "orchard data should be present when default pool types are specified in the request."
-    );
+    // No pools requested: transparent data is omitted, sapling/orchard default in.
+    assert_pool_absent(compact_block, &deshielding_txid, wallet_tests::Pool::Transparent);
+    assert_pool_present(compact_block, &sapling_txid, wallet_tests::Pool::Sapling);
+    assert_pool_present(compact_block, &orchard_txid, wallet_tests::Pool::Orchard);
 
     test_manager.close().await;
 }
