@@ -53,12 +53,9 @@ const NON_EXISTENT_ADDRESS: &str = "tmVqEASZxBNKFTbmASZikGa5fPLkd68iJyx";
 #[allow(deprecated)] // StateService
 async fn setup_chain<V: ValidatorExt>(
     test_manager: &mut TestManager<V, StateService>,
+    clients: &mut wallet_tests::Clients,
 ) -> (String, String) {
     let state_service_subscriber = test_manager.service_subscriber.clone().unwrap();
-    let mut clients = test_manager
-        .clients
-        .take()
-        .expect("Clients are not initialized");
     let recipient_taddr = clients.get_recipient_address("transparent").await;
     let faucet_taddr = clients.get_faucet_address("transparent").await;
 
@@ -244,6 +241,7 @@ pub(super) async fn main() {
         _fetch_service_subscriber,
         _state_service,
         state_service_subscriber,
+        mut clients,
     ) = super::create_test_manager_and_services::<Zebrad>(
         &ValidatorKind::Zebrad,
         None,
@@ -253,7 +251,7 @@ pub(super) async fn main() {
     )
     .await;
 
-    let (recipient_taddr, faucet_taddr) = setup_chain(&mut test_manager).await;
+    let (recipient_taddr, faucet_taddr) = setup_chain(&mut test_manager, &mut clients).await;
 
     // ============================================================
     // Test 1: Simple address query (single address, no filters)

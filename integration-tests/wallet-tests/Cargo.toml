@@ -18,6 +18,7 @@ zaino-testutils = { path = "../zaino-testutils" }
 zaino-state = { path = "../../packages/zaino-state", features = ["test_dependencies"] }
 zaino-common = { path = "../../packages/zaino-common" }
 zaino-fetch = { path = "../../packages/zaino-fetch" }
+zaino-proto = { path = "../../packages/zaino-proto" }
 zainod = { path = "../../packages/zainod" }
 
 # Zingo wallet stack (0.14-compatible revs; this workspace owns its own lock)
@@ -31,11 +32,17 @@ zcash_local_net = { git = "https://github.com/zingolabs/infrastructure.git", tag
 # Zebra
 zebra-chain = "9.0.0"
 zebra-rpc = "9.0.0"
+zebra-state = "8.0.0"
 
 # Runtime / misc
 tokio = { version = "1.38", features = ["full"] }
 tempfile = "3.2"
 zip32 = "0.2.1"
+futures = "0.3.30"
+hex = "0.4"
+corez = "0.1"
+tower = { version = "0.4", features = ["buffer", "util"] }
+serde_json = "1.0"
 
 [profile.test]
 opt-level = 3

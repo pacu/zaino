@@ -3,30 +3,29 @@
 use futures::StreamExt as _;
 use hex::ToHex as _;
 use zaino_fetch::jsonrpsee::connector::{test_node_and_return_url, JsonRpSeeConnector};
-use zaino_proto::proto::compact_formats::CompactBlock;
 use zaino_proto::proto::service::{
-    AddressList, BlockId, BlockRange, GetAddressUtxosArg, GetMempoolTxRequest, GetSubtreeRootsArg,
-    PoolType, TransparentAddressBlockFilter, TxFilter,
+    AddressList, BlockId, BlockRange, GetAddressUtxosArg, GetMempoolTxRequest, PoolType,
+    TransparentAddressBlockFilter, TxFilter,
 };
 use zaino_state::ChainIndex;
 use zaino_state::FetchServiceSubscriber;
 #[allow(deprecated)]
-use zaino_state::{FetchService, LightWalletIndexer, Status, StatusType, ZcashIndexer};
+use zaino_state::{FetchService, LightWalletIndexer, ZcashIndexer};
+use wallet_tests::from_inputs;
 use zaino_testutils::{TestManager, ValidatorExt, ValidatorKind};
-use zebra_chain::parameters::subsidy::ParameterSubsidy as _;
 use zebra_chain::subtree::NoteCommitmentSubtreeIndex;
-use zebra_rpc::client::ValidateAddressResponse;
-use zebra_rpc::methods::{
-    GetAddressBalanceRequest, GetAddressTxIdsRequest, GetBlock, GetBlockHash,
-};
+use zebra_rpc::methods::{GetAddressBalanceRequest, GetAddressTxIdsRequest};
 use zip32::AccountId;
 
 #[allow(deprecated)]
 async fn create_test_manager_and_fetch_service<V: ValidatorExt>(
     validator: &ValidatorKind,
     chain_cache: Option<std::path::PathBuf>,
-    enable_clients: bool,
-) -> (TestManager<V, FetchService>, FetchServiceSubscriber) {
+) -> (
+    TestManager<V, FetchService>,
+    FetchServiceSubscriber,
+    wallet_tests::Clients,
+) {
     let mut test_manager = TestManager::<V, FetchService>::launch(
         validator,
         None,
@@ -34,28 +33,26 @@ async fn create_test_manager_and_fetch_service<V: ValidatorExt>(
         chain_cache,
         true,
         false,
-        enable_clients,
+        false,
     )
     .await
     .unwrap();
 
     let fetch_service_subscriber = test_manager.service_subscriber.take().unwrap();
-    (test_manager, fetch_service_subscriber)
+    let clients = wallet_tests::build_clients(
+        test_manager
+            .zaino_grpc_listen_address
+            .expect("zaino enabled")
+            .port(),
+        wallet_tests::default_heights(validator),
+    );
+    (test_manager, fetch_service_subscriber, clients)
 }
 
 #[allow(deprecated)]
 async fn fetch_service_get_address_balance<V: ValidatorExt>(validator: &ValidatorKind) {
-    let mut test_manager =
-        TestManager::<V, FetchService>::launch(validator, None, None, None, true, false, true)
-            .await
-            .unwrap();
-
-    let fetch_service_subscriber = test_manager.service_subscriber.take().unwrap();
-
-    let mut clients = test_manager
-        .clients
-        .take()
-        .expect("Clients are not initialized");
+    let (mut test_manager, fetch_service_subscriber, mut clients) =
+        create_test_manager_and_fetch_service::<V>(validator, None).await;
     let recipient_address = clients.get_recipient_address("transparent").await;
 
     clients.faucet.sync_and_await().await.unwrap();
@@ -79,7 +76,7 @@ async fn fetch_service_get_address_balance<V: ValidatorExt>(validator: &Validato
         .unwrap());
     dbg!(clients.faucet.transaction_summaries(false).await.unwrap());
 
-    zaino_testutils::from_inputs::quick_send(
+    from_inputs::quick_send(
         &mut clients.faucet,
         vec![(recipient_address.as_str(), 250_000, None)],
     )
@@ -124,17 +121,8 @@ async fn fetch_service_get_address_balance<V: ValidatorExt>(validator: &Validato
 
 #[allow(deprecated)]
 async fn fetch_service_get_raw_mempool<V: ValidatorExt>(validator: &ValidatorKind) {
-    let mut test_manager =
-        TestManager::<V, FetchService>::launch(validator, None, None, None, true, false, true)
-            .await
-            .unwrap();
-
-    let fetch_service_subscriber = test_manager.service_subscriber.take().unwrap();
-
-    let mut clients = test_manager
-        .clients
-        .take()
-        .expect("Clients are not initialized");
+    let (mut test_manager, fetch_service_subscriber, mut clients) =
+        create_test_manager_and_fetch_service::<V>(validator, None).await;
 
     let json_service = JsonRpSeeConnector::new_with_basic_auth(
         test_node_and_return_url(
@@ -175,13 +163,13 @@ async fn fetch_service_get_raw_mempool<V: ValidatorExt>(validator: &ValidatorKin
 
     let recipient_ua: String = clients.get_recipient_address("unified").await;
     let recipient_taddr: String = clients.get_recipient_address("transparent").await;
-    zaino_testutils::from_inputs::quick_send(
+    from_inputs::quick_send(
         &mut clients.faucet,
         vec![(&recipient_taddr, 250_000, None)],
     )
     .await
     .unwrap();
-    zaino_testutils::from_inputs::quick_send(
+    from_inputs::quick_send(
         &mut clients.faucet,
         vec![(&recipient_ua, 250_000, None)],
     )
@@ -205,17 +193,8 @@ async fn fetch_service_get_raw_mempool<V: ValidatorExt>(validator: &ValidatorKin
 // `getmempoolinfo` computed from local Broadcast state for all validators
 #[allow(deprecated)]
 pub async fn test_get_mempool_info<V: ValidatorExt>(validator: &ValidatorKind) {
-    let mut test_manager =
-        TestManager::<V, FetchService>::launch(validator, None, None, None, true, false, true)
-            .await
-            .unwrap();
-
-    let fetch_service_subscriber = test_manager.service_subscriber.take().unwrap();
-
-    let mut clients = test_manager
-        .clients
-        .take()
-        .expect("Clients are not initialized");
+    let (mut test_manager, fetch_service_subscriber, mut clients) =
+        create_test_manager_and_fetch_service::<V>(validator, None).await;
 
     test_manager
         .generate_blocks_and_wait_for_tip(1, &fetch_service_subscriber)
@@ -245,14 +224,14 @@ pub async fn test_get_mempool_info<V: ValidatorExt>(validator: &ValidatorKind) {
     let recipient_unified_address = clients.get_recipient_address("unified").await;
     let recipient_transparent_address = clients.get_recipient_address("transparent").await;
 
-    zaino_testutils::from_inputs::quick_send(
+    from_inputs::quick_send(
         &mut clients.faucet,
         vec![(&recipient_transparent_address, 250_000, None)],
     )
     .await
     .unwrap();
 
-    zaino_testutils::from_inputs::quick_send(
+    from_inputs::quick_send(
         &mut clients.faucet,
         vec![(&recipient_unified_address, 250_000, None)],
     )
@@ -305,17 +284,8 @@ pub async fn test_get_mempool_info<V: ValidatorExt>(validator: &ValidatorKind) {
 
 #[allow(deprecated)]
 async fn fetch_service_z_get_treestate<V: ValidatorExt>(validator: &ValidatorKind) {
-    let mut test_manager =
-        TestManager::<V, FetchService>::launch(validator, None, None, None, true, false, true)
-            .await
-            .unwrap();
-
-    let fetch_service_subscriber = test_manager.service_subscriber.take().unwrap();
-
-    let mut clients = test_manager
-        .clients
-        .take()
-        .expect("Clients are not initialized");
+    let (mut test_manager, fetch_service_subscriber, mut clients) =
+        create_test_manager_and_fetch_service::<V>(validator, None).await;
     clients.faucet.sync_and_await().await.unwrap();
 
     if matches!(validator, ValidatorKind::Zebrad) {
@@ -332,7 +302,7 @@ async fn fetch_service_z_get_treestate<V: ValidatorExt>(validator: &ValidatorKin
     };
 
     let recipient_ua = clients.get_recipient_address("unified").await;
-    zaino_testutils::from_inputs::quick_send(
+    from_inputs::quick_send(
         &mut clients.faucet,
         vec![(&recipient_ua, 250_000, None)],
     )
@@ -355,17 +325,8 @@ async fn fetch_service_z_get_treestate<V: ValidatorExt>(validator: &ValidatorKin
 
 #[allow(deprecated)]
 async fn fetch_service_z_get_subtrees_by_index<V: ValidatorExt>(validator: &ValidatorKind) {
-    let mut test_manager =
-        TestManager::<V, FetchService>::launch(validator, None, None, None, true, false, true)
-            .await
-            .unwrap();
-
-    let fetch_service_subscriber = test_manager.service_subscriber.take().unwrap();
-
-    let mut clients = test_manager
-        .clients
-        .take()
-        .expect("Clients are not initialized");
+    let (mut test_manager, fetch_service_subscriber, mut clients) =
+        create_test_manager_and_fetch_service::<V>(validator, None).await;
     clients.faucet.sync_and_await().await.unwrap();
 
     if matches!(validator, ValidatorKind::Zebrad) {
@@ -382,7 +343,7 @@ async fn fetch_service_z_get_subtrees_by_index<V: ValidatorExt>(validator: &Vali
     };
 
     let recipient_ua = clients.get_recipient_address("unified").await;
-    zaino_testutils::from_inputs::quick_send(
+    from_inputs::quick_send(
         &mut clients.faucet,
         vec![(&recipient_ua, 250_000, None)],
     )
@@ -403,17 +364,8 @@ async fn fetch_service_z_get_subtrees_by_index<V: ValidatorExt>(validator: &Vali
 
 #[allow(deprecated)]
 async fn fetch_service_get_raw_transaction<V: ValidatorExt>(validator: &ValidatorKind) {
-    let mut test_manager =
-        TestManager::<V, FetchService>::launch(validator, None, None, None, true, false, true)
-            .await
-            .unwrap();
-
-    let fetch_service_subscriber = test_manager.service_subscriber.take().unwrap();
-
-    let mut clients = test_manager
-        .clients
-        .take()
-        .expect("Clients are not initialized");
+    let (mut test_manager, fetch_service_subscriber, mut clients) =
+        create_test_manager_and_fetch_service::<V>(validator, None).await;
     clients.faucet.sync_and_await().await.unwrap();
 
     if matches!(validator, ValidatorKind::Zebrad) {
@@ -429,7 +381,7 @@ async fn fetch_service_get_raw_transaction<V: ValidatorExt>(validator: &Validato
     };
 
     let recipient_ua = clients.get_recipient_address("unified").await;
-    let tx = zaino_testutils::from_inputs::quick_send(
+    let tx = from_inputs::quick_send(
         &mut clients.faucet,
         vec![(&recipient_ua, 250_000, None)],
     )
@@ -450,17 +402,8 @@ async fn fetch_service_get_raw_transaction<V: ValidatorExt>(validator: &Validato
 
 #[allow(deprecated)]
 async fn fetch_service_get_address_tx_ids<V: ValidatorExt>(validator: &ValidatorKind) {
-    let mut test_manager =
-        TestManager::<V, FetchService>::launch(validator, None, None, None, true, false, true)
-            .await
-            .unwrap();
-
-    let fetch_service_subscriber = test_manager.service_subscriber.take().unwrap();
-
-    let mut clients = test_manager
-        .clients
-        .take()
-        .expect("Clients are not initialized");
+    let (mut test_manager, fetch_service_subscriber, mut clients) =
+        create_test_manager_and_fetch_service::<V>(validator, None).await;
     let recipient_taddr = clients.get_recipient_address("transparent").await;
 
     clients.faucet.sync_and_await().await.unwrap();
@@ -477,7 +420,7 @@ async fn fetch_service_get_address_tx_ids<V: ValidatorExt>(validator: &Validator
         clients.faucet.sync_and_await().await.unwrap();
     };
 
-    let tx = zaino_testutils::from_inputs::quick_send(
+    let tx = from_inputs::quick_send(
         &mut clients.faucet,
         vec![(recipient_taddr.as_str(), 250_000, None)],
     )
@@ -512,17 +455,8 @@ async fn fetch_service_get_address_tx_ids<V: ValidatorExt>(validator: &Validator
 
 #[allow(deprecated)]
 async fn fetch_service_get_address_utxos<V: ValidatorExt>(validator: &ValidatorKind) {
-    let mut test_manager =
-        TestManager::<V, FetchService>::launch(validator, None, None, None, true, false, true)
-            .await
-            .unwrap();
-
-    let fetch_service_subscriber = test_manager.service_subscriber.take().unwrap();
-
-    let mut clients = test_manager
-        .clients
-        .take()
-        .expect("Clients are not initialized");
+    let (mut test_manager, fetch_service_subscriber, mut clients) =
+        create_test_manager_and_fetch_service::<V>(validator, None).await;
     let recipient_taddr = clients.get_recipient_address("transparent").await;
     clients.faucet.sync_and_await().await.unwrap();
 
@@ -538,7 +472,7 @@ async fn fetch_service_get_address_utxos<V: ValidatorExt>(validator: &ValidatorK
         clients.faucet.sync_and_await().await.unwrap();
     };
 
-    let txid_1 = zaino_testutils::from_inputs::quick_send(
+    let txid_1 = from_inputs::quick_send(
         &mut clients.faucet,
         vec![(recipient_taddr.as_str(), 250_000, None)],
     )
@@ -567,19 +501,10 @@ async fn fetch_service_get_address_utxos<V: ValidatorExt>(validator: &ValidatorK
 async fn fetch_service_get_block_range_returns_all_pools<V: ValidatorExt>(
     validator: &ValidatorKind,
 ) {
-    let mut test_manager =
-        TestManager::<V, FetchService>::launch(validator, None, None, None, true, false, true)
-            .await
-            .unwrap();
-
-    let mut clients = test_manager
-        .clients
-        .take()
-        .expect("Clients are not initialized");
+    let (mut test_manager, fetch_service_subscriber, mut clients) =
+        create_test_manager_and_fetch_service::<V>(validator, None).await;
 
     clients.faucet.sync_and_await().await.unwrap();
-
-    let fetch_service_subscriber = test_manager.service_subscriber.take().unwrap();
 
     if matches!(validator, ValidatorKind::Zebrad) {
         test_manager
@@ -604,7 +529,7 @@ async fn fetch_service_get_block_range_returns_all_pools<V: ValidatorExt>(
     }
 
     let recipient_transparent = clients.get_recipient_address("transparent").await;
-    let deshielding_txid = zaino_testutils::from_inputs::quick_send(
+    let deshielding_txid = from_inputs::quick_send(
         &mut clients.faucet,
         vec![(&recipient_transparent, 250_000, None)],
     )
@@ -613,7 +538,7 @@ async fn fetch_service_get_block_range_returns_all_pools<V: ValidatorExt>(
     .head;
 
     let recipient_sapling = clients.get_recipient_address("sapling").await;
-    let sapling_txid = zaino_testutils::from_inputs::quick_send(
+    let sapling_txid = from_inputs::quick_send(
         &mut clients.faucet,
         vec![(&recipient_sapling, 250_000, None)],
     )
@@ -622,7 +547,7 @@ async fn fetch_service_get_block_range_returns_all_pools<V: ValidatorExt>(
     .head;
 
     let recipient_ua = clients.get_recipient_address("unified").await;
-    let orchard_txid = zaino_testutils::from_inputs::quick_send(
+    let orchard_txid = from_inputs::quick_send(
         &mut clients.faucet,
         vec![(&recipient_ua, 250_000, None)],
     )
@@ -722,19 +647,10 @@ async fn fetch_service_get_block_range_returns_all_pools<V: ValidatorExt>(
 async fn fetch_service_get_block_range_no_pools_returns_sapling_orchard<V: ValidatorExt>(
     validator: &ValidatorKind,
 ) {
-    let mut test_manager =
-        TestManager::<V, FetchService>::launch(validator, None, None, None, true, false, true)
-            .await
-            .unwrap();
-
-    let mut clients = test_manager
-        .clients
-        .take()
-        .expect("Clients are not initialized");
+    let (mut test_manager, fetch_service_subscriber, mut clients) =
+        create_test_manager_and_fetch_service::<V>(validator, None).await;
 
     clients.faucet.sync_and_await().await.unwrap();
-
-    let fetch_service_subscriber = test_manager.service_subscriber.take().unwrap();
 
     if matches!(validator, ValidatorKind::Zebrad) {
         test_manager
@@ -759,7 +675,7 @@ async fn fetch_service_get_block_range_no_pools_returns_sapling_orchard<V: Valid
     }
 
     let recipient_transparent = clients.get_recipient_address("transparent").await;
-    let deshielding_txid = zaino_testutils::from_inputs::quick_send(
+    let deshielding_txid = from_inputs::quick_send(
         &mut clients.faucet,
         vec![(&recipient_transparent, 250_000, None)],
     )
@@ -768,7 +684,7 @@ async fn fetch_service_get_block_range_no_pools_returns_sapling_orchard<V: Valid
     .head;
 
     let recipient_sapling = clients.get_recipient_address("sapling").await;
-    let sapling_txid = zaino_testutils::from_inputs::quick_send(
+    let sapling_txid = from_inputs::quick_send(
         &mut clients.faucet,
         vec![(&recipient_sapling, 250_000, None)],
     )
@@ -777,7 +693,7 @@ async fn fetch_service_get_block_range_no_pools_returns_sapling_orchard<V: Valid
     .head;
 
     let recipient_ua = clients.get_recipient_address("unified").await;
-    let orchard_txid = zaino_testutils::from_inputs::quick_send(
+    let orchard_txid = from_inputs::quick_send(
         &mut clients.faucet,
         vec![(&recipient_ua, 250_000, None)],
     )
@@ -870,17 +786,8 @@ async fn fetch_service_get_block_range_no_pools_returns_sapling_orchard<V: Valid
 
 #[allow(deprecated)]
 async fn fetch_service_get_transaction_mined<V: ValidatorExt>(validator: &ValidatorKind) {
-    let mut test_manager =
-        TestManager::<V, FetchService>::launch(validator, None, None, None, true, false, true)
-            .await
-            .unwrap();
-
-    let fetch_service_subscriber = test_manager.service_subscriber.take().unwrap();
-
-    let mut clients = test_manager
-        .clients
-        .take()
-        .expect("Clients are not initialized");
+    let (mut test_manager, fetch_service_subscriber, mut clients) =
+        create_test_manager_and_fetch_service::<V>(validator, None).await;
     clients.faucet.sync_and_await().await.unwrap();
 
     if matches!(validator, ValidatorKind::Zebrad) {
@@ -896,7 +803,7 @@ async fn fetch_service_get_transaction_mined<V: ValidatorExt>(validator: &Valida
     };
 
     let recipient_ua = clients.get_recipient_address("unified").await;
-    let tx = zaino_testutils::from_inputs::quick_send(
+    let tx = from_inputs::quick_send(
         &mut clients.faucet,
         vec![(&recipient_ua, 250_000, None)],
     )
@@ -924,17 +831,8 @@ async fn fetch_service_get_transaction_mined<V: ValidatorExt>(validator: &Valida
 
 #[allow(deprecated)]
 async fn fetch_service_get_transaction_mempool<V: ValidatorExt>(validator: &ValidatorKind) {
-    let mut test_manager =
-        TestManager::<V, FetchService>::launch(validator, None, None, None, true, false, true)
-            .await
-            .unwrap();
-
-    let fetch_service_subscriber = test_manager.service_subscriber.take().unwrap();
-
-    let mut clients = test_manager
-        .clients
-        .take()
-        .expect("Clients are not initialized");
+    let (mut test_manager, fetch_service_subscriber, mut clients) =
+        create_test_manager_and_fetch_service::<V>(validator, None).await;
     clients.faucet.sync_and_await().await.unwrap();
 
     if matches!(validator, ValidatorKind::Zebrad) {
@@ -950,7 +848,7 @@ async fn fetch_service_get_transaction_mempool<V: ValidatorExt>(validator: &Vali
     };
 
     let recipient_ua = clients.get_recipient_address("unified").await;
-    let tx = zaino_testutils::from_inputs::quick_send(
+    let tx = from_inputs::quick_send(
         &mut clients.faucet,
         vec![(&recipient_ua, 250_000, None)],
     )
@@ -977,17 +875,8 @@ async fn fetch_service_get_transaction_mempool<V: ValidatorExt>(validator: &Vali
 
 #[allow(deprecated)]
 async fn fetch_service_get_taddress_txids<V: ValidatorExt>(validator: &ValidatorKind) {
-    let mut test_manager =
-        TestManager::<V, FetchService>::launch(validator, None, None, None, true, false, true)
-            .await
-            .unwrap();
-
-    let fetch_service_subscriber = test_manager.service_subscriber.take().unwrap();
-
-    let mut clients = test_manager
-        .clients
-        .take()
-        .expect("Clients are not initialized");
+    let (mut test_manager, fetch_service_subscriber, mut clients) =
+        create_test_manager_and_fetch_service::<V>(validator, None).await;
     let recipient_taddr = clients.get_recipient_address("transparent").await;
 
     clients.faucet.sync_and_await().await.unwrap();
@@ -1004,7 +893,7 @@ async fn fetch_service_get_taddress_txids<V: ValidatorExt>(validator: &Validator
         clients.faucet.sync_and_await().await.unwrap();
     };
 
-    let tx = zaino_testutils::from_inputs::quick_send(
+    let tx = from_inputs::quick_send(
         &mut clients.faucet,
         vec![(&recipient_taddr, 250_000, None)],
     )
@@ -1059,17 +948,8 @@ async fn fetch_service_get_taddress_txids<V: ValidatorExt>(validator: &Validator
 
 #[allow(deprecated)]
 async fn fetch_service_get_taddress_balance<V: ValidatorExt>(validator: &ValidatorKind) {
-    let mut test_manager =
-        TestManager::<V, FetchService>::launch(validator, None, None, None, true, false, true)
-            .await
-            .unwrap();
-
-    let fetch_service_subscriber = test_manager.service_subscriber.take().unwrap();
-
-    let mut clients = test_manager
-        .clients
-        .take()
-        .expect("Clients are not initialized");
+    let (mut test_manager, fetch_service_subscriber, mut clients) =
+        create_test_manager_and_fetch_service::<V>(validator, None).await;
     let recipient_taddr = clients.get_recipient_address("transparent").await;
     clients.faucet.sync_and_await().await.unwrap();
 
@@ -1085,7 +965,7 @@ async fn fetch_service_get_taddress_balance<V: ValidatorExt>(validator: &Validat
         clients.faucet.sync_and_await().await.unwrap();
     };
 
-    zaino_testutils::from_inputs::quick_send(
+    from_inputs::quick_send(
         &mut clients.faucet,
         vec![(&recipient_taddr, 250_000, None)],
     )
@@ -1122,17 +1002,8 @@ async fn fetch_service_get_taddress_balance<V: ValidatorExt>(validator: &Validat
 
 #[allow(deprecated)]
 async fn fetch_service_get_mempool_tx<V: ValidatorExt>(validator: &ValidatorKind) {
-    let mut test_manager =
-        TestManager::<V, FetchService>::launch(validator, None, None, None, true, false, true)
-            .await
-            .unwrap();
-
-    let fetch_service_subscriber = test_manager.service_subscriber.take().unwrap();
-
-    let mut clients = test_manager
-        .clients
-        .take()
-        .expect("Clients are not initialized");
+    let (mut test_manager, fetch_service_subscriber, mut clients) =
+        create_test_manager_and_fetch_service::<V>(validator, None).await;
     test_manager
         .generate_blocks_and_wait_for_tip(1, &fetch_service_subscriber)
         .await;
@@ -1157,13 +1028,13 @@ async fn fetch_service_get_mempool_tx<V: ValidatorExt>(validator: &ValidatorKind
 
     let recipient_ua = clients.get_recipient_address("unified").await;
     let recipient_taddr = clients.get_recipient_address("transparent").await;
-    let tx_1 = zaino_testutils::from_inputs::quick_send(
+    let tx_1 = from_inputs::quick_send(
         &mut clients.faucet,
         vec![(&recipient_taddr, 250_000, None)],
     )
     .await
     .unwrap();
-    let tx_2 = zaino_testutils::from_inputs::quick_send(
+    let tx_2 = from_inputs::quick_send(
         &mut clients.faucet,
         vec![(&recipient_ua, 250_000, None)],
     )
@@ -1230,17 +1101,8 @@ async fn fetch_service_get_mempool_tx<V: ValidatorExt>(validator: &ValidatorKind
 
 #[allow(deprecated)]
 async fn fetch_service_get_mempool_stream<V: ValidatorExt>(validator: &ValidatorKind) {
-    let mut test_manager =
-        TestManager::<V, FetchService>::launch(validator, None, None, None, true, false, true)
-            .await
-            .unwrap();
-
-    let fetch_service_subscriber = test_manager.service_subscriber.take().unwrap();
-
-    let mut clients = test_manager
-        .clients
-        .take()
-        .expect("Clients are not initialized");
+    let (mut test_manager, fetch_service_subscriber, mut clients) =
+        create_test_manager_and_fetch_service::<V>(validator, None).await;
     test_manager
         .generate_blocks_and_wait_for_tip(1, &fetch_service_subscriber)
         .await;
@@ -1280,13 +1142,13 @@ async fn fetch_service_get_mempool_stream<V: ValidatorExt>(validator: &Validator
 
     let recipient_ua = clients.get_recipient_address("unified").await;
     let recipient_taddr = clients.get_recipient_address("transparent").await;
-    zaino_testutils::from_inputs::quick_send(
+    from_inputs::quick_send(
         &mut clients.faucet,
         vec![(&recipient_taddr, 250_000, None)],
     )
     .await
     .unwrap();
-    zaino_testutils::from_inputs::quick_send(
+    from_inputs::quick_send(
         &mut clients.faucet,
         vec![(&recipient_ua, 250_000, None)],
     )
@@ -1310,17 +1172,8 @@ async fn fetch_service_get_mempool_stream<V: ValidatorExt>(validator: &Validator
 
 #[allow(deprecated)]
 async fn fetch_service_get_taddress_utxos<V: ValidatorExt>(validator: &ValidatorKind) {
-    let mut test_manager =
-        TestManager::<V, FetchService>::launch(validator, None, None, None, true, false, true)
-            .await
-            .unwrap();
-
-    let fetch_service_subscriber = test_manager.service_subscriber.take().unwrap();
-
-    let mut clients = test_manager
-        .clients
-        .take()
-        .expect("Clients are not initialized");
+    let (mut test_manager, fetch_service_subscriber, mut clients) =
+        create_test_manager_and_fetch_service::<V>(validator, None).await;
     let recipient_taddr = clients.get_recipient_address("transparent").await;
     clients.faucet.sync_and_await().await.unwrap();
 
@@ -1336,7 +1189,7 @@ async fn fetch_service_get_taddress_utxos<V: ValidatorExt>(validator: &Validator
         clients.faucet.sync_and_await().await.unwrap();
     };
 
-    let tx = zaino_testutils::from_inputs::quick_send(
+    let tx = from_inputs::quick_send(
         &mut clients.faucet,
         vec![(&recipient_taddr, 250_000, None)],
     )
@@ -1365,17 +1218,8 @@ async fn fetch_service_get_taddress_utxos<V: ValidatorExt>(validator: &Validator
 
 #[allow(deprecated)]
 async fn fetch_service_get_taddress_utxos_stream<V: ValidatorExt>(validator: &ValidatorKind) {
-    let mut test_manager =
-        TestManager::<V, FetchService>::launch(validator, None, None, None, true, false, true)
-            .await
-            .unwrap();
-
-    let fetch_service_subscriber = test_manager.service_subscriber.take().unwrap();
-
-    let mut clients = test_manager
-        .clients
-        .take()
-        .expect("Clients are not initialized");
+    let (mut test_manager, fetch_service_subscriber, mut clients) =
+        create_test_manager_and_fetch_service::<V>(validator, None).await;
     let recipient_taddr = clients.get_recipient_address("transparent").await;
     clients.faucet.sync_and_await().await.unwrap();
 
@@ -1391,7 +1235,7 @@ async fn fetch_service_get_taddress_utxos_stream<V: ValidatorExt>(validator: &Va
         clients.faucet.sync_and_await().await.unwrap();
     };
 
-    zaino_testutils::from_inputs::quick_send(
+    from_inputs::quick_send(
         &mut clients.faucet,
         vec![(&recipient_taddr, 250_000, None)],
     )

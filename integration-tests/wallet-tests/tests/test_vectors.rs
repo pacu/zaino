@@ -1,6 +1,5 @@
 //! Holds code used to build test vector data for unit tests. These tests should not be run by default or in CI.
 
-use anyhow::Context;
 use corez::io::{self, Read, Write};
 use futures::TryFutureExt as _;
 use std::fs;
@@ -10,9 +9,6 @@ use std::io::BufWriter;
 use std::path::Path;
 use std::sync::Arc;
 use tower::{Service, ServiceExt as _};
-use wire_serialized_transaction_test_data::transactions::get_test_vectors;
-use zaino_fetch::chain::transaction::FullTransaction;
-use zaino_fetch::chain::utils::ParseFromSlice;
 use zaino_state::read_u32_le;
 use zaino_state::read_u64_le;
 use zaino_state::write_u32_le;
@@ -22,7 +18,7 @@ use zaino_state::CompactSize;
 use zaino_state::StateService;
 use zaino_state::ZcashIndexer;
 use zaino_state::{ChainWork, IndexedBlock};
-use zaino_testutils::from_inputs;
+use wallet_tests::from_inputs;
 use zaino_testutils::{TestManager, ValidatorKind};
 use zcash_local_net::validator::zebrad::Zebrad;
 use zebra_chain::serialization::{ZcashDeserialize, ZcashSerialize};
@@ -53,17 +49,20 @@ async fn create_200_block_regtest_chain_vectors() {
         None,
         true,
         false,
-        true,
+        false,
     )
     .await
     .unwrap();
 
     let state_service_subscriber = test_manager.service_subscriber.take().unwrap();
 
-    let mut clients = test_manager
-        .clients
-        .take()
-        .expect("Clients are not initialized");
+    let mut clients = wallet_tests::build_clients(
+        test_manager
+            .zaino_grpc_listen_address
+            .expect("zaino enabled")
+            .port(),
+        wallet_tests::default_heights(&ValidatorKind::Zebrad),
+    );
 
     let faucet_taddr = clients.get_faucet_address("transparent").await;
     let faucet_saddr = clients.get_faucet_address("sapling").await;
