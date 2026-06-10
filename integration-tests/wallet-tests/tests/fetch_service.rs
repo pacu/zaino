@@ -37,25 +37,42 @@ async fn create_test_manager_and_fetch_service<V: ValidatorExt>(
     (test_manager, fetch_service_subscriber, clients)
 }
 
+/// Sync the faucet; on zebrad, run `shield_rounds` rounds of "mature 100
+/// coinbase blocks, sync, shield" (zebrad can't mine directly to orchard in
+/// this setup), then mine one more block and sync so the shielded funds are
+/// spendable. `shield_rounds` of 1 funds a single send; 2 funds two.
+#[allow(deprecated)]
+async fn fund_faucet<V: ValidatorExt>(
+    test_manager: &TestManager<V, FetchService>,
+    clients: &mut wallet_tests::Clients,
+    validator: &ValidatorKind,
+    fetch_service_subscriber: &FetchServiceSubscriber,
+    shield_rounds: u32,
+) {
+    clients.faucet.sync_and_await().await.unwrap();
+
+    if matches!(validator, ValidatorKind::Zebrad) {
+        for _ in 0..shield_rounds {
+            test_manager
+                .generate_blocks_and_wait_for_tip(100, fetch_service_subscriber)
+                .await;
+            clients.faucet.sync_and_await().await.unwrap();
+            clients.faucet.quick_shield(AccountId::ZERO).await.unwrap();
+        }
+        test_manager
+            .generate_blocks_and_wait_for_tip(1, fetch_service_subscriber)
+            .await;
+        clients.faucet.sync_and_await().await.unwrap();
+    }
+}
+
 #[allow(deprecated)]
 async fn fetch_service_get_address_balance<V: ValidatorExt>(validator: &ValidatorKind) {
     let (mut test_manager, fetch_service_subscriber, mut clients) =
         create_test_manager_and_fetch_service::<V>(validator, None).await;
     let recipient_address = clients.get_recipient_address("transparent").await;
 
-    clients.faucet.sync_and_await().await.unwrap();
-
-    if matches!(validator, ValidatorKind::Zebrad) {
-        test_manager
-            .generate_blocks_and_wait_for_tip(100, &fetch_service_subscriber)
-            .await;
-        clients.faucet.sync_and_await().await.unwrap();
-        clients.faucet.quick_shield(AccountId::ZERO).await.unwrap();
-        test_manager
-            .generate_blocks_and_wait_for_tip(1, &fetch_service_subscriber)
-            .await;
-        clients.faucet.sync_and_await().await.unwrap();
-    };
+    fund_faucet(&test_manager, &mut clients, validator, &fetch_service_subscriber, 1).await;
 
     dbg!(clients.faucet_balance().await);
     dbg!(clients.faucet.transaction_summaries(false).await.unwrap());
@@ -104,24 +121,7 @@ async fn fetch_service_get_raw_mempool<V: ValidatorExt>(validator: &ValidatorKin
         .generate_blocks_and_wait_for_tip(1, &fetch_service_subscriber)
         .await;
 
-    clients.faucet.sync_and_await().await.unwrap();
-
-    if matches!(validator, ValidatorKind::Zebrad) {
-        test_manager
-            .generate_blocks_and_wait_for_tip(100, &fetch_service_subscriber)
-            .await;
-        clients.faucet.sync_and_await().await.unwrap();
-        clients.faucet.quick_shield(AccountId::ZERO).await.unwrap();
-        test_manager
-            .generate_blocks_and_wait_for_tip(100, &fetch_service_subscriber)
-            .await;
-        clients.faucet.sync_and_await().await.unwrap();
-        clients.faucet.quick_shield(AccountId::ZERO).await.unwrap();
-        test_manager
-            .generate_blocks_and_wait_for_tip(1, &fetch_service_subscriber)
-            .await;
-        clients.faucet.sync_and_await().await.unwrap();
-    };
+    fund_faucet(&test_manager, &mut clients, validator, &fetch_service_subscriber, 2).await;
 
     let recipient_ua: String = clients.get_recipient_address("unified").await;
     let recipient_taddr: String = clients.get_recipient_address("transparent").await;
@@ -161,27 +161,7 @@ pub async fn test_get_mempool_info<V: ValidatorExt>(validator: &ValidatorKind) {
     test_manager
         .generate_blocks_and_wait_for_tip(1, &fetch_service_subscriber)
         .await;
-    clients.faucet.sync_and_await().await.unwrap();
-
-    // Zebra cannot mine directly to Orchard in this setup, so shield funds first.
-    if matches!(validator, ValidatorKind::Zebrad) {
-        test_manager
-            .generate_blocks_and_wait_for_tip(100, &fetch_service_subscriber)
-            .await;
-        clients.faucet.sync_and_await().await.unwrap();
-        clients.faucet.quick_shield(AccountId::ZERO).await.unwrap();
-
-        test_manager
-            .generate_blocks_and_wait_for_tip(100, &fetch_service_subscriber)
-            .await;
-        clients.faucet.sync_and_await().await.unwrap();
-        clients.faucet.quick_shield(AccountId::ZERO).await.unwrap();
-
-        test_manager
-            .generate_blocks_and_wait_for_tip(1, &fetch_service_subscriber)
-            .await;
-        clients.faucet.sync_and_await().await.unwrap();
-    }
+    fund_faucet(&test_manager, &mut clients, validator, &fetch_service_subscriber, 2).await;
 
     let recipient_unified_address = clients.get_recipient_address("unified").await;
     let recipient_transparent_address = clients.get_recipient_address("transparent").await;
@@ -248,20 +228,7 @@ pub async fn test_get_mempool_info<V: ValidatorExt>(validator: &ValidatorKind) {
 async fn fetch_service_z_get_treestate<V: ValidatorExt>(validator: &ValidatorKind) {
     let (mut test_manager, fetch_service_subscriber, mut clients) =
         create_test_manager_and_fetch_service::<V>(validator, None).await;
-    clients.faucet.sync_and_await().await.unwrap();
-
-    if matches!(validator, ValidatorKind::Zebrad) {
-        // TODO: investigate why 101 blocks are needed instead of the previous 100 blocks (chain index integration related?)
-        test_manager
-            .generate_blocks_and_wait_for_tip(101, &fetch_service_subscriber)
-            .await;
-        clients.faucet.sync_and_await().await.unwrap();
-        clients.faucet.quick_shield(AccountId::ZERO).await.unwrap();
-        test_manager
-            .generate_blocks_and_wait_for_tip(1, &fetch_service_subscriber)
-            .await;
-        clients.faucet.sync_and_await().await.unwrap();
-    };
+    fund_faucet(&test_manager, &mut clients, validator, &fetch_service_subscriber, 1).await;
 
     let recipient_ua = clients.get_recipient_address("unified").await;
     from_inputs::quick_send(
@@ -289,20 +256,7 @@ async fn fetch_service_z_get_treestate<V: ValidatorExt>(validator: &ValidatorKin
 async fn fetch_service_z_get_subtrees_by_index<V: ValidatorExt>(validator: &ValidatorKind) {
     let (mut test_manager, fetch_service_subscriber, mut clients) =
         create_test_manager_and_fetch_service::<V>(validator, None).await;
-    clients.faucet.sync_and_await().await.unwrap();
-
-    if matches!(validator, ValidatorKind::Zebrad) {
-        test_manager
-            .generate_blocks_and_wait_for_tip(100, &fetch_service_subscriber)
-            .await;
-        clients.faucet.sync_and_await().await.unwrap();
-        clients.faucet.quick_shield(AccountId::ZERO).await.unwrap();
-        test_manager
-            .generate_blocks_and_wait_for_tip(1, &fetch_service_subscriber)
-            .await;
-        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-        clients.faucet.sync_and_await().await.unwrap();
-    };
+    fund_faucet(&test_manager, &mut clients, validator, &fetch_service_subscriber, 1).await;
 
     let recipient_ua = clients.get_recipient_address("unified").await;
     from_inputs::quick_send(
@@ -328,19 +282,7 @@ async fn fetch_service_z_get_subtrees_by_index<V: ValidatorExt>(validator: &Vali
 async fn fetch_service_get_raw_transaction<V: ValidatorExt>(validator: &ValidatorKind) {
     let (mut test_manager, fetch_service_subscriber, mut clients) =
         create_test_manager_and_fetch_service::<V>(validator, None).await;
-    clients.faucet.sync_and_await().await.unwrap();
-
-    if matches!(validator, ValidatorKind::Zebrad) {
-        test_manager
-            .generate_blocks_and_wait_for_tip(100, &fetch_service_subscriber)
-            .await;
-        clients.faucet.sync_and_await().await.unwrap();
-        clients.faucet.quick_shield(AccountId::ZERO).await.unwrap();
-        test_manager
-            .generate_blocks_and_wait_for_tip(1, &fetch_service_subscriber)
-            .await;
-        clients.faucet.sync_and_await().await.unwrap();
-    };
+    fund_faucet(&test_manager, &mut clients, validator, &fetch_service_subscriber, 1).await;
 
     let recipient_ua = clients.get_recipient_address("unified").await;
     let tx = from_inputs::quick_send(
@@ -368,19 +310,7 @@ async fn fetch_service_get_address_tx_ids<V: ValidatorExt>(validator: &Validator
         create_test_manager_and_fetch_service::<V>(validator, None).await;
     let recipient_taddr = clients.get_recipient_address("transparent").await;
 
-    clients.faucet.sync_and_await().await.unwrap();
-
-    if matches!(validator, ValidatorKind::Zebrad) {
-        test_manager
-            .generate_blocks_and_wait_for_tip(100, &fetch_service_subscriber)
-            .await;
-        clients.faucet.sync_and_await().await.unwrap();
-        clients.faucet.quick_shield(AccountId::ZERO).await.unwrap();
-        test_manager
-            .generate_blocks_and_wait_for_tip(1, &fetch_service_subscriber)
-            .await;
-        clients.faucet.sync_and_await().await.unwrap();
-    };
+    fund_faucet(&test_manager, &mut clients, validator, &fetch_service_subscriber, 1).await;
 
     let tx = from_inputs::quick_send(
         &mut clients.faucet,
@@ -420,19 +350,7 @@ async fn fetch_service_get_address_utxos<V: ValidatorExt>(validator: &ValidatorK
     let (mut test_manager, fetch_service_subscriber, mut clients) =
         create_test_manager_and_fetch_service::<V>(validator, None).await;
     let recipient_taddr = clients.get_recipient_address("transparent").await;
-    clients.faucet.sync_and_await().await.unwrap();
-
-    if matches!(validator, ValidatorKind::Zebrad) {
-        test_manager
-            .generate_blocks_and_wait_for_tip(100, &fetch_service_subscriber)
-            .await;
-        clients.faucet.sync_and_await().await.unwrap();
-        clients.faucet.quick_shield(AccountId::ZERO).await.unwrap();
-        test_manager
-            .generate_blocks_and_wait_for_tip(1, &fetch_service_subscriber)
-            .await;
-        clients.faucet.sync_and_await().await.unwrap();
-    };
+    fund_faucet(&test_manager, &mut clients, validator, &fetch_service_subscriber, 1).await;
 
     let txid_1 = from_inputs::quick_send(
         &mut clients.faucet,
@@ -750,19 +668,7 @@ async fn fetch_service_get_block_range_no_pools_returns_sapling_orchard<V: Valid
 async fn fetch_service_get_transaction_mined<V: ValidatorExt>(validator: &ValidatorKind) {
     let (mut test_manager, fetch_service_subscriber, mut clients) =
         create_test_manager_and_fetch_service::<V>(validator, None).await;
-    clients.faucet.sync_and_await().await.unwrap();
-
-    if matches!(validator, ValidatorKind::Zebrad) {
-        test_manager
-            .generate_blocks_and_wait_for_tip(100, &fetch_service_subscriber)
-            .await;
-        clients.faucet.sync_and_await().await.unwrap();
-        clients.faucet.quick_shield(AccountId::ZERO).await.unwrap();
-        test_manager
-            .generate_blocks_and_wait_for_tip(1, &fetch_service_subscriber)
-            .await;
-        clients.faucet.sync_and_await().await.unwrap();
-    };
+    fund_faucet(&test_manager, &mut clients, validator, &fetch_service_subscriber, 1).await;
 
     let recipient_ua = clients.get_recipient_address("unified").await;
     let tx = from_inputs::quick_send(
@@ -795,19 +701,7 @@ async fn fetch_service_get_transaction_mined<V: ValidatorExt>(validator: &Valida
 async fn fetch_service_get_transaction_mempool<V: ValidatorExt>(validator: &ValidatorKind) {
     let (mut test_manager, fetch_service_subscriber, mut clients) =
         create_test_manager_and_fetch_service::<V>(validator, None).await;
-    clients.faucet.sync_and_await().await.unwrap();
-
-    if matches!(validator, ValidatorKind::Zebrad) {
-        test_manager
-            .generate_blocks_and_wait_for_tip(100, &fetch_service_subscriber)
-            .await;
-        clients.faucet.sync_and_await().await.unwrap();
-        clients.faucet.quick_shield(AccountId::ZERO).await.unwrap();
-        test_manager
-            .generate_blocks_and_wait_for_tip(1, &fetch_service_subscriber)
-            .await;
-        clients.faucet.sync_and_await().await.unwrap();
-    };
+    fund_faucet(&test_manager, &mut clients, validator, &fetch_service_subscriber, 1).await;
 
     let recipient_ua = clients.get_recipient_address("unified").await;
     let tx = from_inputs::quick_send(
@@ -841,19 +735,7 @@ async fn fetch_service_get_taddress_txids<V: ValidatorExt>(validator: &Validator
         create_test_manager_and_fetch_service::<V>(validator, None).await;
     let recipient_taddr = clients.get_recipient_address("transparent").await;
 
-    clients.faucet.sync_and_await().await.unwrap();
-
-    if matches!(validator, ValidatorKind::Zebrad) {
-        test_manager
-            .generate_blocks_and_wait_for_tip(100, &fetch_service_subscriber)
-            .await;
-        clients.faucet.sync_and_await().await.unwrap();
-        clients.faucet.quick_shield(AccountId::ZERO).await.unwrap();
-        test_manager
-            .generate_blocks_and_wait_for_tip(1, &fetch_service_subscriber)
-            .await;
-        clients.faucet.sync_and_await().await.unwrap();
-    };
+    fund_faucet(&test_manager, &mut clients, validator, &fetch_service_subscriber, 1).await;
 
     let tx = from_inputs::quick_send(
         &mut clients.faucet,
@@ -913,19 +795,7 @@ async fn fetch_service_get_taddress_balance<V: ValidatorExt>(validator: &Validat
     let (mut test_manager, fetch_service_subscriber, mut clients) =
         create_test_manager_and_fetch_service::<V>(validator, None).await;
     let recipient_taddr = clients.get_recipient_address("transparent").await;
-    clients.faucet.sync_and_await().await.unwrap();
-
-    if matches!(validator, ValidatorKind::Zebrad) {
-        test_manager
-            .generate_blocks_and_wait_for_tip(100, &fetch_service_subscriber)
-            .await;
-        clients.faucet.sync_and_await().await.unwrap();
-        clients.faucet.quick_shield(AccountId::ZERO).await.unwrap();
-        test_manager
-            .generate_blocks_and_wait_for_tip(1, &fetch_service_subscriber)
-            .await;
-        clients.faucet.sync_and_await().await.unwrap();
-    };
+    fund_faucet(&test_manager, &mut clients, validator, &fetch_service_subscriber, 1).await;
 
     from_inputs::quick_send(
         &mut clients.faucet,
@@ -965,24 +835,7 @@ async fn fetch_service_get_mempool_tx<V: ValidatorExt>(validator: &ValidatorKind
     test_manager
         .generate_blocks_and_wait_for_tip(1, &fetch_service_subscriber)
         .await;
-    clients.faucet.sync_and_await().await.unwrap();
-
-    if matches!(validator, ValidatorKind::Zebrad) {
-        test_manager
-            .generate_blocks_and_wait_for_tip(100, &fetch_service_subscriber)
-            .await;
-        clients.faucet.sync_and_await().await.unwrap();
-        clients.faucet.quick_shield(AccountId::ZERO).await.unwrap();
-        test_manager
-            .generate_blocks_and_wait_for_tip(100, &fetch_service_subscriber)
-            .await;
-        clients.faucet.sync_and_await().await.unwrap();
-        clients.faucet.quick_shield(AccountId::ZERO).await.unwrap();
-        test_manager
-            .generate_blocks_and_wait_for_tip(1, &fetch_service_subscriber)
-            .await;
-        clients.faucet.sync_and_await().await.unwrap();
-    };
+    fund_faucet(&test_manager, &mut clients, validator, &fetch_service_subscriber, 2).await;
 
     let recipient_ua = clients.get_recipient_address("unified").await;
     let recipient_taddr = clients.get_recipient_address("transparent").await;
@@ -1064,24 +917,7 @@ async fn fetch_service_get_mempool_stream<V: ValidatorExt>(validator: &Validator
     test_manager
         .generate_blocks_and_wait_for_tip(1, &fetch_service_subscriber)
         .await;
-    clients.faucet.sync_and_await().await.unwrap();
-
-    if matches!(validator, ValidatorKind::Zebrad) {
-        test_manager
-            .generate_blocks_and_wait_for_tip(100, &fetch_service_subscriber)
-            .await;
-        clients.faucet.sync_and_await().await.unwrap();
-        clients.faucet.quick_shield(AccountId::ZERO).await.unwrap();
-        test_manager
-            .generate_blocks_and_wait_for_tip(100, &fetch_service_subscriber)
-            .await;
-        clients.faucet.sync_and_await().await.unwrap();
-        clients.faucet.quick_shield(AccountId::ZERO).await.unwrap();
-        test_manager
-            .generate_blocks_and_wait_for_tip(1, &fetch_service_subscriber)
-            .await;
-        clients.faucet.sync_and_await().await.unwrap();
-    };
+    fund_faucet(&test_manager, &mut clients, validator, &fetch_service_subscriber, 2).await;
 
     let fetch_service_subscriber_2 = fetch_service_subscriber.clone();
     let fetch_service_handle = tokio::spawn(async move {
@@ -1133,19 +969,7 @@ async fn fetch_service_get_taddress_utxos<V: ValidatorExt>(validator: &Validator
     let (mut test_manager, fetch_service_subscriber, mut clients) =
         create_test_manager_and_fetch_service::<V>(validator, None).await;
     let recipient_taddr = clients.get_recipient_address("transparent").await;
-    clients.faucet.sync_and_await().await.unwrap();
-
-    if matches!(validator, ValidatorKind::Zebrad) {
-        test_manager
-            .generate_blocks_and_wait_for_tip(100, &fetch_service_subscriber)
-            .await;
-        clients.faucet.sync_and_await().await.unwrap();
-        clients.faucet.quick_shield(AccountId::ZERO).await.unwrap();
-        test_manager
-            .generate_blocks_and_wait_for_tip(1, &fetch_service_subscriber)
-            .await;
-        clients.faucet.sync_and_await().await.unwrap();
-    };
+    fund_faucet(&test_manager, &mut clients, validator, &fetch_service_subscriber, 1).await;
 
     let tx = from_inputs::quick_send(
         &mut clients.faucet,
@@ -1179,19 +1003,7 @@ async fn fetch_service_get_taddress_utxos_stream<V: ValidatorExt>(validator: &Va
     let (mut test_manager, fetch_service_subscriber, mut clients) =
         create_test_manager_and_fetch_service::<V>(validator, None).await;
     let recipient_taddr = clients.get_recipient_address("transparent").await;
-    clients.faucet.sync_and_await().await.unwrap();
-
-    if matches!(validator, ValidatorKind::Zebrad) {
-        test_manager
-            .generate_blocks_and_wait_for_tip(100, &fetch_service_subscriber)
-            .await;
-        clients.faucet.sync_and_await().await.unwrap();
-        clients.faucet.quick_shield(AccountId::ZERO).await.unwrap();
-        test_manager
-            .generate_blocks_and_wait_for_tip(1, &fetch_service_subscriber)
-            .await;
-        clients.faucet.sync_and_await().await.unwrap();
-    };
+    fund_faucet(&test_manager, &mut clients, validator, &fetch_service_subscriber, 1).await;
 
     from_inputs::quick_send(
         &mut clients.faucet,
