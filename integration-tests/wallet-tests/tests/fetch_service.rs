@@ -249,12 +249,21 @@ async fn fund_and_fill_mempool<V: ValidatorExt>(
     )
 }
 
+/// Launch, fund the faucet (one shield round), and send 250_000 to the
+/// recipient's `pool` address, mining it in. Returns the manager, subscriber,
+/// clients, and the send txid — the shared setup for the mined query tests.
 #[allow(deprecated)]
-async fn fetch_service_get_address_balance<V: ValidatorExt>(validator: &ValidatorKind) {
-    let (mut test_manager, fetch_service_subscriber, mut clients) =
+async fn fund_and_send<V: ValidatorExt>(
+    validator: &ValidatorKind,
+    pool: wallet_tests::Pool,
+) -> (
+    TestManager<V, FetchService>,
+    FetchServiceSubscriber,
+    wallet_tests::Clients,
+    NonEmpty<TxId>,
+) {
+    let (test_manager, fetch_service_subscriber, mut clients) =
         create_test_manager_and_fetch_service::<V>(validator, None).await;
-    let recipient_address = clients.get_recipient_address("transparent").await;
-
     fund_faucet(
         &test_manager,
         &mut clients,
@@ -263,18 +272,23 @@ async fn fetch_service_get_address_balance<V: ValidatorExt>(validator: &Validato
         1,
     )
     .await;
-
-    dbg!(clients.faucet_balance().await);
-    dbg!(clients.faucet.transaction_summaries(false).await.unwrap());
-
-    send_and_mine(
+    let recipient = clients.get_recipient_address(pool.address_kind()).await;
+    let tx = send_and_mine(
         &test_manager,
         &mut clients,
         &fetch_service_subscriber,
-        recipient_address.as_str(),
+        &recipient,
         250_000,
     )
     .await;
+    (test_manager, fetch_service_subscriber, clients, tx)
+}
+
+#[allow(deprecated)]
+async fn fetch_service_get_address_balance<V: ValidatorExt>(validator: &ValidatorKind) {
+    let (mut test_manager, fetch_service_subscriber, mut clients, _tx) =
+        fund_and_send::<V>(validator, wallet_tests::Pool::Transparent).await;
+    let recipient_address = clients.get_recipient_address("transparent").await;
 
     clients.recipient.sync_and_await().await.unwrap();
     let recipient_balance = clients.recipient_balance().await;
@@ -367,26 +381,8 @@ pub async fn test_get_mempool_info<V: ValidatorExt>(validator: &ValidatorKind) {
 
 #[allow(deprecated)]
 async fn fetch_service_z_get_treestate<V: ValidatorExt>(validator: &ValidatorKind) {
-    let (mut test_manager, fetch_service_subscriber, mut clients) =
-        create_test_manager_and_fetch_service::<V>(validator, None).await;
-    fund_faucet(
-        &test_manager,
-        &mut clients,
-        validator,
-        &fetch_service_subscriber,
-        1,
-    )
-    .await;
-
-    let recipient_ua = clients.get_recipient_address("unified").await;
-    send_and_mine(
-        &test_manager,
-        &mut clients,
-        &fetch_service_subscriber,
-        &recipient_ua,
-        250_000,
-    )
-    .await;
+    let (mut test_manager, fetch_service_subscriber, _clients, _tx) =
+        fund_and_send::<V>(validator, wallet_tests::Pool::Orchard).await;
 
     let chain_height = dbg!(fetch_service_subscriber.chain_height().await.unwrap()).0;
 
@@ -400,26 +396,8 @@ async fn fetch_service_z_get_treestate<V: ValidatorExt>(validator: &ValidatorKin
 
 #[allow(deprecated)]
 async fn fetch_service_z_get_subtrees_by_index<V: ValidatorExt>(validator: &ValidatorKind) {
-    let (mut test_manager, fetch_service_subscriber, mut clients) =
-        create_test_manager_and_fetch_service::<V>(validator, None).await;
-    fund_faucet(
-        &test_manager,
-        &mut clients,
-        validator,
-        &fetch_service_subscriber,
-        1,
-    )
-    .await;
-
-    let recipient_ua = clients.get_recipient_address("unified").await;
-    send_and_mine(
-        &test_manager,
-        &mut clients,
-        &fetch_service_subscriber,
-        &recipient_ua,
-        250_000,
-    )
-    .await;
+    let (mut test_manager, fetch_service_subscriber, _clients, _tx) =
+        fund_and_send::<V>(validator, wallet_tests::Pool::Orchard).await;
 
     dbg!(fetch_service_subscriber
         .z_get_subtrees_by_index("orchard".to_string(), NoteCommitmentSubtreeIndex(0), None)
@@ -431,26 +409,8 @@ async fn fetch_service_z_get_subtrees_by_index<V: ValidatorExt>(validator: &Vali
 
 #[allow(deprecated)]
 async fn fetch_service_get_raw_transaction<V: ValidatorExt>(validator: &ValidatorKind) {
-    let (mut test_manager, fetch_service_subscriber, mut clients) =
-        create_test_manager_and_fetch_service::<V>(validator, None).await;
-    fund_faucet(
-        &test_manager,
-        &mut clients,
-        validator,
-        &fetch_service_subscriber,
-        1,
-    )
-    .await;
-
-    let recipient_ua = clients.get_recipient_address("unified").await;
-    let tx = send_and_mine(
-        &test_manager,
-        &mut clients,
-        &fetch_service_subscriber,
-        &recipient_ua,
-        250_000,
-    )
-    .await;
+    let (mut test_manager, fetch_service_subscriber, _clients, tx) =
+        fund_and_send::<V>(validator, wallet_tests::Pool::Orchard).await;
 
     dbg!(fetch_service_subscriber
         .get_raw_transaction(tx.first().to_string(), Some(1))
@@ -462,27 +422,9 @@ async fn fetch_service_get_raw_transaction<V: ValidatorExt>(validator: &Validato
 
 #[allow(deprecated)]
 async fn fetch_service_get_address_tx_ids<V: ValidatorExt>(validator: &ValidatorKind) {
-    let (mut test_manager, fetch_service_subscriber, mut clients) =
-        create_test_manager_and_fetch_service::<V>(validator, None).await;
+    let (mut test_manager, fetch_service_subscriber, clients, tx) =
+        fund_and_send::<V>(validator, wallet_tests::Pool::Transparent).await;
     let recipient_taddr = clients.get_recipient_address("transparent").await;
-
-    fund_faucet(
-        &test_manager,
-        &mut clients,
-        validator,
-        &fetch_service_subscriber,
-        1,
-    )
-    .await;
-
-    let tx = send_and_mine(
-        &test_manager,
-        &mut clients,
-        &fetch_service_subscriber,
-        recipient_taddr.as_str(),
-        250_000,
-    )
-    .await;
 
     let chain_height = fetch_service_subscriber.chain_height().await.unwrap().0;
     dbg!(&chain_height);
@@ -505,26 +447,9 @@ async fn fetch_service_get_address_tx_ids<V: ValidatorExt>(validator: &Validator
 
 #[allow(deprecated)]
 async fn fetch_service_get_address_utxos<V: ValidatorExt>(validator: &ValidatorKind) {
-    let (mut test_manager, fetch_service_subscriber, mut clients) =
-        create_test_manager_and_fetch_service::<V>(validator, None).await;
+    let (mut test_manager, fetch_service_subscriber, mut clients, txid_1) =
+        fund_and_send::<V>(validator, wallet_tests::Pool::Transparent).await;
     let recipient_taddr = clients.get_recipient_address("transparent").await;
-    fund_faucet(
-        &test_manager,
-        &mut clients,
-        validator,
-        &fetch_service_subscriber,
-        1,
-    )
-    .await;
-
-    let txid_1 = send_and_mine(
-        &test_manager,
-        &mut clients,
-        &fetch_service_subscriber,
-        recipient_taddr.as_str(),
-        250_000,
-    )
-    .await;
 
     clients.faucet.sync_and_await().await.unwrap();
 
@@ -665,26 +590,8 @@ async fn fetch_service_get_block_range_no_pools_returns_sapling_orchard<V: Valid
 
 #[allow(deprecated)]
 async fn fetch_service_get_transaction_mined<V: ValidatorExt>(validator: &ValidatorKind) {
-    let (mut test_manager, fetch_service_subscriber, mut clients) =
-        create_test_manager_and_fetch_service::<V>(validator, None).await;
-    fund_faucet(
-        &test_manager,
-        &mut clients,
-        validator,
-        &fetch_service_subscriber,
-        1,
-    )
-    .await;
-
-    let recipient_ua = clients.get_recipient_address("unified").await;
-    let tx = send_and_mine(
-        &test_manager,
-        &mut clients,
-        &fetch_service_subscriber,
-        &recipient_ua,
-        250_000,
-    )
-    .await;
+    let (mut test_manager, fetch_service_subscriber, _clients, tx) =
+        fund_and_send::<V>(validator, wallet_tests::Pool::Orchard).await;
 
     let tx_filter = TxFilter {
         block: None,
@@ -740,27 +647,9 @@ async fn fetch_service_get_transaction_mempool<V: ValidatorExt>(validator: &Vali
 
 #[allow(deprecated)]
 async fn fetch_service_get_taddress_txids<V: ValidatorExt>(validator: &ValidatorKind) {
-    let (mut test_manager, fetch_service_subscriber, mut clients) =
-        create_test_manager_and_fetch_service::<V>(validator, None).await;
+    let (mut test_manager, fetch_service_subscriber, clients, tx) =
+        fund_and_send::<V>(validator, wallet_tests::Pool::Transparent).await;
     let recipient_taddr = clients.get_recipient_address("transparent").await;
-
-    fund_faucet(
-        &test_manager,
-        &mut clients,
-        validator,
-        &fetch_service_subscriber,
-        1,
-    )
-    .await;
-
-    let tx = send_and_mine(
-        &test_manager,
-        &mut clients,
-        &fetch_service_subscriber,
-        &recipient_taddr,
-        250_000,
-    )
-    .await;
 
     let chain_height = fetch_service_subscriber.chain_height().await.unwrap().0;
     dbg!(&chain_height);
@@ -803,26 +692,9 @@ async fn fetch_service_get_taddress_txids<V: ValidatorExt>(validator: &Validator
 
 #[allow(deprecated)]
 async fn fetch_service_get_taddress_balance<V: ValidatorExt>(validator: &ValidatorKind) {
-    let (mut test_manager, fetch_service_subscriber, mut clients) =
-        create_test_manager_and_fetch_service::<V>(validator, None).await;
+    let (mut test_manager, fetch_service_subscriber, mut clients, _tx) =
+        fund_and_send::<V>(validator, wallet_tests::Pool::Transparent).await;
     let recipient_taddr = clients.get_recipient_address("transparent").await;
-    fund_faucet(
-        &test_manager,
-        &mut clients,
-        validator,
-        &fetch_service_subscriber,
-        1,
-    )
-    .await;
-
-    send_and_mine(
-        &test_manager,
-        &mut clients,
-        &fetch_service_subscriber,
-        &recipient_taddr,
-        250_000,
-    )
-    .await;
 
     clients.recipient.sync_and_await().await.unwrap();
     let balance = clients.recipient_balance().await;
@@ -963,26 +835,9 @@ async fn fetch_service_get_mempool_stream<V: ValidatorExt>(validator: &Validator
 
 #[allow(deprecated)]
 async fn fetch_service_get_taddress_utxos<V: ValidatorExt>(validator: &ValidatorKind) {
-    let (mut test_manager, fetch_service_subscriber, mut clients) =
-        create_test_manager_and_fetch_service::<V>(validator, None).await;
+    let (mut test_manager, fetch_service_subscriber, clients, tx) =
+        fund_and_send::<V>(validator, wallet_tests::Pool::Transparent).await;
     let recipient_taddr = clients.get_recipient_address("transparent").await;
-    fund_faucet(
-        &test_manager,
-        &mut clients,
-        validator,
-        &fetch_service_subscriber,
-        1,
-    )
-    .await;
-
-    let tx = send_and_mine(
-        &test_manager,
-        &mut clients,
-        &fetch_service_subscriber,
-        &recipient_taddr,
-        250_000,
-    )
-    .await;
 
     let utxos_arg = GetAddressUtxosArg {
         addresses: vec![recipient_taddr],
@@ -1003,26 +858,9 @@ async fn fetch_service_get_taddress_utxos<V: ValidatorExt>(validator: &Validator
 
 #[allow(deprecated)]
 async fn fetch_service_get_taddress_utxos_stream<V: ValidatorExt>(validator: &ValidatorKind) {
-    let (mut test_manager, fetch_service_subscriber, mut clients) =
-        create_test_manager_and_fetch_service::<V>(validator, None).await;
+    let (mut test_manager, fetch_service_subscriber, clients, _tx) =
+        fund_and_send::<V>(validator, wallet_tests::Pool::Transparent).await;
     let recipient_taddr = clients.get_recipient_address("transparent").await;
-    fund_faucet(
-        &test_manager,
-        &mut clients,
-        validator,
-        &fetch_service_subscriber,
-        1,
-    )
-    .await;
-
-    send_and_mine(
-        &test_manager,
-        &mut clients,
-        &fetch_service_subscriber,
-        &recipient_taddr,
-        250_000,
-    )
-    .await;
 
     let utxos_arg = GetAddressUtxosArg {
         addresses: vec![recipient_taddr],
