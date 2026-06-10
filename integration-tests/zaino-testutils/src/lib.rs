@@ -639,6 +639,24 @@ where
         }
     }
 
+    /// Generate `n` blocks and wait for two chain-index subscribers to observe
+    /// the resulting tip. Blocks are mined while waiting on `mined_against`;
+    /// `then_synced` is afterwards polled (with no further block generation)
+    /// until it catches up to that same tip.
+    ///
+    /// For tests that maintain two independent chain indexes (e.g. a fetch and
+    /// a state backend, or a Zaino index and a validator-direct index) and must
+    /// see both in sync before querying them.
+    pub async fn generate_blocks_and_wait_for_tips<A: PollableTip, B: PollableTip>(
+        &self,
+        n: u32,
+        mined_against: &A,
+        then_synced: &B,
+    ) {
+        self.generate_blocks_and_wait_for_tip(n, mined_against).await;
+        self.generate_blocks_and_wait_for_tip(0, then_synced).await;
+    }
+
     /// Closes the TestManager.
     pub async fn close(&mut self) {
         if let Some(handle) = self.zaino_handle.take() {

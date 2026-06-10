@@ -10,7 +10,6 @@ use zaino_state::{
 };
 use zaino_testutils::ValidatorExt;
 use zaino_testutils::{TestManager, ValidatorKind, ZEBRAD_TESTNET_CACHE_DIR};
-use zainodlib::error::IndexerError;
 use zcash_local_net::validator::{zebrad::Zebrad, Validator};
 use zebra_chain::parameters::NetworkKind;
 use zebra_rpc::methods::{GetAddressBalanceRequest, GetAddressTxIdsRequest, GetInfo};
@@ -18,7 +17,7 @@ use zebra_rpc::methods::{GetAddressBalanceRequest, GetAddressTxIdsRequest, GetIn
 #[allow(deprecated)]
 // NOTE: the fetch and state services each have a seperate chain index to the instance of zaino connected to the lightclients and may be out of sync
 // the test manager now includes a service subscriber but not both fetch *and* state which are necessary for these tests.
-// syncronicity is ensured in the following tests by calling `generate_blocks_and_poll_all_chain_indexes`.
+// syncronicity is ensured in the following tests by calling `TestManager::generate_blocks_and_wait_for_tips`.
 async fn create_test_manager_and_services<V: ValidatorExt>(
     validator: &ValidatorKind,
     chain_cache: Option<std::path::PathBuf>,
@@ -154,26 +153,7 @@ async fn create_test_manager_and_services<V: ValidatorExt>(
     )
 }
 
-#[allow(deprecated)]
-async fn generate_blocks_and_poll_all_chain_indexes<V, Service>(
-    n: u32,
-    test_manager: &TestManager<V, Service>,
-    fetch_service_subscriber: FetchServiceSubscriber,
-    state_service_subscriber: StateServiceSubscriber,
-) where
-    V: ValidatorExt,
-    Service: zaino_testutils::TestService,
-    IndexerError: From<<<Service as ZcashService>::Subscriber as ZcashIndexer>::Error>,
-    <Service as ZcashService>::Subscriber: zaino_testutils::PollableTip,
-{
-    test_manager
-        .generate_blocks_and_wait_for_tip(n, &fetch_service_subscriber)
-        .await;
-    test_manager
-        .generate_blocks_and_wait_for_tip(0, &state_service_subscriber)
-        .await;
-}
-async fn state_service_check_info<V: ValidatorExt>(
+#[allow(deprecated)]async fn state_service_check_info<V: ValidatorExt>(
     validator: &ValidatorKind,
     chain_cache: Option<std::path::PathBuf>,
     network: NetworkKind,
@@ -188,12 +168,7 @@ async fn state_service_check_info<V: ValidatorExt>(
         .await;
 
     if dbg!(network.to_string()) == *"Regtest" {
-        generate_blocks_and_poll_all_chain_indexes(
-            1,
-            &test_manager,
-            fetch_service_subscriber.clone(),
-            state_service_subscriber.clone(),
-        )
+        test_manager.generate_blocks_and_wait_for_tips(1, &fetch_service_subscriber, &state_service_subscriber)
         .await;
     }
 
@@ -772,12 +747,7 @@ mod zebra {
             .await;
             let mut chaintip_subscriber = state_service_subscriber.chaintip_update_subscriber();
             for _ in 0..5 {
-                generate_blocks_and_poll_all_chain_indexes(
-                    1,
-                    &test_manager,
-                    fetch_service_subscriber.clone(),
-                    state_service_subscriber.clone(),
-                )
+                test_manager.generate_blocks_and_wait_for_tips(1, &fetch_service_subscriber, &state_service_subscriber)
                 .await;
                 assert_eq!(
                     chaintip_subscriber.next_tip_hash().await.unwrap().0,
@@ -855,12 +825,7 @@ mod zebra {
                 Some(NetworkKind::Regtest),
             )
             .await;
-            generate_blocks_and_poll_all_chain_indexes(
-                2,
-                &test_manager,
-                fetch_service_subscriber.clone(),
-                state_service_subscriber.clone(),
-            )
+            test_manager.generate_blocks_and_wait_for_tips(2, &fetch_service_subscriber, &state_service_subscriber)
             .await;
 
             let fetch_service_bbh =
@@ -886,12 +851,7 @@ mod zebra {
                 Some(NetworkKind::Regtest),
             )
             .await;
-            generate_blocks_and_poll_all_chain_indexes(
-                2,
-                &test_manager,
-                fetch_service_subscriber.clone(),
-                state_service_subscriber.clone(),
-            )
+            test_manager.generate_blocks_and_wait_for_tips(2, &fetch_service_subscriber, &state_service_subscriber)
             .await;
 
             let fetch_service_block_count =
@@ -971,12 +931,7 @@ mod zebra {
                 initial_state_service_difficulty
             );
 
-            generate_blocks_and_poll_all_chain_indexes(
-                2,
-                &test_manager,
-                fetch_service_subscriber.clone(),
-                state_service_subscriber.clone(),
-            )
+            test_manager.generate_blocks_and_wait_for_tips(2, &fetch_service_subscriber, &state_service_subscriber)
             .await;
 
             let final_fetch_service_difficulty =
@@ -1008,12 +963,7 @@ mod zebra {
             )
             .await;
 
-            generate_blocks_and_poll_all_chain_indexes(
-                2,
-                &test_manager,
-                fetch_service_subscriber.clone(),
-                state_service_subscriber.clone(),
-            )
+            test_manager.generate_blocks_and_wait_for_tips(2, &fetch_service_subscriber, &state_service_subscriber)
             .await;
 
             let initial_fetch_service_get_network_sol_ps = fetch_service_subscriber
@@ -1051,12 +1001,7 @@ mod zebra {
             )
             .await;
 
-            generate_blocks_and_poll_all_chain_indexes(
-                2,
-                &test_manager,
-                fetch_service_subscriber.clone(),
-                state_service_subscriber.clone(),
-            )
+            test_manager.generate_blocks_and_wait_for_tips(2, &fetch_service_subscriber, &state_service_subscriber)
             .await;
 
             let fetch_service_peer_info = fetch_service_subscriber.get_peer_info().await.unwrap();
@@ -1185,12 +1130,7 @@ mod zebra {
                 Some(NetworkKind::Regtest),
             )
             .await;
-            generate_blocks_and_poll_all_chain_indexes(
-                1,
-                &test_manager,
-                fetch_service_subscriber.clone(),
-                state_service_subscriber.clone(),
-            )
+            test_manager.generate_blocks_and_wait_for_tips(1, &fetch_service_subscriber, &state_service_subscriber)
             .await;
 
             let fetch_service_block =
@@ -1216,12 +1156,7 @@ mod zebra {
                 Some(NetworkKind::Regtest),
             )
             .await;
-            generate_blocks_and_poll_all_chain_indexes(
-                2,
-                &test_manager,
-                fetch_service_subscriber.clone(),
-                state_service_subscriber.clone(),
-            )
+            test_manager.generate_blocks_and_wait_for_tips(2, &fetch_service_subscriber, &state_service_subscriber)
             .await;
 
             let second_block_by_height = BlockId {
@@ -1272,12 +1207,7 @@ mod zebra {
             const BLOCK_LIMIT: u32 = 10;
 
             for i in 0..BLOCK_LIMIT {
-                generate_blocks_and_poll_all_chain_indexes(
-                    1,
-                    &test_manager,
-                    fetch_service_subscriber.clone(),
-                    state_service_subscriber.clone(),
-                )
+                test_manager.generate_blocks_and_wait_for_tips(1, &fetch_service_subscriber, &state_service_subscriber)
                 .await;
 
                 let block = fetch_service_subscriber
@@ -1322,12 +1252,7 @@ mod zebra {
                 Some(NetworkKind::Regtest),
             )
             .await;
-            generate_blocks_and_poll_all_chain_indexes(
-                2,
-                &test_manager,
-                fetch_service_subscriber.clone(),
-                state_service_subscriber.clone(),
-            )
+            test_manager.generate_blocks_and_wait_for_tips(2, &fetch_service_subscriber, &state_service_subscriber)
             .await;
 
             let chain_height = dbg!(state_service_subscriber.chain_height().await.unwrap()).0;
@@ -1366,12 +1291,7 @@ mod zebra {
                 Some(NetworkKind::Regtest),
             )
             .await;
-            generate_blocks_and_poll_all_chain_indexes(
-                5,
-                &test_manager,
-                fetch_service_subscriber.clone(),
-                state_service_subscriber.clone(),
-            )
+            test_manager.generate_blocks_and_wait_for_tips(5, &fetch_service_subscriber, &state_service_subscriber)
             .await;
 
             let sapling_subtree_roots_request = GetSubtreeRootsArg {
@@ -1415,12 +1335,7 @@ mod zebra {
                 Some(NetworkKind::Regtest),
             )
             .await;
-            generate_blocks_and_poll_all_chain_indexes(
-                2,
-                &test_manager,
-                fetch_service_subscriber.clone(),
-                state_service_subscriber.clone(),
-            )
+            test_manager.generate_blocks_and_wait_for_tips(2, &fetch_service_subscriber, &state_service_subscriber)
             .await;
 
             let fetch_service_treestate = fetch_service_subscriber
@@ -1449,12 +1364,7 @@ mod zebra {
                 Some(NetworkKind::Regtest),
             )
             .await;
-            generate_blocks_and_poll_all_chain_indexes(
-                6,
-                &test_manager,
-                fetch_service_subscriber.clone(),
-                state_service_subscriber.clone(),
-            )
+            test_manager.generate_blocks_and_wait_for_tips(6, &fetch_service_subscriber, &state_service_subscriber)
             .await;
 
             let start = Some(BlockId {

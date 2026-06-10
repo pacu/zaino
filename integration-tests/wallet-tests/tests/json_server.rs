@@ -118,20 +118,6 @@ async fn create_zcashd_test_manager_and_fetch_services() -> (
 }
 
 #[allow(deprecated)]
-async fn generate_blocks_and_poll_all_chain_indexes(
-    n: u32,
-    test_manager: &TestManager<Zcashd, FetchService>,
-    zaino_subscriber: FetchServiceSubscriber,
-    zcashd_subscriber: FetchServiceSubscriber,
-) {
-    test_manager
-        .generate_blocks_and_wait_for_tip(n, &zaino_subscriber)
-        .await;
-    test_manager
-        .generate_blocks_and_wait_for_tip(0, &zcashd_subscriber)
-        .await;
-}
-
 async fn z_get_address_balance_inner() {
     let (
         mut test_manager,
@@ -152,12 +138,7 @@ async fn z_get_address_balance_inner() {
     )
     .await
     .unwrap();
-    generate_blocks_and_poll_all_chain_indexes(
-        1,
-        &test_manager,
-        zaino_subscriber.clone(),
-        zcashd_subscriber.clone(),
-    )
+    test_manager.generate_blocks_and_wait_for_tips(1, &zaino_subscriber, &zcashd_subscriber)
     .await;
 
     clients.recipient.sync_and_await().await.unwrap();
@@ -210,12 +191,7 @@ async fn get_raw_mempool_inner() {
         mut clients,
     ) = create_zcashd_test_manager_and_fetch_services().await;
 
-    generate_blocks_and_poll_all_chain_indexes(
-        1,
-        &test_manager,
-        zaino_subscriber.clone(),
-        zcashd_subscriber.clone(),
-    )
+    test_manager.generate_blocks_and_wait_for_tips(1, &zaino_subscriber, &zcashd_subscriber)
     .await;
 
     clients.faucet.sync_and_await().await.unwrap();
@@ -255,12 +231,7 @@ async fn get_mempool_info_inner() {
         mut clients,
     ) = create_zcashd_test_manager_and_fetch_services().await;
 
-    generate_blocks_and_poll_all_chain_indexes(
-        1,
-        &test_manager,
-        zaino_subscriber.clone(),
-        zcashd_subscriber.clone(),
-    )
+    test_manager.generate_blocks_and_wait_for_tips(1, &zaino_subscriber, &zcashd_subscriber)
     .await;
 
     clients.faucet.sync_and_await().await.unwrap();
@@ -304,12 +275,7 @@ async fn z_get_treestate_inner() {
         .await
         .unwrap();
 
-    generate_blocks_and_poll_all_chain_indexes(
-        1,
-        &test_manager,
-        zaino_subscriber.clone(),
-        zcashd_subscriber.clone(),
-    )
+    test_manager.generate_blocks_and_wait_for_tips(1, &zaino_subscriber, &zcashd_subscriber)
     .await;
 
     let chain_height = dbg!(zaino_subscriber.chain_height().await.unwrap()).0;
@@ -346,12 +312,7 @@ async fn z_get_subtrees_by_index_inner() {
         .await
         .unwrap();
 
-    generate_blocks_and_poll_all_chain_indexes(
-        1,
-        &test_manager,
-        zaino_subscriber.clone(),
-        zcashd_subscriber.clone(),
-    )
+    test_manager.generate_blocks_and_wait_for_tips(1, &zaino_subscriber, &zcashd_subscriber)
     .await;
 
     let zcashd_subtrees = dbg!(zcashd_subscriber
@@ -386,12 +347,7 @@ async fn get_raw_transaction_inner() {
         .await
         .unwrap();
 
-    generate_blocks_and_poll_all_chain_indexes(
-        1,
-        &test_manager,
-        zaino_subscriber.clone(),
-        zcashd_subscriber.clone(),
-    )
+    test_manager.generate_blocks_and_wait_for_tips(1, &zaino_subscriber, &zcashd_subscriber)
     .await;
 
     test_manager.local_net.print_stdout();
@@ -431,12 +387,7 @@ async fn get_tx_out_inner() {
     )
     .await
     .unwrap();
-    generate_blocks_and_poll_all_chain_indexes(
-        1,
-        &test_manager,
-        zaino_subscriber.clone(),
-        zcashd_subscriber.clone(),
-    )
+    test_manager.generate_blocks_and_wait_for_tips(1, &zaino_subscriber, &zcashd_subscriber)
     .await;
 
     let zcashd_utxos = zcashd_subscriber
@@ -490,12 +441,7 @@ async fn get_address_tx_ids_inner() {
     )
     .await
     .unwrap();
-    generate_blocks_and_poll_all_chain_indexes(
-        1,
-        &test_manager,
-        zaino_subscriber.clone(),
-        zcashd_subscriber.clone(),
-    )
+    test_manager.generate_blocks_and_wait_for_tips(1, &zaino_subscriber, &zcashd_subscriber)
     .await;
 
     let chain_height: u32 = {
@@ -553,12 +499,7 @@ async fn z_get_address_utxos_inner() {
     )
     .await
     .unwrap();
-    generate_blocks_and_poll_all_chain_indexes(
-        1,
-        &test_manager,
-        zaino_subscriber.clone(),
-        zcashd_subscriber.clone(),
-    )
+    test_manager.generate_blocks_and_wait_for_tips(1, &zaino_subscriber, &zcashd_subscriber)
     .await;
 
     clients.faucet.sync_and_await().await.unwrap();

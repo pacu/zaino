@@ -107,20 +107,6 @@ async fn create_zcashd_test_manager_and_fetch_services(
 }
 
 #[allow(deprecated)]
-async fn generate_blocks_and_poll_all_chain_indexes(
-    n: u32,
-    test_manager: &TestManager<Zcashd, FetchService>,
-    zaino_subscriber: FetchServiceSubscriber,
-    zcashd_subscriber: FetchServiceSubscriber,
-) {
-    test_manager
-        .generate_blocks_and_wait_for_tip(n, &zaino_subscriber)
-        .await;
-    test_manager
-        .generate_blocks_and_wait_for_tip(0, &zcashd_subscriber)
-        .await;
-}
-
 async fn launch_json_server_check_info() {
     let (mut test_manager, _zcashd_service, zcashd_subscriber, _zaino_service, zaino_subscriber) =
         create_zcashd_test_manager_and_fetch_services(false).await;
@@ -334,12 +320,7 @@ async fn get_tx_out_set_info_inner() {
     let (mut test_manager, _zcashd_service, zcashd_subscriber, _zaino_service, zaino_subscriber) =
         create_zcashd_test_manager_and_fetch_services(false).await;
 
-    generate_blocks_and_poll_all_chain_indexes(
-        1,
-        &test_manager,
-        zaino_subscriber.clone(),
-        zcashd_subscriber.clone(),
-    )
+    test_manager.generate_blocks_and_wait_for_tips(1, &zaino_subscriber, &zcashd_subscriber)
     .await;
 
     let zcashd_txoutset_info = zcashd_subscriber.get_tx_out_set_info().await.unwrap();
@@ -442,12 +423,7 @@ mod zcashd {
 
                 assert_eq!(zcashd_difficulty, zaino_difficulty);
 
-                generate_blocks_and_poll_all_chain_indexes(
-                    1,
-                    &test_manager,
-                    zaino_subscriber.clone(),
-                    zcashd_subscriber.clone(),
-                )
+                test_manager.generate_blocks_and_wait_for_tips(1, &zaino_subscriber, &zcashd_subscriber)
                 .await;
             }
 
@@ -508,12 +484,7 @@ mod zcashd {
 
                 assert_eq!(zcashd_mining_info, zaino_mining_info);
 
-                generate_blocks_and_poll_all_chain_indexes(
-                    1,
-                    &test_manager,
-                    zaino_subscriber.clone(),
-                    zcashd_subscriber.clone(),
-                )
+                test_manager.generate_blocks_and_wait_for_tips(1, &zaino_subscriber, &zcashd_subscriber)
                 .await;
             }
 
@@ -540,12 +511,7 @@ mod zcashd {
 
             assert_eq!(zcashd_peer_info, zaino_peer_info);
 
-            generate_blocks_and_poll_all_chain_indexes(
-                1,
-                &test_manager,
-                zaino_subscriber.clone(),
-                zcashd_subscriber.clone(),
-            )
+            test_manager.generate_blocks_and_wait_for_tips(1, &zaino_subscriber, &zcashd_subscriber)
             .await;
 
             test_manager.close().await;
@@ -561,12 +527,7 @@ mod zcashd {
                 zaino_subscriber,
             ) = create_zcashd_test_manager_and_fetch_services(false).await;
 
-            generate_blocks_and_poll_all_chain_indexes(
-                1,
-                &test_manager,
-                zaino_subscriber.clone(),
-                zcashd_subscriber.clone(),
-            )
+            test_manager.generate_blocks_and_wait_for_tips(1, &zaino_subscriber, &zcashd_subscriber)
             .await;
 
             let zcashd_block_subsidy = zcashd_subscriber.get_block_subsidy(1).await.unwrap();
@@ -617,12 +578,7 @@ mod zcashd {
             const BLOCK_LIMIT: u32 = 10;
 
             for i in 0..BLOCK_LIMIT {
-                generate_blocks_and_poll_all_chain_indexes(
-                    1,
-                    &test_manager,
-                    zaino_subscriber.clone(),
-                    zcashd_subscriber.clone(),
-                )
+                test_manager.generate_blocks_and_wait_for_tips(1, &zaino_subscriber, &zcashd_subscriber)
                 .await;
 
                 let block = zcashd_subscriber
