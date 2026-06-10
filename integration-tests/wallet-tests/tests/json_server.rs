@@ -8,24 +8,22 @@ use zaino_state::{
     ChainIndex, FetchService, FetchServiceConfig, FetchServiceSubscriber, ZcashIndexer,
     ZcashService as _,
 };
-use zaino_testutils::from_inputs;
+use wallet_tests::from_inputs;
 use zaino_testutils::{TestManager, ValidatorKind};
 use zcash_local_net::logs::LogsToStdoutAndStderr as _;
 use zcash_local_net::validator::zcashd::Zcashd;
-use zcash_local_net::validator::Validator as _;
 use zebra_chain::subtree::NoteCommitmentSubtreeIndex;
 use zebra_rpc::client::GetAddressBalanceRequest;
-use zebra_rpc::methods::{GetAddressTxIdsRequest, GetInfo};
+use zebra_rpc::methods::GetAddressTxIdsRequest;
 
 #[allow(deprecated)]
-async fn create_zcashd_test_manager_and_fetch_services(
-    clients: bool,
-) -> (
+async fn create_zcashd_test_manager_and_fetch_services() -> (
     TestManager<Zcashd, FetchService>,
     FetchService,
     FetchServiceSubscriber,
     FetchService,
     FetchServiceSubscriber,
+    wallet_tests::Clients,
 ) {
     println!("Launching test manager..");
     let test_manager = TestManager::<Zcashd, FetchService>::launch(
@@ -35,7 +33,7 @@ async fn create_zcashd_test_manager_and_fetch_services(
         None,
         true,
         true,
-        clients,
+        false,
     )
     .await
     .unwrap();
@@ -102,12 +100,20 @@ async fn create_zcashd_test_manager_and_fetch_services(
     tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
 
     println!("Testmanager launch complete!");
+    let clients = wallet_tests::build_clients(
+        test_manager
+            .zaino_grpc_listen_address
+            .expect("zaino enabled")
+            .port(),
+        wallet_tests::default_heights(&ValidatorKind::Zcashd),
+    );
     (
         test_manager,
         zcashd_fetch_service,
         zcashd_subscriber,
         zaino_fetch_service,
         zaino_subscriber,
+        clients,
     )
 }
 
@@ -127,13 +133,15 @@ async fn generate_blocks_and_poll_all_chain_indexes(
 }
 
 async fn z_get_address_balance_inner() {
-    let (mut test_manager, _zcashd_service, zcashd_subscriber, _zaino_service, zaino_subscriber) =
-        create_zcashd_test_manager_and_fetch_services(true).await;
+    let (
+        mut test_manager,
+        _zcashd_service,
+        zcashd_subscriber,
+        _zaino_service,
+        zaino_subscriber,
+        mut clients,
+    ) = create_zcashd_test_manager_and_fetch_services().await;
 
-    let mut clients = test_manager
-        .clients
-        .take()
-        .expect("Clients are not initialized");
     let recipient_taddr = clients.get_recipient_address("transparent").await;
 
     clients.faucet.sync_and_await().await.unwrap();
@@ -193,13 +201,14 @@ async fn z_get_address_balance_inner() {
 }
 
 async fn get_raw_mempool_inner() {
-    let (mut test_manager, _zcashd_service, zcashd_subscriber, _zaino_service, zaino_subscriber) =
-        create_zcashd_test_manager_and_fetch_services(true).await;
-
-    let mut clients = test_manager
-        .clients
-        .take()
-        .expect("Clients are not initialized");
+    let (
+        mut test_manager,
+        _zcashd_service,
+        zcashd_subscriber,
+        _zaino_service,
+        zaino_subscriber,
+        mut clients,
+    ) = create_zcashd_test_manager_and_fetch_services().await;
 
     generate_blocks_and_poll_all_chain_indexes(
         1,
@@ -237,13 +246,14 @@ async fn get_raw_mempool_inner() {
 }
 
 async fn get_mempool_info_inner() {
-    let (mut test_manager, _zcashd_service, zcashd_subscriber, _zaino_service, zaino_subscriber) =
-        create_zcashd_test_manager_and_fetch_services(true).await;
-
-    let mut clients = test_manager
-        .clients
-        .take()
-        .expect("Clients are not initialized");
+    let (
+        mut test_manager,
+        _zcashd_service,
+        zcashd_subscriber,
+        _zaino_service,
+        zaino_subscriber,
+        mut clients,
+    ) = create_zcashd_test_manager_and_fetch_services().await;
 
     generate_blocks_and_poll_all_chain_indexes(
         1,
@@ -278,13 +288,14 @@ async fn get_mempool_info_inner() {
 }
 
 async fn z_get_treestate_inner() {
-    let (mut test_manager, _zcashd_service, zcashd_subscriber, _zaino_service, zaino_subscriber) =
-        create_zcashd_test_manager_and_fetch_services(true).await;
-
-    let mut clients = test_manager
-        .clients
-        .take()
-        .expect("Clients are not initialized");
+    let (
+        mut test_manager,
+        _zcashd_service,
+        zcashd_subscriber,
+        _zaino_service,
+        zaino_subscriber,
+        mut clients,
+    ) = create_zcashd_test_manager_and_fetch_services().await;
 
     clients.faucet.sync_and_await().await.unwrap();
 
@@ -319,13 +330,14 @@ async fn z_get_treestate_inner() {
 }
 
 async fn z_get_subtrees_by_index_inner() {
-    let (mut test_manager, _zcashd_service, zcashd_subscriber, _zaino_service, zaino_subscriber) =
-        create_zcashd_test_manager_and_fetch_services(true).await;
-
-    let mut clients = test_manager
-        .clients
-        .take()
-        .expect("Clients are not initialized");
+    let (
+        mut test_manager,
+        _zcashd_service,
+        zcashd_subscriber,
+        _zaino_service,
+        zaino_subscriber,
+        mut clients,
+    ) = create_zcashd_test_manager_and_fetch_services().await;
 
     clients.faucet.sync_and_await().await.unwrap();
 
@@ -358,13 +370,14 @@ async fn z_get_subtrees_by_index_inner() {
 }
 
 async fn get_raw_transaction_inner() {
-    let (mut test_manager, _zcashd_service, zcashd_subscriber, _zaino_service, zaino_subscriber) =
-        create_zcashd_test_manager_and_fetch_services(true).await;
-
-    let mut clients = test_manager
-        .clients
-        .take()
-        .expect("Clients are not initialized");
+    let (
+        mut test_manager,
+        _zcashd_service,
+        zcashd_subscriber,
+        _zaino_service,
+        zaino_subscriber,
+        mut clients,
+    ) = create_zcashd_test_manager_and_fetch_services().await;
 
     clients.faucet.sync_and_await().await.unwrap();
 
@@ -399,13 +412,15 @@ async fn get_raw_transaction_inner() {
 }
 
 async fn get_tx_out_inner() {
-    let (mut test_manager, _zcashd_service, zcashd_subscriber, _zaino_service, zaino_subscriber) =
-        create_zcashd_test_manager_and_fetch_services(true).await;
+    let (
+        mut test_manager,
+        _zcashd_service,
+        zcashd_subscriber,
+        _zaino_service,
+        zaino_subscriber,
+        mut clients,
+    ) = create_zcashd_test_manager_and_fetch_services().await;
 
-    let mut clients = test_manager
-        .clients
-        .take()
-        .expect("Clients are not initialized");
     let recipient_taddr = clients.get_recipient_address("transparent").await;
 
     clients.faucet.sync_and_await().await.unwrap();
@@ -456,13 +471,15 @@ async fn get_tx_out_inner() {
 }
 
 async fn get_address_tx_ids_inner() {
-    let (mut test_manager, _zcashd_service, zcashd_subscriber, _zaino_service, zaino_subscriber) =
-        create_zcashd_test_manager_and_fetch_services(true).await;
+    let (
+        mut test_manager,
+        _zcashd_service,
+        zcashd_subscriber,
+        _zaino_service,
+        zaino_subscriber,
+        mut clients,
+    ) = create_zcashd_test_manager_and_fetch_services().await;
 
-    let mut clients = test_manager
-        .clients
-        .take()
-        .expect("Clients are not initialized");
     let recipient_taddr = clients.get_recipient_address("transparent").await;
 
     clients.faucet.sync_and_await().await.unwrap();
@@ -517,13 +534,15 @@ async fn get_address_tx_ids_inner() {
 }
 
 async fn z_get_address_utxos_inner() {
-    let (mut test_manager, _zcashd_service, zcashd_subscriber, _zaino_service, zaino_subscriber) =
-        create_zcashd_test_manager_and_fetch_services(true).await;
+    let (
+        mut test_manager,
+        _zcashd_service,
+        zcashd_subscriber,
+        _zaino_service,
+        zaino_subscriber,
+        mut clients,
+    ) = create_zcashd_test_manager_and_fetch_services().await;
 
-    let mut clients = test_manager
-        .clients
-        .take()
-        .expect("Clients are not initialized");
     let recipient_taddr = clients.get_recipient_address("transparent").await;
 
     clients.faucet.sync_and_await().await.unwrap();
@@ -572,8 +591,6 @@ mod zcashd {
     use super::*;
 
     pub(crate) mod zcash_indexer {
-        use zaino_state::LightWalletIndexer;
-        use zebra_rpc::methods::GetBlock;
 
         use super::*;
 
