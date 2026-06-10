@@ -3,8 +3,11 @@
 use futures::StreamExt as _;
 use zaino_proto::proto::compact_formats::CompactBlock;
 use zaino_proto::proto::service::{BlockId, BlockRange, GetSubtreeRootsArg, PoolType};
+use zaino_fetch::jsonrpsee::connector::JsonRpSeeConnector;
 #[allow(deprecated)]
-use zaino_state::{FetchService, LightWalletIndexer, Status, StatusType, ZcashIndexer};
+use zaino_state::{
+    FetchService, FetchServiceSubscriber, LightWalletIndexer, Status, StatusType, ZcashIndexer,
+};
 use zaino_testutils::{TestManager, ValidatorExt, ValidatorKind};
 use zebra_chain::parameters::subsidy::ParameterSubsidy as _;
 use zebra_rpc::client::ValidateAddressResponse;
@@ -84,30 +87,47 @@ async fn fetch_service_get_latest_block<V: ValidatorExt>(validator: &ValidatorKi
     test_manager.close().await;
 }
 
+/// Launch a fetch-backend manager, run `fetch_query` against the Zaino
+/// `FetchService` subscriber and `rpc_query` against the validator's JSON-RPC,
+/// then assert the two results are equal. Collapses the
+/// `assert_fetch_service_*_matches_rpc` helpers that differ only by the query.
 #[allow(deprecated)]
-async fn assert_fetch_service_difficulty_matches_rpc<V: ValidatorExt>(validator: &ValidatorKind) {
+async fn assert_subscriber_matches_rpc<V, T, FFut, RFut>(
+    validator: &ValidatorKind,
+    fetch_query: impl FnOnce(FetchServiceSubscriber) -> FFut,
+    rpc_query: impl FnOnce(JsonRpSeeConnector) -> RFut,
+) where
+    V: ValidatorExt,
+    T: std::fmt::Debug + PartialEq,
+    FFut: std::future::Future<Output = T>,
+    RFut: std::future::Future<Output = T>,
+{
     let (test_manager, fetch_service_subscriber) =
         zaino_testutils::launch_with_fetch_subscriber::<V>(validator, None).await;
-
-    let fetch_service_get_difficulty = fetch_service_subscriber.get_difficulty().await.unwrap();
-
+    let from_fetch = fetch_query(fetch_service_subscriber).await;
     let jsonrpc_client = test_manager.full_node_jsonrpc_connector().await;
+    let from_rpc = rpc_query(jsonrpc_client).await;
+    assert_eq!(from_fetch, from_rpc);
+}
 
-    let rpc_difficulty_response = jsonrpc_client.get_difficulty().await.unwrap();
-    assert_eq!(fetch_service_get_difficulty, rpc_difficulty_response.0);
+#[allow(deprecated)]
+async fn assert_fetch_service_difficulty_matches_rpc<V: ValidatorExt>(validator: &ValidatorKind) {
+    assert_subscriber_matches_rpc::<V, _, _, _>(
+        validator,
+        |sub| async move { sub.get_difficulty().await.unwrap() },
+        |client| async move { client.get_difficulty().await.unwrap().0 },
+    )
+    .await;
 }
 
 #[allow(deprecated)]
 async fn assert_fetch_service_mininginfo_matches_rpc<V: ValidatorExt>(validator: &ValidatorKind) {
-    let (test_manager, fetch_service_subscriber) =
-        zaino_testutils::launch_with_fetch_subscriber::<V>(validator, None).await;
-
-    let fetch_service_mining_info = fetch_service_subscriber.get_mining_info().await.unwrap();
-
-    let jsonrpc_client = test_manager.full_node_jsonrpc_connector().await;
-
-    let rpc_mining_info_response = jsonrpc_client.get_mining_info().await.unwrap();
-    assert_eq!(fetch_service_mining_info, rpc_mining_info_response);
+    assert_subscriber_matches_rpc::<V, _, _, _>(
+        validator,
+        |sub| async move { sub.get_mining_info().await.unwrap() },
+        |client| async move { client.get_mining_info().await.unwrap() },
+    )
+    .await;
 }
 
 #[allow(deprecated)]
@@ -173,18 +193,12 @@ async fn assert_fetch_service_gettxoutsetinfo_matches_rpc<V: ValidatorExt>(
 
 #[allow(deprecated)]
 async fn assert_fetch_service_peerinfo_matches_rpc<V: ValidatorExt>(validator: &ValidatorKind) {
-    let (test_manager, fetch_service_subscriber) =
-        zaino_testutils::launch_with_fetch_subscriber::<V>(validator, None).await;
-
-    let fetch_service_get_peer_info = fetch_service_subscriber.get_peer_info().await.unwrap();
-
-    let jsonrpc_client = test_manager.full_node_jsonrpc_connector().await;
-
-    let rpc_peer_info_response = jsonrpc_client.get_peer_info().await.unwrap();
-
-    dbg!(&rpc_peer_info_response);
-    dbg!(&fetch_service_get_peer_info);
-    assert_eq!(fetch_service_get_peer_info, rpc_peer_info_response);
+    assert_subscriber_matches_rpc::<V, _, _, _>(
+        validator,
+        |sub| async move { sub.get_peer_info().await.unwrap() },
+        |client| async move { client.get_peer_info().await.unwrap() },
+    )
+    .await;
 }
 
 #[allow(deprecated)]
@@ -565,18 +579,12 @@ async fn fetch_service_get_lightd_info<V: ValidatorExt>(validator: &ValidatorKin
 async fn assert_fetch_service_getnetworksols_matches_rpc<V: ValidatorExt>(
     validator: &ValidatorKind,
 ) {
-    let (test_manager, fetch_service_subscriber) =
-        zaino_testutils::launch_with_fetch_subscriber::<V>(validator, None).await;
-
-    let fetch_service_get_networksolps = fetch_service_subscriber
-        .get_network_sol_ps(None, None)
-        .await
-        .unwrap();
-
-    let jsonrpc_client = test_manager.full_node_jsonrpc_connector().await;
-
-    let rpc_getnetworksolps_response = jsonrpc_client.get_network_sol_ps(None, None).await.unwrap();
-    assert_eq!(fetch_service_get_networksolps, rpc_getnetworksolps_response);
+    assert_subscriber_matches_rpc::<V, _, _, _>(
+        validator,
+        |sub| async move { sub.get_network_sol_ps(None, None).await.unwrap() },
+        |client| async move { client.get_network_sol_ps(None, None).await.unwrap() },
+    )
+    .await;
 }
 
 mod zcashd {
