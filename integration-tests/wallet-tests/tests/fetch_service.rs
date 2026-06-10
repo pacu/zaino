@@ -197,6 +197,58 @@ fn assert_pool_absent(block: &CompactBlock, txid: &TxId, pool: wallet_tests::Poo
     );
 }
 
+/// Launch, fund the faucet, then broadcast (without mining) one transparent and
+/// one orchard send into the mempool, waiting briefly for the broadcaster and
+/// subscribers to observe them. Returns the manager, subscriber, clients, and
+/// the two txids (transparent first, then unified) — the shared setup for the
+/// mempool query tests.
+#[allow(deprecated)]
+async fn fund_and_fill_mempool<V: ValidatorExt>(
+    validator: &ValidatorKind,
+) -> (
+    TestManager<V, FetchService>,
+    FetchServiceSubscriber,
+    wallet_tests::Clients,
+    NonEmpty<TxId>,
+    NonEmpty<TxId>,
+) {
+    let (test_manager, fetch_service_subscriber, mut clients) =
+        create_test_manager_and_fetch_service::<V>(validator, None).await;
+    test_manager
+        .generate_blocks_and_wait_for_tip(1, &fetch_service_subscriber)
+        .await;
+    fund_faucet(
+        &test_manager,
+        &mut clients,
+        validator,
+        &fetch_service_subscriber,
+        2,
+    )
+    .await;
+
+    let recipient_taddr = clients.get_recipient_address("transparent").await;
+    let recipient_ua = clients.get_recipient_address("unified").await;
+    let transparent_txid =
+        from_inputs::quick_send(&mut clients.faucet, vec![(&recipient_taddr, 250_000, None)])
+            .await
+            .unwrap();
+    let unified_txid =
+        from_inputs::quick_send(&mut clients.faucet, vec![(&recipient_ua, 250_000, None)])
+            .await
+            .unwrap();
+
+    // Allow the broadcaster and subscribers to observe the new transactions.
+    tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+
+    (
+        test_manager,
+        fetch_service_subscriber,
+        clients,
+        transparent_txid,
+        unified_txid,
+    )
+}
+
 #[allow(deprecated)]
 async fn fetch_service_get_address_balance<V: ValidatorExt>(validator: &ValidatorKind) {
     let (mut test_manager, fetch_service_subscriber, mut clients) =
@@ -249,34 +301,10 @@ async fn fetch_service_get_address_balance<V: ValidatorExt>(validator: &Validato
 
 #[allow(deprecated)]
 async fn fetch_service_get_raw_mempool<V: ValidatorExt>(validator: &ValidatorKind) {
-    let (mut test_manager, fetch_service_subscriber, mut clients) =
-        create_test_manager_and_fetch_service::<V>(validator, None).await;
+    let (mut test_manager, fetch_service_subscriber, _clients, _transparent_txid, _unified_txid) =
+        fund_and_fill_mempool::<V>(validator).await;
 
     let json_service = test_manager.full_node_jsonrpc_connector().await;
-
-    test_manager
-        .generate_blocks_and_wait_for_tip(1, &fetch_service_subscriber)
-        .await;
-
-    fund_faucet(
-        &test_manager,
-        &mut clients,
-        validator,
-        &fetch_service_subscriber,
-        2,
-    )
-    .await;
-
-    let recipient_ua: String = clients.get_recipient_address("unified").await;
-    let recipient_taddr: String = clients.get_recipient_address("transparent").await;
-    from_inputs::quick_send(&mut clients.faucet, vec![(&recipient_taddr, 250_000, None)])
-        .await
-        .unwrap();
-    from_inputs::quick_send(&mut clients.faucet, vec![(&recipient_ua, 250_000, None)])
-        .await
-        .unwrap();
-
-    tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
 
     let mut fetch_service_mempool = fetch_service_subscriber.get_raw_mempool().await.unwrap();
     let mut json_service_mempool = json_service.get_raw_mempool().await.unwrap().transactions;
@@ -293,40 +321,8 @@ async fn fetch_service_get_raw_mempool<V: ValidatorExt>(validator: &ValidatorKin
 // `getmempoolinfo` computed from local Broadcast state for all validators
 #[allow(deprecated)]
 pub async fn test_get_mempool_info<V: ValidatorExt>(validator: &ValidatorKind) {
-    let (mut test_manager, fetch_service_subscriber, mut clients) =
-        create_test_manager_and_fetch_service::<V>(validator, None).await;
-
-    test_manager
-        .generate_blocks_and_wait_for_tip(1, &fetch_service_subscriber)
-        .await;
-    fund_faucet(
-        &test_manager,
-        &mut clients,
-        validator,
-        &fetch_service_subscriber,
-        2,
-    )
-    .await;
-
-    let recipient_unified_address = clients.get_recipient_address("unified").await;
-    let recipient_transparent_address = clients.get_recipient_address("transparent").await;
-
-    from_inputs::quick_send(
-        &mut clients.faucet,
-        vec![(&recipient_transparent_address, 250_000, None)],
-    )
-    .await
-    .unwrap();
-
-    from_inputs::quick_send(
-        &mut clients.faucet,
-        vec![(&recipient_unified_address, 250_000, None)],
-    )
-    .await
-    .unwrap();
-
-    // Allow the broadcaster and subscribers to observe new transactions.
-    tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+    let (mut test_manager, fetch_service_subscriber, _clients, _transparent_txid, _unified_txid) =
+        fund_and_fill_mempool::<V>(validator).await;
 
     // Internal method now used for all validators.
     let info = fetch_service_subscriber.get_mempool_info().await.unwrap();
@@ -488,11 +484,7 @@ async fn fetch_service_get_address_tx_ids<V: ValidatorExt>(validator: &Validator
     )
     .await;
 
-    let chain_height: u32 = {
-        let idx = &fetch_service_subscriber.indexer;
-        let snapshot = idx.snapshot_nonfinalized_state().await.unwrap();
-        u32::from(idx.best_chaintip(&snapshot).await.unwrap().height)
-    };
+    let chain_height = fetch_service_subscriber.chain_height().await.unwrap().0;
     dbg!(&chain_height);
 
     let fetch_service_txids = fetch_service_subscriber
@@ -770,11 +762,7 @@ async fn fetch_service_get_taddress_txids<V: ValidatorExt>(validator: &Validator
     )
     .await;
 
-    let chain_height: u32 = {
-        let idx = &fetch_service_subscriber.indexer;
-        let snapshot = idx.snapshot_nonfinalized_state().await.unwrap();
-        u32::from(idx.best_chaintip(&snapshot).await.unwrap().height)
-    };
+    let chain_height = fetch_service_subscriber.chain_height().await.unwrap().0;
     dbg!(&chain_height);
 
     let block_filter = TransparentAddressBlockFilter {
@@ -859,31 +847,8 @@ async fn fetch_service_get_taddress_balance<V: ValidatorExt>(validator: &Validat
 
 #[allow(deprecated)]
 async fn fetch_service_get_mempool_tx<V: ValidatorExt>(validator: &ValidatorKind) {
-    let (mut test_manager, fetch_service_subscriber, mut clients) =
-        create_test_manager_and_fetch_service::<V>(validator, None).await;
-    test_manager
-        .generate_blocks_and_wait_for_tip(1, &fetch_service_subscriber)
-        .await;
-    fund_faucet(
-        &test_manager,
-        &mut clients,
-        validator,
-        &fetch_service_subscriber,
-        2,
-    )
-    .await;
-
-    let recipient_ua = clients.get_recipient_address("unified").await;
-    let recipient_taddr = clients.get_recipient_address("transparent").await;
-    let tx_1 =
-        from_inputs::quick_send(&mut clients.faucet, vec![(&recipient_taddr, 250_000, None)])
-            .await
-            .unwrap();
-    let tx_2 = from_inputs::quick_send(&mut clients.faucet, vec![(&recipient_ua, 250_000, None)])
-        .await
-        .unwrap();
-
-    tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+    let (mut test_manager, fetch_service_subscriber, _clients, tx_1, tx_2) =
+        fund_and_fill_mempool::<V>(validator).await;
 
     let exclude_list_empty = GetMempoolTxRequest {
         exclude_txid_suffixes: Vec::new(),
