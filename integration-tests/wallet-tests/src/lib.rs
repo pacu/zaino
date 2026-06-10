@@ -333,7 +333,6 @@ mod launch_clients {
                 test_manager
                     .generate_blocks_and_wait_for_tip(1, test_manager.subscriber())
                     .await;
-                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
                 clients.recipient.sync_and_await().await.unwrap();
                 dbg!(clients
                     .recipient
