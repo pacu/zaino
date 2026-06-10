@@ -30,12 +30,8 @@ async fn launch_fetch_service<V: ValidatorExt>(
 
 #[allow(deprecated)]
 async fn fetch_service_get_block_raw<V: ValidatorExt>(validator: &ValidatorKind) {
-    let mut test_manager =
-        TestManager::<V, FetchService>::launch(validator, None, None, None, true, false, false)
-            .await
-            .unwrap();
-
-    let fetch_service_subscriber = test_manager.service_subscriber.take().unwrap();
+    let (mut test_manager, fetch_service_subscriber) =
+        zaino_testutils::launch_with_fetch_subscriber::<V>(validator, None).await;
 
     dbg!(fetch_service_subscriber
         .z_get_block("1".to_string(), Some(0))
@@ -47,12 +43,8 @@ async fn fetch_service_get_block_raw<V: ValidatorExt>(validator: &ValidatorKind)
 
 #[allow(deprecated)]
 async fn fetch_service_get_block_object<V: ValidatorExt>(validator: &ValidatorKind) {
-    let mut test_manager =
-        TestManager::<V, FetchService>::launch(validator, None, None, None, true, false, false)
-            .await
-            .unwrap();
-
-    let fetch_service_subscriber = test_manager.service_subscriber.take().unwrap();
+    let (mut test_manager, fetch_service_subscriber) =
+        zaino_testutils::launch_with_fetch_subscriber::<V>(validator, None).await;
 
     dbg!(fetch_service_subscriber
         .z_get_block("1".to_string(), Some(1))
@@ -64,12 +56,8 @@ async fn fetch_service_get_block_object<V: ValidatorExt>(validator: &ValidatorKi
 
 #[allow(deprecated)]
 async fn fetch_service_get_latest_block<V: ValidatorExt>(validator: &ValidatorKind) {
-    let mut test_manager =
-        TestManager::<V, FetchService>::launch(validator, None, None, None, true, false, false)
-            .await
-            .unwrap();
-
-    let fetch_service_subscriber = test_manager.service_subscriber.take().unwrap();
+    let (mut test_manager, fetch_service_subscriber) =
+        zaino_testutils::launch_with_fetch_subscriber::<V>(validator, None).await;
 
     test_manager
         .generate_blocks_and_wait_for_tip(1, &fetch_service_subscriber)
@@ -98,12 +86,8 @@ async fn fetch_service_get_latest_block<V: ValidatorExt>(validator: &ValidatorKi
 
 #[allow(deprecated)]
 async fn assert_fetch_service_difficulty_matches_rpc<V: ValidatorExt>(validator: &ValidatorKind) {
-    let mut test_manager =
-        TestManager::<V, FetchService>::launch(validator, None, None, None, true, false, false)
-            .await
-            .unwrap();
-
-    let fetch_service_subscriber = test_manager.service_subscriber.take().unwrap();
+    let (test_manager, fetch_service_subscriber) =
+        zaino_testutils::launch_with_fetch_subscriber::<V>(validator, None).await;
 
     let fetch_service_get_difficulty = fetch_service_subscriber.get_difficulty().await.unwrap();
 
@@ -115,12 +99,8 @@ async fn assert_fetch_service_difficulty_matches_rpc<V: ValidatorExt>(validator:
 
 #[allow(deprecated)]
 async fn assert_fetch_service_mininginfo_matches_rpc<V: ValidatorExt>(validator: &ValidatorKind) {
-    let mut test_manager =
-        TestManager::<V, FetchService>::launch(validator, None, None, None, true, false, false)
-            .await
-            .unwrap();
-
-    let fetch_service_subscriber = test_manager.service_subscriber.take().unwrap();
+    let (test_manager, fetch_service_subscriber) =
+        zaino_testutils::launch_with_fetch_subscriber::<V>(validator, None).await;
 
     let fetch_service_mining_info = fetch_service_subscriber.get_mining_info().await.unwrap();
 
@@ -134,12 +114,8 @@ async fn assert_fetch_service_mininginfo_matches_rpc<V: ValidatorExt>(validator:
 async fn assert_fetch_service_gettxoutsetinfo_matches_rpc<V: ValidatorExt>(
     validator: &ValidatorKind,
 ) {
-    let mut test_manager =
-        TestManager::<V, FetchService>::launch(validator, None, None, None, true, false, false)
-            .await
-            .unwrap();
-
-    let fetch_service_subscriber = test_manager.service_subscriber.take().unwrap();
+    let (test_manager, fetch_service_subscriber) =
+        zaino_testutils::launch_with_fetch_subscriber::<V>(validator, None).await;
 
     let fetch_service_txoutset_info = fetch_service_subscriber
         .get_tx_out_set_info()
@@ -197,12 +173,8 @@ async fn assert_fetch_service_gettxoutsetinfo_matches_rpc<V: ValidatorExt>(
 
 #[allow(deprecated)]
 async fn assert_fetch_service_peerinfo_matches_rpc<V: ValidatorExt>(validator: &ValidatorKind) {
-    let mut test_manager =
-        TestManager::<V, FetchService>::launch(validator, None, None, None, true, false, false)
-            .await
-            .unwrap();
-
-    let fetch_service_subscriber = test_manager.service_subscriber.take().unwrap();
+    let (test_manager, fetch_service_subscriber) =
+        zaino_testutils::launch_with_fetch_subscriber::<V>(validator, None).await;
 
     let fetch_service_get_peer_info = fetch_service_subscriber.get_peer_info().await.unwrap();
 
@@ -217,12 +189,8 @@ async fn assert_fetch_service_peerinfo_matches_rpc<V: ValidatorExt>(validator: &
 
 #[allow(deprecated)]
 async fn fetch_service_get_block_subsidy<V: ValidatorExt>(validator: &ValidatorKind) {
-    let mut test_manager =
-        TestManager::<V, FetchService>::launch(validator, None, None, None, true, false, false)
-            .await
-            .unwrap();
-
-    let fetch_service_subscriber = test_manager.service_subscriber.take().unwrap();
+    let (test_manager, fetch_service_subscriber) =
+        zaino_testutils::launch_with_fetch_subscriber::<V>(validator, None).await;
 
     let first_halving_height = fetch_service_subscriber
         .network()
@@ -252,12 +220,8 @@ async fn fetch_service_get_block_subsidy<V: ValidatorExt>(validator: &ValidatorK
 
 #[allow(deprecated)]
 async fn fetch_service_get_block<V: ValidatorExt>(validator: &ValidatorKind) {
-    let mut test_manager =
-        TestManager::<V, FetchService>::launch(validator, None, None, None, true, false, false)
-            .await
-            .unwrap();
-
-    let fetch_service_subscriber = test_manager.service_subscriber.take().unwrap();
+    let (mut test_manager, fetch_service_subscriber) =
+        zaino_testutils::launch_with_fetch_subscriber::<V>(validator, None).await;
 
     let block_id = BlockId {
         height: 1,
@@ -285,12 +249,8 @@ async fn fetch_service_get_block<V: ValidatorExt>(validator: &ValidatorKind) {
 
 #[allow(deprecated)]
 async fn fetch_service_get_block_header<V: ValidatorExt>(validator: &ValidatorKind) {
-    let mut test_manager =
-        TestManager::<V, FetchService>::launch(validator, None, None, None, true, false, false)
-            .await
-            .unwrap();
-
-    let fetch_service_subscriber = test_manager.service_subscriber.take().unwrap();
+    let (test_manager, fetch_service_subscriber) =
+        zaino_testutils::launch_with_fetch_subscriber::<V>(validator, None).await;
 
     const BLOCK_LIMIT: u32 = 10;
 
@@ -341,11 +301,8 @@ async fn fetch_service_get_block_header<V: ValidatorExt>(validator: &ValidatorKi
 
 #[allow(deprecated)]
 async fn fetch_service_get_best_blockhash<V: ValidatorExt>(validator: &ValidatorKind) {
-    let mut test_manager =
-        TestManager::<V, FetchService>::launch(validator, None, None, None, true, false, false)
-            .await
-            .unwrap();
-    let fetch_service_subscriber = test_manager.service_subscriber.take().unwrap();
+    let (mut test_manager, fetch_service_subscriber) =
+        zaino_testutils::launch_with_fetch_subscriber::<V>(validator, None).await;
 
     test_manager
         .generate_blocks_and_wait_for_tip(5, &fetch_service_subscriber)
@@ -375,12 +332,8 @@ async fn fetch_service_get_best_blockhash<V: ValidatorExt>(validator: &Validator
 
 #[allow(deprecated)]
 async fn fetch_service_get_block_count<V: ValidatorExt>(validator: &ValidatorKind) {
-    let mut test_manager =
-        TestManager::<V, FetchService>::launch(validator, None, None, None, true, false, false)
-            .await
-            .unwrap();
-
-    let fetch_service_subscriber = test_manager.service_subscriber.take().unwrap();
+    let (mut test_manager, fetch_service_subscriber) =
+        zaino_testutils::launch_with_fetch_subscriber::<V>(validator, None).await;
 
     test_manager
         .generate_blocks_and_wait_for_tip(5, &fetch_service_subscriber)
@@ -401,12 +354,8 @@ async fn fetch_service_get_block_count<V: ValidatorExt>(validator: &ValidatorKin
 
 #[allow(deprecated)]
 async fn fetch_service_validate_address<V: ValidatorExt>(validator: &ValidatorKind) {
-    let mut test_manager =
-        TestManager::<V, FetchService>::launch(validator, None, None, None, true, false, false)
-            .await
-            .unwrap();
-
-    let fetch_service_subscriber = test_manager.service_subscriber.take().unwrap();
+    let (mut test_manager, fetch_service_subscriber) =
+        zaino_testutils::launch_with_fetch_subscriber::<V>(validator, None).await;
 
     // scriptpubkey: "76a914000000000000000000000000000000000000000088ac"
     let expected_validation = ValidateAddressResponse::new(
@@ -443,12 +392,8 @@ async fn fetch_service_validate_address<V: ValidatorExt>(validator: &ValidatorKi
 
 #[allow(deprecated)]
 async fn fetch_service_get_block_nullifiers<V: ValidatorExt>(validator: &ValidatorKind) {
-    let mut test_manager =
-        TestManager::<V, FetchService>::launch(validator, None, None, None, true, false, false)
-            .await
-            .unwrap();
-
-    let fetch_service_subscriber = test_manager.service_subscriber.take().unwrap();
+    let (mut test_manager, fetch_service_subscriber) =
+        zaino_testutils::launch_with_fetch_subscriber::<V>(validator, None).await;
 
     let block_id = BlockId {
         height: 1,
@@ -467,12 +412,8 @@ async fn fetch_service_get_block_nullifiers<V: ValidatorExt>(validator: &Validat
 
 #[allow(deprecated)]
 async fn fetch_service_get_block_range<V: ValidatorExt>(validator: &ValidatorKind) {
-    let mut test_manager =
-        TestManager::<V, FetchService>::launch(validator, None, None, None, true, false, false)
-            .await
-            .unwrap();
-
-    let fetch_service_subscriber = test_manager.service_subscriber.take().unwrap();
+    let (mut test_manager, fetch_service_subscriber) =
+        zaino_testutils::launch_with_fetch_subscriber::<V>(validator, None).await;
 
     test_manager
         .generate_blocks_and_wait_for_tip(10, &fetch_service_subscriber)
@@ -509,12 +450,8 @@ async fn fetch_service_get_block_range<V: ValidatorExt>(validator: &ValidatorKin
 // TODO(#1088): replace deprecated nullifier-range client usage.
 #[allow(deprecated)]
 async fn fetch_service_get_block_range_nullifiers<V: ValidatorExt>(validator: &ValidatorKind) {
-    let mut test_manager =
-        TestManager::<V, FetchService>::launch(validator, None, None, None, true, false, false)
-            .await
-            .unwrap();
-
-    let fetch_service_subscriber = test_manager.service_subscriber.take().unwrap();
+    let (mut test_manager, fetch_service_subscriber) =
+        zaino_testutils::launch_with_fetch_subscriber::<V>(validator, None).await;
 
     test_manager
         .generate_blocks_and_wait_for_tip(10, &fetch_service_subscriber)
@@ -554,12 +491,8 @@ async fn fetch_service_get_block_range_nullifiers<V: ValidatorExt>(validator: &V
 
 #[allow(deprecated)]
 async fn fetch_service_get_tree_state<V: ValidatorExt>(validator: &ValidatorKind) {
-    let mut test_manager =
-        TestManager::<V, FetchService>::launch(validator, None, None, None, true, false, false)
-            .await
-            .unwrap();
-
-    let fetch_service_subscriber = test_manager.service_subscriber.take().unwrap();
+    let (mut test_manager, fetch_service_subscriber) =
+        zaino_testutils::launch_with_fetch_subscriber::<V>(validator, None).await;
 
     let chain_height = dbg!(fetch_service_subscriber.chain_height().await.unwrap()).0;
 
@@ -580,12 +513,8 @@ async fn fetch_service_get_tree_state<V: ValidatorExt>(validator: &ValidatorKind
 
 #[allow(deprecated)]
 async fn fetch_service_get_latest_tree_state<V: ValidatorExt>(validator: &ValidatorKind) {
-    let mut test_manager =
-        TestManager::<V, FetchService>::launch(validator, None, None, None, true, false, false)
-            .await
-            .unwrap();
-
-    let fetch_service_subscriber = test_manager.service_subscriber.take().unwrap();
+    let (mut test_manager, fetch_service_subscriber) =
+        zaino_testutils::launch_with_fetch_subscriber::<V>(validator, None).await;
 
     dbg!(fetch_service_subscriber
         .get_latest_tree_state()
@@ -597,12 +526,8 @@ async fn fetch_service_get_latest_tree_state<V: ValidatorExt>(validator: &Valida
 
 #[allow(deprecated)]
 async fn fetch_service_get_subtree_roots<V: ValidatorExt>(validator: &ValidatorKind) {
-    let mut test_manager =
-        TestManager::<V, FetchService>::launch(validator, None, None, None, true, false, false)
-            .await
-            .unwrap();
-
-    let fetch_service_subscriber = test_manager.service_subscriber.take().unwrap();
+    let (mut test_manager, fetch_service_subscriber) =
+        zaino_testutils::launch_with_fetch_subscriber::<V>(validator, None).await;
 
     let subtree_roots_arg = GetSubtreeRootsArg {
         start_index: 0,
@@ -628,12 +553,8 @@ async fn fetch_service_get_subtree_roots<V: ValidatorExt>(validator: &ValidatorK
 
 #[allow(deprecated)]
 async fn fetch_service_get_lightd_info<V: ValidatorExt>(validator: &ValidatorKind) {
-    let mut test_manager =
-        TestManager::<V, FetchService>::launch(validator, None, None, None, true, false, false)
-            .await
-            .unwrap();
-
-    let fetch_service_subscriber = test_manager.service_subscriber.take().unwrap();
+    let (mut test_manager, fetch_service_subscriber) =
+        zaino_testutils::launch_with_fetch_subscriber::<V>(validator, None).await;
 
     dbg!(fetch_service_subscriber.get_lightd_info().await.unwrap());
 
@@ -644,12 +565,8 @@ async fn fetch_service_get_lightd_info<V: ValidatorExt>(validator: &ValidatorKin
 async fn assert_fetch_service_getnetworksols_matches_rpc<V: ValidatorExt>(
     validator: &ValidatorKind,
 ) {
-    let mut test_manager =
-        TestManager::<V, FetchService>::launch(validator, None, None, None, true, false, false)
-            .await
-            .unwrap();
-
-    let fetch_service_subscriber = test_manager.service_subscriber.take().unwrap();
+    let (test_manager, fetch_service_subscriber) =
+        zaino_testutils::launch_with_fetch_subscriber::<V>(validator, None).await;
 
     let fetch_service_get_networksolps = fetch_service_subscriber
         .get_network_sol_ps(None, None)
