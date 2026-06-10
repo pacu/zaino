@@ -246,7 +246,6 @@ pub(super) async fn main() {
         &ValidatorKind::Zebrad,
         None,
         true,
-        true,
         None,
     )
     .await;

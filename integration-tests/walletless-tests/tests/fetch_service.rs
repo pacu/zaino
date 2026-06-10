@@ -4,7 +4,6 @@ use futures::StreamExt as _;
 use zaino_fetch::jsonrpsee::connector::{test_node_and_return_url, JsonRpSeeConnector};
 use zaino_proto::proto::compact_formats::CompactBlock;
 use zaino_proto::proto::service::{BlockId, BlockRange, GetSubtreeRootsArg, PoolType};
-use zaino_state::FetchServiceSubscriber;
 #[allow(deprecated)]
 use zaino_state::{FetchService, LightWalletIndexer, Status, StatusType, ZcashIndexer};
 use zaino_testutils::{TestManager, ValidatorExt, ValidatorKind};
@@ -12,21 +11,12 @@ use zebra_chain::parameters::subsidy::ParameterSubsidy as _;
 use zebra_rpc::client::ValidateAddressResponse;
 use zebra_rpc::methods::{GetBlock, GetBlockHash};
 
-#[allow(deprecated)]
-async fn create_test_manager_and_fetch_service<V: ValidatorExt>(
-    validator: &ValidatorKind,
-    chain_cache: Option<std::path::PathBuf>,
-    _enable_clients: bool,
-) -> (TestManager<V, FetchService>, FetchServiceSubscriber) {
-    zaino_testutils::launch_with_fetch_subscriber(validator, chain_cache).await
-}
-
 async fn launch_fetch_service<V: ValidatorExt>(
     validator: &ValidatorKind,
     chain_cache: Option<std::path::PathBuf>,
 ) {
     let (mut test_manager, fetch_service_subscriber) =
-        create_test_manager_and_fetch_service::<V>(validator, chain_cache, false).await;
+        zaino_testutils::launch_with_fetch_subscriber::<V>(validator, chain_cache).await;
     assert_eq!(fetch_service_subscriber.status(), StatusType::Ready);
     dbg!(fetch_service_subscriber.data.clone());
     dbg!(fetch_service_subscriber.get_info().await.unwrap());
@@ -807,10 +797,9 @@ mod zcashd {
         #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
         pub(crate) async fn z_validate_address() {
             let (mut test_manager, fetch_service_subscriber) =
-                create_test_manager_and_fetch_service::<Zcashd>(
+                zaino_testutils::launch_with_fetch_subscriber::<Zcashd>(
                     &ValidatorKind::Zcashd,
                     None,
-                    false,
                 )
                 .await;
 
@@ -1023,10 +1012,9 @@ mod zebrad {
         #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
         pub(crate) async fn z_validate_address() {
             let (mut test_manager, fetch_service_subscriber) =
-                create_test_manager_and_fetch_service::<Zebrad>(
+                zaino_testutils::launch_with_fetch_subscriber::<Zebrad>(
                     &ValidatorKind::Zebrad,
                     None,
-                    false,
                 )
                 .await;
 

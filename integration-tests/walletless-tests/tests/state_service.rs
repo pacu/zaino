@@ -1,36 +1,11 @@
 use zaino_fetch::jsonrpsee::response::address_deltas::GetAddressDeltasParams;
 
-#[allow(deprecated)]
-use zaino_state::{
-    FetchService, FetchServiceSubscriber, LightWalletIndexer, StateService, StateServiceSubscriber,
-    ZcashIndexer,
-};
+use zaino_state::{LightWalletIndexer, ZcashIndexer};
 use zaino_testutils::ValidatorExt;
-use zaino_testutils::{TestManager, ValidatorKind, ZEBRAD_TESTNET_CACHE_DIR};
+use zaino_testutils::{ValidatorKind, ZEBRAD_TESTNET_CACHE_DIR};
 use zcash_local_net::validator::{zebrad::Zebrad, Validator};
 use zebra_chain::parameters::NetworkKind;
 use zebra_rpc::methods::{GetAddressBalanceRequest, GetAddressTxIdsRequest, GetInfo};
-
-#[allow(deprecated)]
-// NOTE: the fetch and state services each have a seperate chain index to the instance of zaino connected to the lightclients and may be out of sync
-// the test manager now includes a service subscriber but not both fetch *and* state which are necessary for these tests.
-// syncronicity is ensured in the following tests by calling `TestManager::generate_blocks_and_wait_for_tips`.
-async fn create_test_manager_and_services<V: ValidatorExt>(
-    validator: &ValidatorKind,
-    chain_cache: Option<std::path::PathBuf>,
-    enable_zaino: bool,
-    _enable_clients: bool,
-    network: Option<NetworkKind>,
-) -> (
-    TestManager<V, StateService>,
-    FetchService,
-    FetchServiceSubscriber,
-    StateService,
-    StateServiceSubscriber,
-) {
-    zaino_testutils::launch_state_and_fetch_services(validator, chain_cache, enable_zaino, network)
-        .await
-}
 
 #[allow(deprecated)]async fn state_service_check_info<V: ValidatorExt>(
     validator: &ValidatorKind,
@@ -43,7 +18,7 @@ async fn create_test_manager_and_services<V: ValidatorExt>(
         fetch_service_subscriber,
         _state_service,
         state_service_subscriber,
-    ) = create_test_manager_and_services::<V>(validator, chain_cache, false, false, Some(network))
+    ) = zaino_testutils::launch_state_and_fetch_services::<V>(validator, chain_cache, false, Some(network))
         .await;
 
     if dbg!(network.to_string()) == *"Regtest" {
@@ -168,10 +143,9 @@ async fn state_service_get_address_balance_testnet() {
         fetch_service_subscriber,
         _state_service,
         state_service_subscriber,
-    ) = create_test_manager_and_services::<Zebrad>(
+    ) = zaino_testutils::launch_state_and_fetch_services::<Zebrad>(
         &ValidatorKind::Zebrad,
         ZEBRAD_TESTNET_CACHE_DIR.clone(),
-        false,
         false,
         Some(NetworkKind::Testnet),
     )
@@ -211,10 +185,9 @@ async fn state_service_get_block_raw(
         fetch_service_subscriber,
         _state_service,
         state_service_subscriber,
-    ) = create_test_manager_and_services::<Zebrad>(
+    ) = zaino_testutils::launch_state_and_fetch_services::<Zebrad>(
         validator,
         chain_cache,
-        false,
         false,
         Some(network),
     )
@@ -251,10 +224,9 @@ async fn state_service_get_block_object(
         fetch_service_subscriber,
         _state_service,
         state_service_subscriber,
-    ) = create_test_manager_and_services::<Zebrad>(
+    ) = zaino_testutils::launch_state_and_fetch_services::<Zebrad>(
         validator,
         chain_cache,
-        false,
         false,
         Some(network),
     )
@@ -297,10 +269,9 @@ async fn state_service_get_raw_mempool_testnet() {
         fetch_service_subscriber,
         _state_service,
         state_service_subscriber,
-    ) = create_test_manager_and_services::<Zebrad>(
+    ) = zaino_testutils::launch_state_and_fetch_services::<Zebrad>(
         &ValidatorKind::Zebrad,
         ZEBRAD_TESTNET_CACHE_DIR.clone(),
-        false,
         false,
         Some(NetworkKind::Testnet),
     )
@@ -327,10 +298,9 @@ async fn state_service_z_get_treestate_testnet() {
         fetch_service_subscriber,
         _state_service,
         state_service_subscriber,
-    ) = create_test_manager_and_services::<Zebrad>(
+    ) = zaino_testutils::launch_state_and_fetch_services::<Zebrad>(
         &ValidatorKind::Zebrad,
         ZEBRAD_TESTNET_CACHE_DIR.clone(),
-        false,
         false,
         Some(NetworkKind::Testnet),
     )
@@ -362,10 +332,9 @@ async fn state_service_z_get_subtrees_by_index_testnet() {
         fetch_service_subscriber,
         _state_service,
         state_service_subscriber,
-    ) = create_test_manager_and_services::<Zebrad>(
+    ) = zaino_testutils::launch_state_and_fetch_services::<Zebrad>(
         &ValidatorKind::Zebrad,
         ZEBRAD_TESTNET_CACHE_DIR.clone(),
-        false,
         false,
         Some(NetworkKind::Testnet),
     )
@@ -419,10 +388,9 @@ async fn state_service_get_raw_transaction_testnet() {
         fetch_service_subscriber,
         _state_service,
         state_service_subscriber,
-    ) = create_test_manager_and_services::<Zebrad>(
+    ) = zaino_testutils::launch_state_and_fetch_services::<Zebrad>(
         &ValidatorKind::Zebrad,
         ZEBRAD_TESTNET_CACHE_DIR.clone(),
-        false,
         false,
         Some(NetworkKind::Testnet),
     )
@@ -456,10 +424,9 @@ async fn state_service_get_address_tx_ids_testnet() {
         fetch_service_subscriber,
         _state_service,
         state_service_subscriber,
-    ) = create_test_manager_and_services::<Zebrad>(
+    ) = zaino_testutils::launch_state_and_fetch_services::<Zebrad>(
         &ValidatorKind::Zebrad,
         ZEBRAD_TESTNET_CACHE_DIR.clone(),
-        false,
         false,
         Some(NetworkKind::Testnet),
     )
@@ -496,10 +463,9 @@ async fn state_service_get_address_utxos_testnet() {
         fetch_service_subscriber,
         _state_service,
         state_service_subscriber,
-    ) = create_test_manager_and_services::<Zebrad>(
+    ) = zaino_testutils::launch_state_and_fetch_services::<Zebrad>(
         &ValidatorKind::Zebrad,
         ZEBRAD_TESTNET_CACHE_DIR.clone(),
-        false,
         false,
         Some(NetworkKind::Testnet),
     )
@@ -535,10 +501,9 @@ async fn state_service_get_address_deltas_testnet() {
         fetch_service_subscriber,
         _state_service,
         state_service_subscriber,
-    ) = create_test_manager_and_services::<Zebrad>(
+    ) = zaino_testutils::launch_state_and_fetch_services::<Zebrad>(
         &ValidatorKind::Zebrad,
         ZEBRAD_TESTNET_CACHE_DIR.clone(),
-        false,
         false,
         Some(NetworkKind::Testnet),
     )
@@ -616,11 +581,10 @@ mod zebra {
                 fetch_service_subscriber,
                 _state_service,
                 state_service_subscriber,
-            ) = create_test_manager_and_services::<Zebrad>(
+            ) = zaino_testutils::launch_state_and_fetch_services::<Zebrad>(
                 &ValidatorKind::Zebrad,
                 None,
                 true,
-                false,
                 Some(NetworkKind::Regtest),
             )
             .await;
@@ -696,11 +660,10 @@ mod zebra {
                 fetch_service_subscriber,
                 _state_service,
                 state_service_subscriber,
-            ) = create_test_manager_and_services::<Zebrad>(
+            ) = zaino_testutils::launch_state_and_fetch_services::<Zebrad>(
                 &ValidatorKind::Zebrad,
                 None,
                 true,
-                false,
                 Some(NetworkKind::Regtest),
             )
             .await;
@@ -722,11 +685,10 @@ mod zebra {
                 fetch_service_subscriber,
                 _state_service,
                 state_service_subscriber,
-            ) = create_test_manager_and_services::<Zebrad>(
+            ) = zaino_testutils::launch_state_and_fetch_services::<Zebrad>(
                 &ValidatorKind::Zebrad,
                 None,
                 true,
-                false,
                 Some(NetworkKind::Regtest),
             )
             .await;
@@ -750,10 +712,9 @@ mod zebra {
                 fetch_service_subscriber,
                 _state_service,
                 state_service_subscriber,
-            ) = create_test_manager_and_services::<Zebrad>(
+            ) = zaino_testutils::launch_state_and_fetch_services::<Zebrad>(
                 &ValidatorKind::Zebrad,
                 None,
-                false,
                 false,
                 Some(NetworkKind::Regtest),
             )
@@ -792,11 +753,10 @@ mod zebra {
                 fetch_service_subscriber,
                 _state_service,
                 state_service_subscriber,
-            ) = create_test_manager_and_services::<Zebrad>(
+            ) = zaino_testutils::launch_state_and_fetch_services::<Zebrad>(
                 &ValidatorKind::Zebrad,
                 None,
                 true,
-                false,
                 Some(NetworkKind::Regtest),
             )
             .await;
@@ -833,11 +793,10 @@ mod zebra {
                 fetch_service_subscriber,
                 _state_service,
                 state_service_subscriber,
-            ) = create_test_manager_and_services::<Zebrad>(
+            ) = zaino_testutils::launch_state_and_fetch_services::<Zebrad>(
                 &ValidatorKind::Zebrad,
                 None,
                 true,
-                false,
                 Some(NetworkKind::Regtest),
             )
             .await;
@@ -871,11 +830,10 @@ mod zebra {
                 fetch_service_subscriber,
                 _state_service,
                 state_service_subscriber,
-            ) = create_test_manager_and_services::<Zebrad>(
+            ) = zaino_testutils::launch_state_and_fetch_services::<Zebrad>(
                 &ValidatorKind::Zebrad,
                 None,
                 true,
-                false,
                 Some(NetworkKind::Regtest),
             )
             .await;
@@ -902,11 +860,10 @@ mod zebra {
                     _fetch_service_subscriber,
                     _state_service,
                     state_service_subscriber,
-                ) = create_test_manager_and_services::<Zebrad>(
+                ) = zaino_testutils::launch_state_and_fetch_services::<Zebrad>(
                     &ValidatorKind::Zebrad,
                     None,
                     true,
-                    false,
                     None,
                 )
                 .await;
@@ -1001,11 +958,10 @@ mod zebra {
                 fetch_service_subscriber,
                 _state_service,
                 state_service_subscriber,
-            ) = create_test_manager_and_services::<Zebrad>(
+            ) = zaino_testutils::launch_state_and_fetch_services::<Zebrad>(
                 &ValidatorKind::Zebrad,
                 None,
                 true,
-                false,
                 Some(NetworkKind::Regtest),
             )
             .await;
@@ -1027,11 +983,10 @@ mod zebra {
                 fetch_service_subscriber,
                 _state_service,
                 state_service_subscriber,
-            ) = create_test_manager_and_services::<Zebrad>(
+            ) = zaino_testutils::launch_state_and_fetch_services::<Zebrad>(
                 &ValidatorKind::Zebrad,
                 None,
                 true,
-                false,
                 Some(NetworkKind::Regtest),
             )
             .await;
@@ -1074,11 +1029,10 @@ mod zebra {
                 fetch_service_subscriber,
                 _state_service,
                 state_service_subscriber,
-            ) = create_test_manager_and_services::<Zebrad>(
+            ) = zaino_testutils::launch_state_and_fetch_services::<Zebrad>(
                 &ValidatorKind::Zebrad,
                 None,
                 true,
-                false,
                 Some(NetworkKind::Regtest),
             )
             .await;
@@ -1123,11 +1077,10 @@ mod zebra {
                 fetch_service_subscriber,
                 _state_service,
                 state_service_subscriber,
-            ) = create_test_manager_and_services::<Zebrad>(
+            ) = zaino_testutils::launch_state_and_fetch_services::<Zebrad>(
                 &ValidatorKind::Zebrad,
                 None,
                 true,
-                false,
                 Some(NetworkKind::Regtest),
             )
             .await;
@@ -1162,11 +1115,10 @@ mod zebra {
                 fetch_service_subscriber,
                 _state_service,
                 state_service_subscriber,
-            ) = create_test_manager_and_services::<Zebrad>(
+            ) = zaino_testutils::launch_state_and_fetch_services::<Zebrad>(
                 &ValidatorKind::Zebrad,
                 None,
                 true,
-                false,
                 Some(NetworkKind::Regtest),
             )
             .await;
@@ -1206,11 +1158,10 @@ mod zebra {
                 fetch_service_subscriber,
                 _state_service,
                 state_service_subscriber,
-            ) = create_test_manager_and_services::<Zebrad>(
+            ) = zaino_testutils::launch_state_and_fetch_services::<Zebrad>(
                 &ValidatorKind::Zebrad,
                 None,
                 true,
-                false,
                 Some(NetworkKind::Regtest),
             )
             .await;
@@ -1235,11 +1186,10 @@ mod zebra {
                 fetch_service_subscriber,
                 _state_service,
                 state_service_subscriber,
-            ) = create_test_manager_and_services::<Zebrad>(
+            ) = zaino_testutils::launch_state_and_fetch_services::<Zebrad>(
                 &ValidatorKind::Zebrad,
                 None,
                 true,
-                false,
                 Some(NetworkKind::Regtest),
             )
             .await;

@@ -1,29 +1,14 @@
 //! Tests that compare the output of both `zcashd` and `zainod` through `FetchService`.
 
 #[allow(deprecated)]
-use zaino_state::{FetchService, FetchServiceSubscriber, ZcashIndexer};
-use zaino_testutils::TestManager;
-use zcash_local_net::validator::zcashd::Zcashd;
+use zaino_state::{FetchServiceSubscriber, ZcashIndexer};
 use zcash_local_net::validator::Validator as _;
 use zebra_rpc::methods::GetInfo;
 
 #[allow(deprecated)]
-async fn create_zcashd_test_manager_and_fetch_services(
-    _clients: bool,
-) -> (
-    TestManager<Zcashd, FetchService>,
-    FetchService,
-    FetchServiceSubscriber,
-    FetchService,
-    FetchServiceSubscriber,
-) {
-    zaino_testutils::launch_zcashd_dual_fetch_services().await
-}
-
-#[allow(deprecated)]
 async fn launch_json_server_check_info() {
     let (mut test_manager, _zcashd_service, zcashd_subscriber, _zaino_service, zaino_subscriber) =
-        create_zcashd_test_manager_and_fetch_services(false).await;
+        zaino_testutils::launch_zcashd_dual_fetch_services().await;
     let zcashd_info = dbg!(zcashd_subscriber.get_info().await.unwrap());
     let zcashd_blockchain_info = dbg!(zcashd_subscriber.get_blockchain_info().await.unwrap());
     let zaino_info = dbg!(zaino_subscriber.get_info().await.unwrap());
@@ -128,7 +113,7 @@ async fn launch_json_server_check_info() {
 
 async fn get_best_blockhash_inner() {
     let (mut test_manager, _zcashd_service, zcashd_subscriber, _zaino_service, zaino_subscriber) =
-        create_zcashd_test_manager_and_fetch_services(false).await;
+        zaino_testutils::launch_zcashd_dual_fetch_services().await;
 
     let zcashd_bbh = dbg!(zcashd_subscriber.get_best_blockhash().await.unwrap());
     let zaino_bbh = dbg!(zaino_subscriber.get_best_blockhash().await.unwrap());
@@ -140,7 +125,7 @@ async fn get_best_blockhash_inner() {
 
 async fn get_block_count_inner() {
     let (mut test_manager, _zcashd_service, zcashd_subscriber, _zaino_service, zaino_subscriber) =
-        create_zcashd_test_manager_and_fetch_services(false).await;
+        zaino_testutils::launch_zcashd_dual_fetch_services().await;
 
     let zcashd_block_count = dbg!(zcashd_subscriber.get_block_count().await.unwrap());
     let zaino_block_count = dbg!(zaino_subscriber.get_block_count().await.unwrap());
@@ -152,7 +137,7 @@ async fn get_block_count_inner() {
 
 async fn validate_address_inner() {
     let (mut test_manager, _zcashd_service, zcashd_subscriber, _zaino_service, zaino_subscriber) =
-        create_zcashd_test_manager_and_fetch_services(false).await;
+        zaino_testutils::launch_zcashd_dual_fetch_services().await;
 
     // Using a testnet transparent address
     let address_string = "tmHMBeeYRuc2eVicLNfP15YLxbQsooCA6jb";
@@ -191,7 +176,7 @@ async fn validate_address_inner() {
 
 async fn z_get_block_inner() {
     let (mut test_manager, _zcashd_service, zcashd_subscriber, _zaino_service, zaino_subscriber) =
-        create_zcashd_test_manager_and_fetch_services(false).await;
+        zaino_testutils::launch_zcashd_dual_fetch_services().await;
 
     let zcashd_block_raw = dbg!(zcashd_subscriber
         .z_get_block("1".to_string(), Some(0))
@@ -232,7 +217,7 @@ async fn z_get_block_inner() {
 
 async fn get_tx_out_set_info_inner() {
     let (mut test_manager, _zcashd_service, zcashd_subscriber, _zaino_service, zaino_subscriber) =
-        create_zcashd_test_manager_and_fetch_services(false).await;
+        zaino_testutils::launch_zcashd_dual_fetch_services().await;
 
     test_manager.generate_blocks_and_wait_for_tips(1, &zaino_subscriber, &zcashd_subscriber)
     .await;
@@ -327,7 +312,7 @@ mod zcashd {
                 zcashd_subscriber,
                 _zaino_service,
                 zaino_subscriber,
-            ) = create_zcashd_test_manager_and_fetch_services(false).await;
+            ) = zaino_testutils::launch_zcashd_dual_fetch_services().await;
 
             const BLOCK_LIMIT: i32 = 10;
 
@@ -352,7 +337,7 @@ mod zcashd {
                 zcashd_subscriber,
                 _zaino_service,
                 zaino_subscriber,
-            ) = create_zcashd_test_manager_and_fetch_services(false).await;
+            ) = zaino_testutils::launch_zcashd_dual_fetch_services().await;
 
             const BLOCK_LIMIT: i32 = 10;
 
@@ -388,7 +373,7 @@ mod zcashd {
                 zcashd_subscriber,
                 _zaino_service,
                 zaino_subscriber,
-            ) = create_zcashd_test_manager_and_fetch_services(false).await;
+            ) = zaino_testutils::launch_zcashd_dual_fetch_services().await;
 
             const BLOCK_LIMIT: i32 = 10;
 
@@ -418,7 +403,7 @@ mod zcashd {
                 zcashd_subscriber,
                 _zaino_service,
                 zaino_subscriber,
-            ) = create_zcashd_test_manager_and_fetch_services(false).await;
+            ) = zaino_testutils::launch_zcashd_dual_fetch_services().await;
 
             let zcashd_peer_info = zcashd_subscriber.get_peer_info().await.unwrap();
             let zaino_peer_info = zaino_subscriber.get_peer_info().await.unwrap();
@@ -439,7 +424,7 @@ mod zcashd {
                 zcashd_subscriber,
                 _zaino_service,
                 zaino_subscriber,
-            ) = create_zcashd_test_manager_and_fetch_services(false).await;
+            ) = zaino_testutils::launch_zcashd_dual_fetch_services().await;
 
             test_manager.generate_blocks_and_wait_for_tips(1, &zaino_subscriber, &zcashd_subscriber)
             .await;
@@ -461,7 +446,7 @@ mod zcashd {
         #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
         async fn z_validate_address() {
             let (mut test_manager, _zcashd_service, zcashd_subscriber, _zaino_service, _zaino_sub) =
-                create_zcashd_test_manager_and_fetch_services(false).await;
+                zaino_testutils::launch_zcashd_dual_fetch_services().await;
 
             let rpc_call = |addr: String| {
                 let subscriber: &FetchServiceSubscriber = &zcashd_subscriber;
@@ -487,7 +472,7 @@ mod zcashd {
                 zcashd_subscriber,
                 _zaino_service,
                 zaino_subscriber,
-            ) = create_zcashd_test_manager_and_fetch_services(false).await;
+            ) = zaino_testutils::launch_zcashd_dual_fetch_services().await;
 
             const BLOCK_LIMIT: u32 = 10;
 

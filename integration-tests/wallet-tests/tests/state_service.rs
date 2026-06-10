@@ -25,7 +25,6 @@ async fn create_test_manager_and_services<V: ValidatorExt>(
     validator: &ValidatorKind,
     chain_cache: Option<std::path::PathBuf>,
     enable_zaino: bool,
-    _enable_clients: bool,
     network: Option<NetworkKind>,
 ) -> (
     TestManager<V, StateService>,
@@ -70,7 +69,7 @@ async fn create_test_manager_and_services<V: ValidatorExt>(
         _state_service,
         state_service_subscriber,
         mut clients,
-    ) = create_test_manager_and_services::<V>(validator, None, true, true, None).await;
+    ) = create_test_manager_and_services::<V>(validator, None, true, None).await;
 
     let recipient_taddr = clients.get_recipient_address("transparent").await;
 
@@ -143,7 +142,7 @@ async fn state_service_get_raw_mempool<V: ValidatorExt>(validator: &ValidatorKin
         _state_service,
         state_service_subscriber,
         mut clients,
-    ) = create_test_manager_and_services::<V>(validator, None, true, true, None).await;
+    ) = create_test_manager_and_services::<V>(validator, None, true, None).await;
 
     test_manager.generate_blocks_and_wait_for_tips(1, &fetch_service_subscriber, &state_service_subscriber)
     .await;
@@ -202,7 +201,7 @@ async fn state_service_get_block_range_returns_default_pools<V: ValidatorExt>(
         _state_service,
         state_service_subscriber,
         mut clients,
-    ) = create_test_manager_and_services::<V>(validator, None, true, true, None).await;
+    ) = create_test_manager_and_services::<V>(validator, None, true, None).await;
 
     clients.faucet.sync_and_await().await.unwrap();
 
@@ -330,7 +329,7 @@ async fn state_service_get_block_range_returns_all_pools<V: ValidatorExt>(
         _state_service,
         state_service_subscriber,
         mut clients,
-    ) = create_test_manager_and_services::<V>(validator, None, true, true, None).await;
+    ) = create_test_manager_and_services::<V>(validator, None, true, None).await;
 
     clients.faucet.sync_and_await().await.unwrap();
 
@@ -470,7 +469,7 @@ async fn state_service_get_block_range_out_of_range_test_upper_bound<V: Validato
         _state_service,
         state_service_subscriber,
         mut clients,
-    ) = create_test_manager_and_services::<V>(validator, None, true, true, None).await;
+    ) = create_test_manager_and_services::<V>(validator, None, true, None).await;
 
     clients.faucet.sync_and_await().await.unwrap();
 
@@ -572,7 +571,7 @@ async fn state_service_get_block_range_out_of_range_test_lower_bound<V: Validato
         _state_service,
         state_service_subscriber,
         mut clients,
-    ) = create_test_manager_and_services::<V>(validator, None, true, true, None).await;
+    ) = create_test_manager_and_services::<V>(validator, None, true, None).await;
 
     clients.faucet.sync_and_await().await.unwrap();
 
@@ -670,7 +669,7 @@ async fn state_service_z_get_treestate<V: ValidatorExt>(validator: &ValidatorKin
         _state_service,
         state_service_subscriber,
         mut clients,
-    ) = create_test_manager_and_services::<V>(validator, None, true, true, None).await;
+    ) = create_test_manager_and_services::<V>(validator, None, true, None).await;
 
     clients.faucet.sync_and_await().await.unwrap();
 
@@ -717,7 +716,7 @@ async fn state_service_z_get_subtrees_by_index<V: ValidatorExt>(validator: &Vali
         _state_service,
         state_service_subscriber,
         mut clients,
-    ) = create_test_manager_and_services::<V>(validator, None, true, true, None).await;
+    ) = create_test_manager_and_services::<V>(validator, None, true, None).await;
 
     clients.faucet.sync_and_await().await.unwrap();
 
@@ -765,7 +764,7 @@ async fn state_service_get_raw_transaction<V: ValidatorExt + LogsToStdoutAndStde
         _state_service,
         state_service_subscriber,
         mut clients,
-    ) = create_test_manager_and_services::<V>(validator, None, true, true, None).await;
+    ) = create_test_manager_and_services::<V>(validator, None, true, None).await;
 
     clients.faucet.sync_and_await().await.unwrap();
 
@@ -814,7 +813,7 @@ async fn state_service_get_address_transactions_regtest<V: ValidatorExt>(
         _state_service,
         state_service_subscriber,
         mut clients,
-    ) = create_test_manager_and_services::<V>(validator, None, true, true, None).await;
+    ) = create_test_manager_and_services::<V>(validator, None, true, None).await;
 
     let recipient_taddr = clients.get_recipient_address("transparent").await;
     clients.faucet.sync_and_await().await.unwrap();
@@ -884,7 +883,7 @@ async fn state_service_get_address_tx_ids<V: ValidatorExt>(validator: &Validator
         _state_service,
         state_service_subscriber,
         mut clients,
-    ) = create_test_manager_and_services::<V>(validator, None, true, true, None).await;
+    ) = create_test_manager_and_services::<V>(validator, None, true, None).await;
 
     let recipient_taddr = clients.get_recipient_address("transparent").await;
     clients.faucet.sync_and_await().await.unwrap();
@@ -952,7 +951,7 @@ async fn state_service_get_address_utxos<V: ValidatorExt>(validator: &ValidatorK
         _state_service,
         state_service_subscriber,
         mut clients,
-    ) = create_test_manager_and_services::<V>(validator, None, true, true, None).await;
+    ) = create_test_manager_and_services::<V>(validator, None, true, None).await;
 
     let recipient_taddr = clients.get_recipient_address("transparent").await;
     clients.faucet.sync_and_await().await.unwrap();
@@ -1098,7 +1097,6 @@ mod zebra {
                 &ValidatorKind::Zebrad,
                 None,
                 true,
-                true,
                 None,
             )
             .await;
@@ -1199,7 +1197,6 @@ mod zebra {
                 &ValidatorKind::Zebrad,
                 None,
                 true,
-                true,
                 Some(NetworkKind::Regtest),
             )
             .await;
@@ -1251,7 +1248,6 @@ mod zebra {
                 &ValidatorKind::Zebrad,
                 None,
                 true,
-                true,
                 Some(NetworkKind::Regtest),
             )
             .await;
@@ -1289,7 +1285,6 @@ mod zebra {
             ) = create_test_manager_and_services::<Zebrad>(
                 &ValidatorKind::Zebrad,
                 None,
-                true,
                 true,
                 Some(NetworkKind::Regtest),
             )
@@ -1347,7 +1342,6 @@ mod zebra {
                 &ValidatorKind::Zebrad,
                 None,
                 true,
-                true,
                 Some(NetworkKind::Regtest),
             )
             .await;
@@ -1399,7 +1393,6 @@ mod zebra {
                 &ValidatorKind::Zebrad,
                 None,
                 true,
-                true,
                 Some(NetworkKind::Regtest),
             )
             .await;
@@ -1438,7 +1431,6 @@ mod zebra {
             ) = create_test_manager_and_services::<Zebrad>(
                 &ValidatorKind::Zebrad,
                 None,
-                true,
                 true,
                 Some(NetworkKind::Regtest),
             )
