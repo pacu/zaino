@@ -11,14 +11,17 @@ use zaino_testutils::ValidatorKind;
 use zainodlib::error::IndexerError;
 use zip32::AccountId;
 
-async fn connect_to_node_get_info_for_validator<V, Service>(validator: &ValidatorKind)
+/// Launch a validator + Zaino and build faucet/recipient lightclients against it.
+async fn launch_and_build<V, Service>(
+    validator: &ValidatorKind,
+) -> (TestManager<V, Service>, wallet_tests::Clients)
 where
     V: ValidatorExt,
     Service: zaino_testutils::TestService,
     IndexerError: From<<<Service as ZcashService>::Subscriber as ZcashIndexer>::Error>,
     <Service as ZcashService>::Subscriber: zaino_testutils::PollableTip,
 {
-    let mut test_manager =
+    let test_manager =
         TestManager::<V, Service>::launch(validator, None, None, None, true, false, false)
             .await
             .unwrap();
@@ -29,6 +32,44 @@ where
             .port(),
         wallet_tests::default_heights(validator),
     );
+    (test_manager, clients)
+}
+
+/// Sync the faucet; on zebrad, mature 100 coinbase blocks and shield so it has
+/// spendable funds (zebrad can't mine directly to orchard in this setup).
+async fn fund_faucet<V, Service>(
+    test_manager: &TestManager<V, Service>,
+    clients: &mut wallet_tests::Clients,
+    validator: &ValidatorKind,
+) where
+    V: ValidatorExt,
+    Service: zaino_testutils::TestService,
+    IndexerError: From<<<Service as ZcashService>::Subscriber as ZcashIndexer>::Error>,
+    <Service as ZcashService>::Subscriber: zaino_testutils::PollableTip,
+{
+    clients.faucet.sync_and_await().await.unwrap();
+
+    if matches!(validator, ValidatorKind::Zebrad) {
+        test_manager
+            .generate_blocks_and_wait_for_tip(100, test_manager.subscriber())
+            .await;
+        clients.faucet.sync_and_await().await.unwrap();
+        clients.faucet.quick_shield(AccountId::ZERO).await.unwrap();
+        test_manager
+            .generate_blocks_and_wait_for_tip(1, test_manager.subscriber())
+            .await;
+        clients.faucet.sync_and_await().await.unwrap();
+    }
+}
+
+async fn connect_to_node_get_info_for_validator<V, Service>(validator: &ValidatorKind)
+where
+    V: ValidatorExt,
+    Service: zaino_testutils::TestService,
+    IndexerError: From<<<Service as ZcashService>::Subscriber as ZcashIndexer>::Error>,
+    <Service as ZcashService>::Subscriber: zaino_testutils::PollableTip,
+{
+    let (mut test_manager, clients) = launch_and_build::<V, Service>(validator).await;
 
     clients.faucet.do_info().await;
     clients.recipient.do_info().await;
@@ -43,31 +84,9 @@ where
     IndexerError: From<<<Service as ZcashService>::Subscriber as ZcashIndexer>::Error>,
     <Service as ZcashService>::Subscriber: zaino_testutils::PollableTip,
 {
-    let mut test_manager =
-        TestManager::<V, Service>::launch(validator, None, None, None, true, false, false)
-            .await
-            .unwrap();
-    let mut clients = wallet_tests::build_clients(
-        test_manager
-            .zaino_grpc_listen_address
-            .expect("zaino enabled")
-            .port(),
-        wallet_tests::default_heights(validator),
-    );
+    let (mut test_manager, mut clients) = launch_and_build::<V, Service>(validator).await;
 
-    clients.faucet.sync_and_await().await.unwrap();
-
-    if matches!(validator, ValidatorKind::Zebrad) {
-        test_manager
-            .generate_blocks_and_wait_for_tip(100, test_manager.subscriber())
-            .await;
-        clients.faucet.sync_and_await().await.unwrap();
-        clients.faucet.quick_shield(AccountId::ZERO).await.unwrap();
-        test_manager
-            .generate_blocks_and_wait_for_tip(1, test_manager.subscriber())
-            .await;
-        clients.faucet.sync_and_await().await.unwrap();
-    };
+    fund_faucet(&test_manager, &mut clients, validator).await;
 
     let recipient_ua = clients.get_recipient_address("unified").await.to_string();
     from_inputs::quick_send(&mut clients.faucet, vec![(&recipient_ua, 250_000, None)])
@@ -100,31 +119,9 @@ where
     IndexerError: From<<<Service as ZcashService>::Subscriber as ZcashIndexer>::Error>,
     <Service as ZcashService>::Subscriber: zaino_testutils::PollableTip,
 {
-    let mut test_manager =
-        TestManager::<V, Service>::launch(validator, None, None, None, true, false, false)
-            .await
-            .unwrap();
-    let mut clients = wallet_tests::build_clients(
-        test_manager
-            .zaino_grpc_listen_address
-            .expect("zaino enabled")
-            .port(),
-        wallet_tests::default_heights(validator),
-    );
+    let (mut test_manager, mut clients) = launch_and_build::<V, Service>(validator).await;
 
-    clients.faucet.sync_and_await().await.unwrap();
-
-    if matches!(validator, ValidatorKind::Zebrad) {
-        test_manager
-            .generate_blocks_and_wait_for_tip(100, test_manager.subscriber())
-            .await;
-        clients.faucet.sync_and_await().await.unwrap();
-        clients.faucet.quick_shield(AccountId::ZERO).await.unwrap();
-        test_manager
-            .generate_blocks_and_wait_for_tip(1, test_manager.subscriber())
-            .await;
-        clients.faucet.sync_and_await().await.unwrap();
-    };
+    fund_faucet(&test_manager, &mut clients, validator).await;
 
     let recipient_zaddr = clients.get_recipient_address("sapling").await;
     from_inputs::quick_send(&mut clients.faucet, vec![(&recipient_zaddr, 250_000, None)])
@@ -157,31 +154,9 @@ where
     IndexerError: From<<<Service as ZcashService>::Subscriber as ZcashIndexer>::Error>,
     <Service as ZcashService>::Subscriber: zaino_testutils::PollableTip,
 {
-    let mut test_manager =
-        TestManager::<V, Service>::launch(validator, None, None, None, true, false, false)
-            .await
-            .unwrap();
-    let mut clients = wallet_tests::build_clients(
-        test_manager
-            .zaino_grpc_listen_address
-            .expect("zaino enabled")
-            .port(),
-        wallet_tests::default_heights(validator),
-    );
+    let (mut test_manager, mut clients) = launch_and_build::<V, Service>(validator).await;
 
-    clients.faucet.sync_and_await().await.unwrap();
-
-    if matches!(validator, ValidatorKind::Zebrad) {
-        test_manager
-            .generate_blocks_and_wait_for_tip(100, test_manager.subscriber())
-            .await;
-        clients.faucet.sync_and_await().await.unwrap();
-        clients.faucet.quick_shield(AccountId::ZERO).await.unwrap();
-        test_manager
-            .generate_blocks_and_wait_for_tip(1, test_manager.subscriber())
-            .await;
-        clients.faucet.sync_and_await().await.unwrap();
-    };
+    fund_faucet(&test_manager, &mut clients, validator).await;
 
     let recipient_taddr = clients.get_recipient_address("transparent").await;
     from_inputs::quick_send(&mut clients.faucet, vec![(&recipient_taddr, 250_000, None)])
@@ -254,17 +229,7 @@ where
     IndexerError: From<<<Service as ZcashService>::Subscriber as ZcashIndexer>::Error>,
     <Service as ZcashService>::Subscriber: zaino_testutils::PollableTip,
 {
-    let mut test_manager =
-        TestManager::<V, Service>::launch(validator, None, None, None, true, false, false)
-            .await
-            .unwrap();
-    let mut clients = wallet_tests::build_clients(
-        test_manager
-            .zaino_grpc_listen_address
-            .expect("zaino enabled")
-            .port(),
-        wallet_tests::default_heights(validator),
-    );
+    let (mut test_manager, mut clients) = launch_and_build::<V, Service>(validator).await;
 
     test_manager
         .generate_blocks_and_wait_for_tip(2, test_manager.subscriber())
@@ -355,31 +320,9 @@ where
     IndexerError: From<<<Service as ZcashService>::Subscriber as ZcashIndexer>::Error>,
     <Service as ZcashService>::Subscriber: zaino_testutils::PollableTip,
 {
-    let mut test_manager =
-        TestManager::<V, Service>::launch(validator, None, None, None, true, false, false)
-            .await
-            .unwrap();
-    let mut clients = wallet_tests::build_clients(
-        test_manager
-            .zaino_grpc_listen_address
-            .expect("zaino enabled")
-            .port(),
-        wallet_tests::default_heights(validator),
-    );
+    let (mut test_manager, mut clients) = launch_and_build::<V, Service>(validator).await;
 
-    clients.faucet.sync_and_await().await.unwrap();
-
-    if matches!(validator, ValidatorKind::Zebrad) {
-        test_manager
-            .generate_blocks_and_wait_for_tip(100, test_manager.subscriber())
-            .await;
-        clients.faucet.sync_and_await().await.unwrap();
-        clients.faucet.quick_shield(AccountId::ZERO).await.unwrap();
-        test_manager
-            .generate_blocks_and_wait_for_tip(1, test_manager.subscriber())
-            .await;
-        clients.faucet.sync_and_await().await.unwrap();
-    };
+    fund_faucet(&test_manager, &mut clients, validator).await;
 
     let recipient_taddr = clients.get_recipient_address("transparent").await;
     from_inputs::quick_send(&mut clients.faucet, vec![(&recipient_taddr, 250_000, None)])
@@ -434,17 +377,7 @@ where
     IndexerError: From<<<Service as ZcashService>::Subscriber as ZcashIndexer>::Error>,
     <Service as ZcashService>::Subscriber: zaino_testutils::PollableTip,
 {
-    let mut test_manager =
-        TestManager::<V, Service>::launch(validator, None, None, None, true, false, false)
-            .await
-            .unwrap();
-    let mut clients = wallet_tests::build_clients(
-        test_manager
-            .zaino_grpc_listen_address
-            .expect("zaino enabled")
-            .port(),
-        wallet_tests::default_heights(validator),
-    );
+    let (mut test_manager, mut clients) = launch_and_build::<V, Service>(validator).await;
 
     test_manager
         .generate_blocks_and_wait_for_tip(1, test_manager.subscriber())
