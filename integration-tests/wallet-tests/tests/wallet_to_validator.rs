@@ -5,7 +5,7 @@
 use zaino_fetch::jsonrpsee::connector::test_node_and_return_url;
 use zaino_state::ZcashIndexer;
 use zaino_state::ZcashService;
-use zaino_testutils::from_inputs;
+use wallet_tests::from_inputs;
 use zaino_testutils::TestManager;
 use zaino_testutils::ValidatorExt;
 use zaino_testutils::ValidatorKind;
@@ -20,13 +20,16 @@ where
     <Service as ZcashService>::Subscriber: zaino_testutils::PollableTip,
 {
     let mut test_manager =
-        TestManager::<V, Service>::launch(validator, None, None, None, true, false, true)
+        TestManager::<V, Service>::launch(validator, None, None, None, true, false, false)
             .await
             .unwrap();
-    let clients = test_manager
-        .clients
-        .take()
-        .expect("Clients are not initialized");
+    let clients = wallet_tests::build_clients(
+        test_manager
+            .zaino_grpc_listen_address
+            .expect("zaino enabled")
+            .port(),
+        wallet_tests::default_heights(validator),
+    );
 
     clients.faucet.do_info().await;
     clients.recipient.do_info().await;
@@ -42,13 +45,16 @@ where
     <Service as ZcashService>::Subscriber: zaino_testutils::PollableTip,
 {
     let mut test_manager =
-        TestManager::<V, Service>::launch(validator, None, None, None, true, false, true)
+        TestManager::<V, Service>::launch(validator, None, None, None, true, false, false)
             .await
             .unwrap();
-    let mut clients = test_manager
-        .clients
-        .take()
-        .expect("Clients are not initialized");
+    let mut clients = wallet_tests::build_clients(
+        test_manager
+            .zaino_grpc_listen_address
+            .expect("zaino enabled")
+            .port(),
+        wallet_tests::default_heights(validator),
+    );
 
     clients.faucet.sync_and_await().await.unwrap();
 
@@ -96,13 +102,16 @@ where
     <Service as ZcashService>::Subscriber: zaino_testutils::PollableTip,
 {
     let mut test_manager =
-        TestManager::<V, Service>::launch(validator, None, None, None, true, false, true)
+        TestManager::<V, Service>::launch(validator, None, None, None, true, false, false)
             .await
             .unwrap();
-    let mut clients = test_manager
-        .clients
-        .take()
-        .expect("Clients are not initialized");
+    let mut clients = wallet_tests::build_clients(
+        test_manager
+            .zaino_grpc_listen_address
+            .expect("zaino enabled")
+            .port(),
+        wallet_tests::default_heights(validator),
+    );
 
     clients.faucet.sync_and_await().await.unwrap();
 
@@ -150,13 +159,16 @@ where
     <Service as ZcashService>::Subscriber: zaino_testutils::PollableTip,
 {
     let mut test_manager =
-        TestManager::<V, Service>::launch(validator, None, None, None, true, false, true)
+        TestManager::<V, Service>::launch(validator, None, None, None, true, false, false)
             .await
             .unwrap();
-    let mut clients = test_manager
-        .clients
-        .take()
-        .expect("Clients are not initialized");
+    let mut clients = wallet_tests::build_clients(
+        test_manager
+            .zaino_grpc_listen_address
+            .expect("zaino enabled")
+            .port(),
+        wallet_tests::default_heights(validator),
+    );
 
     clients.faucet.sync_and_await().await.unwrap();
 
@@ -256,13 +268,16 @@ where
     <Service as ZcashService>::Subscriber: zaino_testutils::PollableTip,
 {
     let mut test_manager =
-        TestManager::<V, Service>::launch(validator, None, None, None, true, false, true)
+        TestManager::<V, Service>::launch(validator, None, None, None, true, false, false)
             .await
             .unwrap();
-    let mut clients = test_manager
-        .clients
-        .take()
-        .expect("Clients are not initialized");
+    let mut clients = wallet_tests::build_clients(
+        test_manager
+            .zaino_grpc_listen_address
+            .expect("zaino enabled")
+            .port(),
+        wallet_tests::default_heights(validator),
+    );
 
     test_manager
         .generate_blocks_and_wait_for_tip(2, test_manager.subscriber())
@@ -354,13 +369,16 @@ where
     <Service as ZcashService>::Subscriber: zaino_testutils::PollableTip,
 {
     let mut test_manager =
-        TestManager::<V, Service>::launch(validator, None, None, None, true, false, true)
+        TestManager::<V, Service>::launch(validator, None, None, None, true, false, false)
             .await
             .unwrap();
-    let mut clients = test_manager
-        .clients
-        .take()
-        .expect("Clients are not initialized");
+    let mut clients = wallet_tests::build_clients(
+        test_manager
+            .zaino_grpc_listen_address
+            .expect("zaino enabled")
+            .port(),
+        wallet_tests::default_heights(validator),
+    );
 
     clients.faucet.sync_and_await().await.unwrap();
 
@@ -430,13 +448,16 @@ where
     <Service as ZcashService>::Subscriber: zaino_testutils::PollableTip,
 {
     let mut test_manager =
-        TestManager::<V, Service>::launch(validator, None, None, None, true, false, true)
+        TestManager::<V, Service>::launch(validator, None, None, None, true, false, false)
             .await
             .unwrap();
-    let mut clients = test_manager
-        .clients
-        .take()
-        .expect("Clients are not initialized");
+    let mut clients = wallet_tests::build_clients(
+        test_manager
+            .zaino_grpc_listen_address
+            .expect("zaino enabled")
+            .port(),
+        wallet_tests::default_heights(validator),
+    );
 
     test_manager
         .generate_blocks_and_wait_for_tip(1, test_manager.subscriber())
@@ -463,7 +484,7 @@ where
     let txid_1 = from_inputs::quick_send(
         &mut clients.faucet,
         vec![(
-            &zaino_testutils::get_base_address_macro!(&mut clients.recipient, "unified"),
+            &wallet_tests::get_base_address_macro!(&mut clients.recipient, "unified"),
             250_000,
             None,
         )],
@@ -473,7 +494,7 @@ where
     let txid_2 = from_inputs::quick_send(
         &mut clients.faucet,
         vec![(
-            &zaino_testutils::get_base_address_macro!(&mut clients.recipient, "sapling"),
+            &wallet_tests::get_base_address_macro!(&mut clients.recipient, "sapling"),
             250_000,
             None,
         )],
