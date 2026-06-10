@@ -124,8 +124,9 @@ script.main = 'source "./tools/scripts/container-nextest-workspace.sh"'
 # -------------------------------------------------------------------
 
 [tasks.integration-test]
-description = "Run both integration-test workspaces (walletless-tests then wallet-tests) inside the CI container"
-dependencies = ["walletless-integration-test", "wallet-integration-test"]
+description = "Run both integration-test workspaces (walletless-tests then wallet-tests) and print a combined pass/fail summary"
+script_runner = "bash"
+script = 'source "./tools/scripts/integration-test-summary.sh"'
 
 # -------------------------------------------------------------------
 
