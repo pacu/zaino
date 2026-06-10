@@ -11,30 +11,6 @@ use zaino_testutils::ValidatorKind;
 use zainodlib::error::IndexerError;
 use zip32::AccountId;
 
-/// Launch a validator + Zaino and build faucet/recipient lightclients against it.
-async fn launch_and_build<V, Service>(
-    validator: &ValidatorKind,
-) -> (TestManager<V, Service>, wallet_tests::Clients)
-where
-    V: ValidatorExt,
-    Service: zaino_testutils::TestService,
-    IndexerError: From<<<Service as ZcashService>::Subscriber as ZcashIndexer>::Error>,
-    <Service as ZcashService>::Subscriber: zaino_testutils::PollableTip,
-{
-    let test_manager =
-        TestManager::<V, Service>::launch(validator, None, None, None, true, false, false)
-            .await
-            .unwrap();
-    let clients = wallet_tests::build_clients(
-        test_manager
-            .zaino_grpc_listen_address
-            .expect("zaino enabled")
-            .port(),
-        wallet_tests::default_heights(validator),
-    );
-    (test_manager, clients)
-}
-
 /// Sync the faucet; on zebrad, mature 100 coinbase blocks and shield so it has
 /// spendable funds (zebrad can't mine directly to orchard in this setup).
 async fn fund_faucet<V, Service>(
@@ -69,7 +45,7 @@ where
     IndexerError: From<<<Service as ZcashService>::Subscriber as ZcashIndexer>::Error>,
     <Service as ZcashService>::Subscriber: zaino_testutils::PollableTip,
 {
-    let (mut test_manager, clients) = launch_and_build::<V, Service>(validator).await;
+    let (mut test_manager, clients) = wallet_tests::launch_and_build::<V, Service>(validator, None, None).await;
 
     clients.faucet.do_info().await;
     clients.recipient.do_info().await;
@@ -117,7 +93,7 @@ async fn assert_send_to_pool<V, Service>(
     IndexerError: From<<<Service as ZcashService>::Subscriber as ZcashIndexer>::Error>,
     <Service as ZcashService>::Subscriber: zaino_testutils::PollableTip,
 {
-    let (mut test_manager, mut clients) = launch_and_build::<V, Service>(validator).await;
+    let (mut test_manager, mut clients) = wallet_tests::launch_and_build::<V, Service>(validator, None, None).await;
     fund_faucet(&test_manager, &mut clients, validator).await;
     send_and_assert_received(&test_manager, &mut clients, pool, amount).await;
     test_manager.close().await;
@@ -150,7 +126,7 @@ where
     IndexerError: From<<<Service as ZcashService>::Subscriber as ZcashIndexer>::Error>,
     <Service as ZcashService>::Subscriber: zaino_testutils::PollableTip,
 {
-    let (mut test_manager, mut clients) = launch_and_build::<V, Service>(validator).await;
+    let (mut test_manager, mut clients) = wallet_tests::launch_and_build::<V, Service>(validator, None, None).await;
 
     fund_faucet(&test_manager, &mut clients, validator).await;
 
@@ -218,7 +194,7 @@ where
     IndexerError: From<<<Service as ZcashService>::Subscriber as ZcashIndexer>::Error>,
     <Service as ZcashService>::Subscriber: zaino_testutils::PollableTip,
 {
-    let (mut test_manager, mut clients) = launch_and_build::<V, Service>(validator).await;
+    let (mut test_manager, mut clients) = wallet_tests::launch_and_build::<V, Service>(validator, None, None).await;
 
     test_manager
         .generate_blocks_and_wait_for_tip(2, test_manager.subscriber())
@@ -280,7 +256,7 @@ where
     IndexerError: From<<<Service as ZcashService>::Subscriber as ZcashIndexer>::Error>,
     <Service as ZcashService>::Subscriber: zaino_testutils::PollableTip,
 {
-    let (mut test_manager, mut clients) = launch_and_build::<V, Service>(validator).await;
+    let (mut test_manager, mut clients) = wallet_tests::launch_and_build::<V, Service>(validator, None, None).await;
 
     fund_faucet(&test_manager, &mut clients, validator).await;
 
@@ -329,7 +305,7 @@ where
     IndexerError: From<<<Service as ZcashService>::Subscriber as ZcashIndexer>::Error>,
     <Service as ZcashService>::Subscriber: zaino_testutils::PollableTip,
 {
-    let (mut test_manager, mut clients) = launch_and_build::<V, Service>(validator).await;
+    let (mut test_manager, mut clients) = wallet_tests::launch_and_build::<V, Service>(validator, None, None).await;
 
     test_manager
         .generate_blocks_and_wait_for_tip(1, test_manager.subscriber())

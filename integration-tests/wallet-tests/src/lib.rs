@@ -8,9 +8,13 @@
 
 #![forbid(unsafe_code)]
 
+use std::path::PathBuf;
 use zaino_common::network::{ActivationHeights, ZEBRAD_DEFAULT_ACTIVATION_HEIGHTS};
-use zaino_testutils::ValidatorKind;
+use zaino_state::{ZcashIndexer, ZcashService};
+use zaino_testutils::{PollableTip, TestManager, TestService, ValidatorExt, ValidatorKind};
+use zainodlib::error::IndexerError;
 use zebra_chain::parameters::testnet::ConfiguredActivationHeights;
+use zebra_chain::parameters::NetworkKind;
 use zingo_test_vectors::seeds;
 use zingolib::lightclient::LightClient;
 use zingolib_testutils::scenarios::ClientBuilder;
@@ -134,6 +138,34 @@ pub fn default_heights(validator: &ValidatorKind) -> ActivationHeights {
     }
 }
 
+/// Launch a `TestManager<C, Service>` and build faucet/recipient lightclients
+/// whose view matches the launched chain — the shared "launch + build_clients"
+/// step used by both the smoke tests and the wallet_to_validator tests.
+pub async fn launch_and_build<C, Service>(
+    validator: &ValidatorKind,
+    network: Option<NetworkKind>,
+    chain_cache: Option<PathBuf>,
+) -> (TestManager<C, Service>, Clients)
+where
+    C: ValidatorExt,
+    Service: TestService,
+    IndexerError: From<<<Service as ZcashService>::Subscriber as ZcashIndexer>::Error>,
+    <Service as ZcashService>::Subscriber: PollableTip,
+{
+    let test_manager =
+        TestManager::<C, Service>::launch(validator, network, None, chain_cache, true, false, false)
+            .await
+            .expect("launch TestManager");
+    let clients = build_clients(
+        test_manager
+            .zaino_grpc_listen_address
+            .expect("zaino enabled")
+            .port(),
+        default_heights(validator),
+    );
+    (test_manager, clients)
+}
+
 /// Smoke tests relocated from `zaino-testutils`: launch a validator + Zaino,
 /// build wallet clients against it, and exercise mining-reward receipt and
 /// sends. Organised by validator / service backend.
@@ -143,7 +175,7 @@ pub fn default_heights(validator: &ValidatorKind) -> ActivationHeights {
 /// wrapper that supplies the concrete `C`/`Service` by turbofish.
 #[cfg(test)]
 mod launch_clients {
-    use super::{build_clients, default_heights, from_inputs, Clients};
+    use super::{from_inputs, Clients};
     use std::path::PathBuf;
     use zaino_state::{ZcashIndexer, ZcashService};
     use zaino_testutils::{PollableTip, TestManager, TestService, ValidatorExt, ValidatorKind};
@@ -193,17 +225,7 @@ mod launch_clients {
             network: Option<NetworkKind>,
             chain_cache: Option<PathBuf>,
         ) -> (Self, Clients) {
-            let test_manager = Self::launch(kind, network, None, chain_cache, true, false, false)
-                .await
-                .unwrap();
-            let clients = build_clients(
-                test_manager
-                    .zaino_grpc_listen_address
-                    .expect("zaino enabled")
-                    .port(),
-                default_heights(kind),
-            );
-            (test_manager, clients)
+            super::launch_and_build::<C, Service>(kind, network, chain_cache).await
         }
 
         async fn check_clients_connect(
