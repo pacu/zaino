@@ -77,8 +77,13 @@ where
     test_manager.close().await;
 }
 
-async fn send_to_orchard<V, Service>(validator: &ValidatorKind)
-where
+/// Send 250_000 to the recipient's `pool` address, mine a block, and assert the
+/// recipient's balance — read via `balance_of` — equals 250_000.
+async fn assert_send_to_pool<V, Service>(
+    validator: &ValidatorKind,
+    pool: &str,
+    balance_of: impl Fn(&wallet_tests::AccountBalance) -> u64,
+) where
     V: ValidatorExt,
     Service: zaino_testutils::TestService,
     IndexerError: From<<<Service as ZcashService>::Subscriber as ZcashIndexer>::Error>,
@@ -88,8 +93,8 @@ where
 
     fund_faucet(&test_manager, &mut clients, validator).await;
 
-    let recipient_ua = clients.get_recipient_address("unified").await.to_string();
-    from_inputs::quick_send(&mut clients.faucet, vec![(&recipient_ua, 250_000, None)])
+    let recipient_address = clients.get_recipient_address(pool).await;
+    from_inputs::quick_send(&mut clients.faucet, vec![(&recipient_address, 250_000, None)])
         .await
         .unwrap();
     test_manager
@@ -97,19 +102,23 @@ where
         .await;
     clients.recipient.sync_and_await().await.unwrap();
 
-    assert_eq!(
-        clients
-            .recipient
-            .account_balance(zip32::AccountId::ZERO)
-            .await
-            .unwrap()
-            .total_orchard_balance
-            .unwrap()
-            .into_u64(),
-        250_000
-    );
+    assert_eq!(balance_of(&clients.recipient_balance().await), 250_000);
 
     test_manager.close().await;
+}
+
+async fn send_to_orchard<V, Service>(validator: &ValidatorKind)
+where
+    V: ValidatorExt,
+    Service: zaino_testutils::TestService,
+    IndexerError: From<<<Service as ZcashService>::Subscriber as ZcashIndexer>::Error>,
+    <Service as ZcashService>::Subscriber: zaino_testutils::PollableTip,
+{
+    // Funds sent to a unified address land in the recipient's orchard pool.
+    assert_send_to_pool::<V, Service>(validator, "unified", |b| {
+        b.total_orchard_balance.unwrap().into_u64()
+    })
+    .await;
 }
 
 async fn send_to_sapling<V, Service>(validator: &ValidatorKind)
@@ -119,32 +128,10 @@ where
     IndexerError: From<<<Service as ZcashService>::Subscriber as ZcashIndexer>::Error>,
     <Service as ZcashService>::Subscriber: zaino_testutils::PollableTip,
 {
-    let (mut test_manager, mut clients) = launch_and_build::<V, Service>(validator).await;
-
-    fund_faucet(&test_manager, &mut clients, validator).await;
-
-    let recipient_zaddr = clients.get_recipient_address("sapling").await;
-    from_inputs::quick_send(&mut clients.faucet, vec![(&recipient_zaddr, 250_000, None)])
-        .await
-        .unwrap();
-    test_manager
-        .generate_blocks_and_wait_for_tip(1, test_manager.subscriber())
-        .await;
-    clients.recipient.sync_and_await().await.unwrap();
-
-    assert_eq!(
-        clients
-            .recipient
-            .account_balance(zip32::AccountId::ZERO)
-            .await
-            .unwrap()
-            .total_sapling_balance
-            .unwrap()
-            .into_u64(),
-        250_000
-    );
-
-    test_manager.close().await;
+    assert_send_to_pool::<V, Service>(validator, "sapling", |b| {
+        b.total_sapling_balance.unwrap().into_u64()
+    })
+    .await;
 }
 
 async fn send_to_transparent<V, Service>(validator: &ValidatorKind)
@@ -205,11 +192,7 @@ where
     clients.recipient.sync_and_await().await.unwrap();
 
     assert_eq!(
-        clients
-            .recipient
-            .account_balance(zip32::AccountId::ZERO)
-            .await
-            .unwrap()
+        clients.recipient_balance().await
             .confirmed_transparent_balance
             .unwrap()
             .into_u64(),
@@ -277,33 +260,21 @@ where
     clients.recipient.sync_and_await().await.unwrap();
 
     assert_eq!(
-        clients
-            .recipient
-            .account_balance(zip32::AccountId::ZERO)
-            .await
-            .unwrap()
+        clients.recipient_balance().await
             .total_orchard_balance
             .unwrap()
             .into_u64(),
         250_000
     );
     assert_eq!(
-        clients
-            .recipient
-            .account_balance(zip32::AccountId::ZERO)
-            .await
-            .unwrap()
+        clients.recipient_balance().await
             .total_sapling_balance
             .unwrap()
             .into_u64(),
         250_000
     );
     assert_eq!(
-        clients
-            .recipient
-            .account_balance(zip32::AccountId::ZERO)
-            .await
-            .unwrap()
+        clients.recipient_balance().await
             .confirmed_transparent_balance
             .unwrap()
             .into_u64(),
@@ -334,11 +305,7 @@ where
     clients.recipient.sync_and_await().await.unwrap();
 
     assert_eq!(
-        clients
-            .recipient
-            .account_balance(zip32::AccountId::ZERO)
-            .await
-            .unwrap()
+        clients.recipient_balance().await
             .confirmed_transparent_balance
             .unwrap()
             .into_u64(),
@@ -356,11 +323,7 @@ where
     clients.recipient.sync_and_await().await.unwrap();
 
     assert_eq!(
-        clients
-            .recipient
-            .account_balance(zip32::AccountId::ZERO)
-            .await
-            .unwrap()
+        clients.recipient_balance().await
             .total_orchard_balance
             .unwrap()
             .into_u64(),
@@ -451,22 +414,14 @@ where
     );
 
     assert_eq!(
-        clients
-            .recipient
-            .account_balance(zip32::AccountId::ZERO)
-            .await
-            .unwrap()
+        clients.recipient_balance().await
             .unconfirmed_orchard_balance
             .unwrap()
             .into_u64(),
         250_000
     );
     assert_eq!(
-        clients
-            .recipient
-            .account_balance(zip32::AccountId::ZERO)
-            .await
-            .unwrap()
+        clients.recipient_balance().await
             .unconfirmed_sapling_balance
             .unwrap()
             .into_u64(),
@@ -494,22 +449,14 @@ where
     clients.recipient.sync_and_await().await.unwrap();
 
     assert_eq!(
-        clients
-            .recipient
-            .account_balance(zip32::AccountId::ZERO)
-            .await
-            .unwrap()
+        clients.recipient_balance().await
             .confirmed_orchard_balance
             .unwrap()
             .into_u64(),
         250_000
     );
     assert_eq!(
-        clients
-            .recipient
-            .account_balance(zip32::AccountId::ZERO)
-            .await
-            .unwrap()
+        clients.recipient_balance().await
             .confirmed_orchard_balance
             .unwrap()
             .into_u64(),

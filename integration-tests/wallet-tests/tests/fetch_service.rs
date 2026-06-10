@@ -57,11 +57,7 @@ async fn fetch_service_get_address_balance<V: ValidatorExt>(validator: &Validato
         clients.faucet.sync_and_await().await.unwrap();
     };
 
-    dbg!(clients
-        .faucet
-        .account_balance(AccountId::ZERO)
-        .await
-        .unwrap());
+    dbg!(clients.faucet_balance().await);
     dbg!(clients.faucet.transaction_summaries(false).await.unwrap());
 
     from_inputs::quick_send(
@@ -75,11 +71,7 @@ async fn fetch_service_get_address_balance<V: ValidatorExt>(validator: &Validato
         .await;
 
     clients.recipient.sync_and_await().await.unwrap();
-    let recipient_balance = clients
-        .recipient
-        .account_balance(zip32::AccountId::ZERO)
-        .await
-        .unwrap();
+    let recipient_balance = clients.recipient_balance().await;
 
     let fetch_service_balance = fetch_service_subscriber
         .z_get_address_balance(GetAddressBalanceRequest::new(vec![recipient_address]))
@@ -952,11 +944,7 @@ async fn fetch_service_get_taddress_balance<V: ValidatorExt>(validator: &Validat
         .await;
 
     clients.recipient.sync_and_await().await.unwrap();
-    let balance = clients
-        .recipient
-        .account_balance(zip32::AccountId::ZERO)
-        .await
-        .unwrap();
+    let balance = clients.recipient_balance().await;
 
     let address_list = AddressList {
         addresses: vec![recipient_taddr],

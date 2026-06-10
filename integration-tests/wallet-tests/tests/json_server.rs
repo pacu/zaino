@@ -64,11 +64,7 @@ async fn z_get_address_balance_inner() {
     .await;
 
     clients.recipient.sync_and_await().await.unwrap();
-    let recipient_balance = clients
-        .recipient
-        .account_balance(zip32::AccountId::ZERO)
-        .await
-        .unwrap();
+    let recipient_balance = clients.recipient_balance().await;
 
     let zcashd_service_balance = zcashd_subscriber
         .z_get_address_balance(GetAddressBalanceRequest::new(vec![recipient_taddr.clone()]))

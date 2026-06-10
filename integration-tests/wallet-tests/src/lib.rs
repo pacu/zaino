@@ -18,6 +18,7 @@ use zingolib_testutils::scenarios::ClientBuilder;
 /// Re-exports so relocated tests keep their original call sites.
 pub use zingolib::get_base_address_macro;
 pub use zingolib::testutils::lightclient::from_inputs;
+pub use zingolib::wallet::balance::AccountBalance;
 
 /// Holds zingo lightclients along with the lightclient builder for
 /// wallet-to-validator tests.
@@ -39,6 +40,22 @@ impl Clients {
     /// Returns the zcash address of the recipient.
     pub async fn get_recipient_address(&self, pool: &str) -> String {
         zingolib::get_base_address_macro!(self.recipient, pool)
+    }
+
+    /// The faucet's account-0 balance.
+    pub async fn faucet_balance(&self) -> AccountBalance {
+        self.faucet
+            .account_balance(zip32::AccountId::ZERO)
+            .await
+            .expect("faucet account_balance")
+    }
+
+    /// The recipient's account-0 balance.
+    pub async fn recipient_balance(&self) -> AccountBalance {
+        self.recipient
+            .account_balance(zip32::AccountId::ZERO)
+            .await
+            .expect("recipient account_balance")
     }
 }
 
@@ -169,29 +186,21 @@ mod launch_clients {
 
             if mature_blocks > 0 {
                 clients.faucet.sync_and_await().await.unwrap();
-                dbg!(clients
-                    .faucet
-                    .account_balance(AccountId::ZERO)
-                    .await
-                    .unwrap());
+                dbg!(clients.faucet_balance().await);
                 test_manager
                     .generate_blocks_and_wait_for_tip(mature_blocks, test_manager.subscriber())
                     .await;
             }
 
             clients.faucet.sync_and_await().await.unwrap();
-            dbg!(clients
-                .faucet
-                .account_balance(AccountId::ZERO)
-                .await
-                .unwrap());
+            dbg!(clients.faucet_balance().await);
 
             assert!(
-                clients.faucet.account_balance(AccountId::ZERO).await.unwrap().total_orchard_balance.unwrap().into_u64() > 0
-                    || clients.faucet.account_balance(AccountId::ZERO).await.unwrap().confirmed_transparent_balance.unwrap().into_u64() > 0,
+                clients.faucet_balance().await.total_orchard_balance.unwrap().into_u64() > 0
+                    || clients.faucet_balance().await.confirmed_transparent_balance.unwrap().into_u64() > 0,
                 "No mining reward received from {kind:?}. Faucet Orchard Balance: {:}. Faucet Transparent Balance: {:}.",
-                clients.faucet.account_balance(AccountId::ZERO).await.unwrap().total_orchard_balance.unwrap().into_u64(),
-                clients.faucet.account_balance(AccountId::ZERO).await.unwrap().confirmed_transparent_balance.unwrap().into_u64()
+                clients.faucet_balance().await.total_orchard_balance.unwrap().into_u64(),
+                clients.faucet_balance().await.confirmed_transparent_balance.unwrap().into_u64()
             );
 
             test_manager.close().await;
@@ -204,16 +213,12 @@ mod launch_clients {
                 .generate_blocks_and_wait_for_tip(100, test_manager.subscriber())
                 .await;
             clients.faucet.sync_and_await().await.unwrap();
-            dbg!(clients
-                .faucet
-                .account_balance(AccountId::ZERO)
-                .await
-                .unwrap());
+            dbg!(clients.faucet_balance().await);
 
             assert!(
-                clients.faucet.account_balance(AccountId::ZERO).await.unwrap().confirmed_transparent_balance.unwrap().into_u64() > 0,
+                clients.faucet_balance().await.confirmed_transparent_balance.unwrap().into_u64() > 0,
                 "No mining reward received from {kind:?}. Faucet Transparent Balance: {:}.",
-                clients.faucet.account_balance(AccountId::ZERO).await.unwrap().confirmed_transparent_balance.unwrap().into_u64()
+                clients.faucet_balance().await.confirmed_transparent_balance.unwrap().into_u64()
             );
 
             // *Send all transparent funds to own orchard address.
@@ -222,17 +227,13 @@ mod launch_clients {
                 .generate_blocks_and_wait_for_tip(1, test_manager.subscriber())
                 .await;
             clients.faucet.sync_and_await().await.unwrap();
-            dbg!(clients
-                .faucet
-                .account_balance(AccountId::ZERO)
-                .await
-                .unwrap());
+            dbg!(clients.faucet_balance().await);
 
             assert!(
-                clients.faucet.account_balance(AccountId::ZERO).await.unwrap().total_orchard_balance.unwrap().into_u64() > 0,
+                clients.faucet_balance().await.total_orchard_balance.unwrap().into_u64() > 0,
                 "No funds received from shield. Faucet Orchard Balance: {:}. Faucet Transparent Balance: {:}.",
-                clients.faucet.account_balance(AccountId::ZERO).await.unwrap().total_orchard_balance.unwrap().into_u64(),
-                clients.faucet.account_balance(AccountId::ZERO).await.unwrap().confirmed_transparent_balance.unwrap().into_u64()
+                clients.faucet_balance().await.total_orchard_balance.unwrap().into_u64(),
+                clients.faucet_balance().await.confirmed_transparent_balance.unwrap().into_u64()
             );
 
             let recipient_zaddr = clients.get_recipient_address("sapling").await.to_string();
@@ -244,18 +245,10 @@ mod launch_clients {
                 .generate_blocks_and_wait_for_tip(1, test_manager.subscriber())
                 .await;
             clients.recipient.sync_and_await().await.unwrap();
-            dbg!(clients
-                .recipient
-                .account_balance(AccountId::ZERO)
-                .await
-                .unwrap());
+            dbg!(clients.recipient_balance().await);
 
             assert_eq!(
-                clients
-                    .recipient
-                    .account_balance(AccountId::ZERO)
-                    .await
-                    .unwrap()
+                clients.recipient_balance().await
                     .confirmed_sapling_balance
                     .unwrap()
                     .into_u64(),

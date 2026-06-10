@@ -95,11 +95,7 @@ async fn create_test_manager_and_services<V: ValidatorExt>(
     .await;
 
     clients.recipient.sync_and_await().await.unwrap();
-    let recipient_balance = clients
-        .recipient
-        .account_balance(zip32::AccountId::ZERO)
-        .await
-        .unwrap();
+    let recipient_balance = clients.recipient_balance().await;
 
     let fetch_service_balance = fetch_service_subscriber
         .z_get_address_balance(GetAddressBalanceRequest::new(vec![recipient_taddr.clone()]))
