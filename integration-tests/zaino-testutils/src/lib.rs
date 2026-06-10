@@ -38,7 +38,9 @@ use zcash_local_net::{
     validator::zcashd::{Zcashd, ZcashdConfig},
 };
 use zcash_local_net::{logs::LogsToStdoutAndStderr, process::Process};
+use zaino_fetch::jsonrpsee::connector::{test_node_and_return_url, JsonRpSeeConnector};
 use zebra_chain::parameters::NetworkKind;
+use zebra_rpc::methods::GetInfo;
 
 #[cfg(test)]
 use zaino_proto::proto::service::compact_tx_streamer_client::CompactTxStreamerClient;
@@ -659,6 +661,25 @@ where
         self.generate_blocks_and_wait_for_tip(0, then_synced).await;
     }
 
+    /// Build a JSON-RPC connector to the backing validator's RPC port, using
+    /// the regtest test cookie credentials. For tests that compare Zaino's
+    /// output against the validator's own JSON-RPC.
+    pub async fn full_node_jsonrpc_connector(&self) -> JsonRpSeeConnector {
+        JsonRpSeeConnector::new_with_basic_auth(
+            test_node_and_return_url(
+                &self.full_node_rpc_listen_address.to_string(),
+                None,
+                Some("xxxxxx".to_string()),
+                Some("xxxxxx".to_string()),
+            )
+            .await
+            .unwrap(),
+            "xxxxxx".to_string(),
+            "xxxxxx".to_string(),
+        )
+        .unwrap()
+    }
+
     /// Closes the TestManager.
     pub async fn close(&mut self) {
         if let Some(handle) = self.zaino_handle.take() {
@@ -888,6 +909,42 @@ pub async fn launch_zcashd_dual_fetch_services() -> (
         zcashd_subscriber,
         zaino_fetch_service,
         zaino_subscriber,
+    )
+}
+
+/// Return a copy of `info` with its final (timestamp) field zeroed, so two
+/// `getinfo` responses from different sources can be compared without spurious
+/// timestamp differences.
+pub fn get_info_with_zeroed_timestamp(info: GetInfo) -> GetInfo {
+    let (
+        version,
+        build,
+        subversion,
+        protocol_version,
+        blocks,
+        connections,
+        proxy,
+        difficulty,
+        testnet,
+        pay_tx_fee,
+        relay_fee,
+        errors,
+        _,
+    ) = info.into_parts();
+    GetInfo::new(
+        version,
+        build,
+        subversion,
+        protocol_version,
+        blocks,
+        connections,
+        proxy,
+        difficulty,
+        testnet,
+        pay_tx_fee,
+        relay_fee,
+        errors,
+        0,
     )
 }
 

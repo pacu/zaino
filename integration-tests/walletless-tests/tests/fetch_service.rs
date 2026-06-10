@@ -1,7 +1,6 @@
 //! These tests compare the output of `FetchService` with the output of `JsonRpcConnector`.
 
 use futures::StreamExt as _;
-use zaino_fetch::jsonrpsee::connector::{test_node_and_return_url, JsonRpSeeConnector};
 use zaino_proto::proto::compact_formats::CompactBlock;
 use zaino_proto::proto::service::{BlockId, BlockRange, GetSubtreeRootsArg, PoolType};
 #[allow(deprecated)]
@@ -76,19 +75,7 @@ async fn fetch_service_get_latest_block<V: ValidatorExt>(validator: &ValidatorKi
         .generate_blocks_and_wait_for_tip(1, &fetch_service_subscriber)
         .await;
 
-    let json_service = JsonRpSeeConnector::new_with_basic_auth(
-        test_node_and_return_url(
-            &test_manager.full_node_rpc_listen_address.to_string(),
-            None,
-            Some("xxxxxx".to_string()),
-            Some("xxxxxx".to_string()),
-        )
-        .await
-        .unwrap(),
-        "xxxxxx".to_string(),
-        "xxxxxx".to_string(),
-    )
-    .unwrap();
+    let json_service = test_manager.full_node_jsonrpc_connector().await;
 
     let fetch_service_get_latest_block =
         dbg!(fetch_service_subscriber.get_latest_block().await.unwrap());
@@ -120,19 +107,7 @@ async fn assert_fetch_service_difficulty_matches_rpc<V: ValidatorExt>(validator:
 
     let fetch_service_get_difficulty = fetch_service_subscriber.get_difficulty().await.unwrap();
 
-    let jsonrpc_client = JsonRpSeeConnector::new_with_basic_auth(
-        test_node_and_return_url(
-            &test_manager.full_node_rpc_listen_address.to_string(),
-            None,
-            Some("xxxxxx".to_string()),
-            Some("xxxxxx".to_string()),
-        )
-        .await
-        .unwrap(),
-        "xxxxxx".to_string(),
-        "xxxxxx".to_string(),
-    )
-    .unwrap();
+    let jsonrpc_client = test_manager.full_node_jsonrpc_connector().await;
 
     let rpc_difficulty_response = jsonrpc_client.get_difficulty().await.unwrap();
     assert_eq!(fetch_service_get_difficulty, rpc_difficulty_response.0);
@@ -149,19 +124,7 @@ async fn assert_fetch_service_mininginfo_matches_rpc<V: ValidatorExt>(validator:
 
     let fetch_service_mining_info = fetch_service_subscriber.get_mining_info().await.unwrap();
 
-    let jsonrpc_client = JsonRpSeeConnector::new_with_basic_auth(
-        test_node_and_return_url(
-            &test_manager.full_node_rpc_listen_address.to_string(),
-            None,
-            Some("xxxxxx".to_string()),
-            Some("xxxxxx".to_string()),
-        )
-        .await
-        .unwrap(),
-        "xxxxxx".to_string(),
-        "xxxxxx".to_string(),
-    )
-    .unwrap();
+    let jsonrpc_client = test_manager.full_node_jsonrpc_connector().await;
 
     let rpc_mining_info_response = jsonrpc_client.get_mining_info().await.unwrap();
     assert_eq!(fetch_service_mining_info, rpc_mining_info_response);
@@ -183,19 +146,7 @@ async fn assert_fetch_service_gettxoutsetinfo_matches_rpc<V: ValidatorExt>(
         .await
         .unwrap();
 
-    let jsonrpc_client = JsonRpSeeConnector::new_with_basic_auth(
-        test_node_and_return_url(
-            &test_manager.full_node_rpc_listen_address.to_string(),
-            None,
-            Some("xxxxxx".to_string()),
-            Some("xxxxxx".to_string()),
-        )
-        .await
-        .unwrap(),
-        "xxxxxx".to_string(),
-        "xxxxxx".to_string(),
-    )
-    .unwrap();
+    let jsonrpc_client = test_manager.full_node_jsonrpc_connector().await;
 
     let rpc_txoutset_info = jsonrpc_client.get_tx_out_set_info().await.unwrap();
 
@@ -255,19 +206,7 @@ async fn assert_fetch_service_peerinfo_matches_rpc<V: ValidatorExt>(validator: &
 
     let fetch_service_get_peer_info = fetch_service_subscriber.get_peer_info().await.unwrap();
 
-    let jsonrpc_client = JsonRpSeeConnector::new_with_basic_auth(
-        test_node_and_return_url(
-            &test_manager.full_node_rpc_listen_address.to_string(),
-            None,
-            Some("xxxxxx".to_string()),
-            Some("xxxxxx".to_string()),
-        )
-        .await
-        .unwrap(),
-        "xxxxxx".to_string(),
-        "xxxxxx".to_string(),
-    )
-    .unwrap();
+    let jsonrpc_client = test_manager.full_node_jsonrpc_connector().await;
 
     let rpc_peer_info_response = jsonrpc_client.get_peer_info().await.unwrap();
 
@@ -304,19 +243,7 @@ async fn fetch_service_get_block_subsidy<V: ValidatorExt>(validator: &ValidatorK
         let fetch_service_get_block_subsidy =
             fetch_service_subscriber.get_block_subsidy(i).await.unwrap();
 
-        let jsonrpc_client = JsonRpSeeConnector::new_with_basic_auth(
-            test_node_and_return_url(
-                &test_manager.full_node_rpc_listen_address.to_string(),
-                None,
-                Some("xxxxxx".to_string()),
-                Some("xxxxxx".to_string()),
-            )
-            .await
-            .unwrap(),
-            "xxxxxx".to_string(),
-            "xxxxxx".to_string(),
-        )
-        .unwrap();
+        let jsonrpc_client = test_manager.full_node_jsonrpc_connector().await;
 
         let rpc_block_subsidy_response = jsonrpc_client.get_block_subsidy(i).await.unwrap();
         assert_eq!(fetch_service_get_block_subsidy, rpc_block_subsidy_response);
@@ -387,19 +314,7 @@ async fn fetch_service_get_block_header<V: ValidatorExt>(validator: &ValidatorKi
             .await
             .unwrap();
 
-        let jsonrpc_client = JsonRpSeeConnector::new_with_basic_auth(
-            test_node_and_return_url(
-                &test_manager.full_node_rpc_listen_address.to_string(),
-                None,
-                Some("xxxxxx".to_string()),
-                Some("xxxxxx".to_string()),
-            )
-            .await
-            .unwrap(),
-            "xxxxxx".to_string(),
-            "xxxxxx".to_string(),
-        )
-        .unwrap();
+        let jsonrpc_client = test_manager.full_node_jsonrpc_connector().await;
 
         let rpc_block_header_response = jsonrpc_client
             .get_block_header(block_hash.to_string(), false)
@@ -741,19 +656,7 @@ async fn assert_fetch_service_getnetworksols_matches_rpc<V: ValidatorExt>(
         .await
         .unwrap();
 
-    let jsonrpc_client = JsonRpSeeConnector::new_with_basic_auth(
-        test_node_and_return_url(
-            &test_manager.full_node_rpc_listen_address.to_string(),
-            None,
-            Some("xxxxxx".to_string()),
-            Some("xxxxxx".to_string()),
-        )
-        .await
-        .unwrap(),
-        "xxxxxx".to_string(),
-        "xxxxxx".to_string(),
-    )
-    .unwrap();
+    let jsonrpc_client = test_manager.full_node_jsonrpc_connector().await;
 
     let rpc_getnetworksolps_response = jsonrpc_client.get_network_sol_ps(None, None).await.unwrap();
     assert_eq!(fetch_service_get_networksolps, rpc_getnetworksolps_response);
@@ -879,19 +782,7 @@ mod zcashd {
                 .await
                 .unwrap();
 
-            let jsonrpc_client = JsonRpSeeConnector::new_with_basic_auth(
-                test_node_and_return_url(
-                    &test_manager.full_node_rpc_listen_address.to_string(),
-                    None,
-                    Some("xxxxxx".to_string()),
-                    Some("xxxxxx".to_string()),
-                )
-                .await
-                .unwrap(),
-                "xxxxxx".to_string(),
-                "xxxxxx".to_string(),
-            )
-            .unwrap();
+            let jsonrpc_client = test_manager.full_node_jsonrpc_connector().await;
 
             let rpc_block_deltas = jsonrpc_client
                 .get_block_deltas(block_hash.to_string())

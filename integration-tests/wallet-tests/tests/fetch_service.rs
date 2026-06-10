@@ -2,7 +2,6 @@
 
 use futures::StreamExt as _;
 use hex::ToHex as _;
-use zaino_fetch::jsonrpsee::connector::{test_node_and_return_url, JsonRpSeeConnector};
 use zaino_proto::proto::service::{
     AddressList, BlockId, BlockRange, GetAddressUtxosArg, GetMempoolTxRequest, PoolType,
     TransparentAddressBlockFilter, TxFilter,
@@ -113,19 +112,7 @@ async fn fetch_service_get_raw_mempool<V: ValidatorExt>(validator: &ValidatorKin
     let (mut test_manager, fetch_service_subscriber, mut clients) =
         create_test_manager_and_fetch_service::<V>(validator, None).await;
 
-    let json_service = JsonRpSeeConnector::new_with_basic_auth(
-        test_node_and_return_url(
-            &test_manager.full_node_rpc_listen_address.to_string(),
-            None,
-            Some("xxxxxx".to_string()),
-            Some("xxxxxx".to_string()),
-        )
-        .await
-        .unwrap(),
-        "xxxxxx".to_string(),
-        "xxxxxx".to_string(),
-    )
-    .unwrap();
+    let json_service = test_manager.full_node_jsonrpc_connector().await;
 
     test_manager
         .generate_blocks_and_wait_for_tip(1, &fetch_service_subscriber)

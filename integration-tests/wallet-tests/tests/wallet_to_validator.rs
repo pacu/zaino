@@ -2,7 +2,6 @@
 
 #![forbid(unsafe_code)]
 
-use zaino_fetch::jsonrpsee::connector::test_node_and_return_url;
 use zaino_state::ZcashIndexer;
 use zaino_state::ZcashService;
 use wallet_tests::from_inputs;
@@ -193,19 +192,7 @@ where
         .generate_blocks_and_wait_for_tip(1, test_manager.subscriber())
         .await;
 
-    let fetch_service = zaino_fetch::jsonrpsee::connector::JsonRpSeeConnector::new_with_basic_auth(
-        test_node_and_return_url(
-            &test_manager.full_node_rpc_listen_address.to_string(),
-            None,
-            Some("xxxxxx".to_string()),
-            Some("xxxxxx".to_string()),
-        )
-        .await
-        .unwrap(),
-        "xxxxxx".to_string(),
-        "xxxxxx".to_string(),
-    )
-    .unwrap();
+    let fetch_service = test_manager.full_node_jsonrpc_connector().await;
 
     println!("\n\nFetching Chain Height!\n");
 
@@ -508,19 +495,7 @@ where
 
     // test_manager.local_net.print_stdout();
 
-    let fetch_service = zaino_fetch::jsonrpsee::connector::JsonRpSeeConnector::new_with_basic_auth(
-        test_node_and_return_url(
-            &test_manager.full_node_rpc_listen_address.to_string(),
-            None,
-            Some("xxxxxx".to_string()),
-            Some("xxxxxx".to_string()),
-        )
-        .await
-        .unwrap(),
-        "xxxxxx".to_string(),
-        "xxxxxx".to_string(),
-    )
-    .unwrap();
+    let fetch_service = test_manager.full_node_jsonrpc_connector().await;
 
     println!("\n\nFetching Raw Mempool!\n");
     let mempool_txids = fetch_service.get_raw_mempool().await.unwrap();

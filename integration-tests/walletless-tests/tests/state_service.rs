@@ -5,7 +5,7 @@ use zaino_testutils::ValidatorExt;
 use zaino_testutils::{ValidatorKind, ZEBRAD_TESTNET_CACHE_DIR};
 use zcash_local_net::validator::{zebrad::Zebrad, Validator};
 use zebra_chain::parameters::NetworkKind;
-use zebra_rpc::methods::{GetAddressBalanceRequest, GetAddressTxIdsRequest, GetInfo};
+use zebra_rpc::methods::{GetAddressBalanceRequest, GetAddressTxIdsRequest};
 
 #[allow(deprecated)]async fn state_service_check_info<V: ValidatorExt>(
     validator: &ValidatorKind,
@@ -39,67 +39,9 @@ use zebra_rpc::methods::{GetAddressBalanceRequest, GetAddressTxIdsRequest, GetIn
         .unwrap());
 
     // Clean timestamp from get_info
-    let (
-        version,
-        build,
-        subversion,
-        protocol_version,
-        blocks,
-        connections,
-        proxy,
-        difficulty,
-        testnet,
-        pay_tx_fee,
-        relay_fee,
-        errors,
-        _,
-    ) = fetch_service_info.into_parts();
-    let cleaned_fetch_info = GetInfo::new(
-        version,
-        build,
-        subversion,
-        protocol_version,
-        blocks,
-        connections,
-        proxy,
-        difficulty,
-        testnet,
-        pay_tx_fee,
-        relay_fee,
-        errors,
-        0,
-    );
+    let cleaned_fetch_info = zaino_testutils::get_info_with_zeroed_timestamp(fetch_service_info);
 
-    let (
-        version,
-        build,
-        subversion,
-        protocol_version,
-        blocks,
-        connections,
-        proxy,
-        difficulty,
-        testnet,
-        pay_tx_fee,
-        relay_fee,
-        errors,
-        _,
-    ) = state_service_info.into_parts();
-    let cleaned_state_info = GetInfo::new(
-        version,
-        build,
-        subversion,
-        protocol_version,
-        blocks,
-        connections,
-        proxy,
-        difficulty,
-        testnet,
-        pay_tx_fee,
-        relay_fee,
-        errors,
-        0,
-    );
+    let cleaned_state_info = zaino_testutils::get_info_with_zeroed_timestamp(state_service_info);
 
     assert_eq!(cleaned_fetch_info, cleaned_state_info);
 

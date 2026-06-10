@@ -3,7 +3,6 @@
 #[allow(deprecated)]
 use zaino_state::{FetchServiceSubscriber, ZcashIndexer};
 use zcash_local_net::validator::Validator as _;
-use zebra_rpc::methods::GetInfo;
 
 #[allow(deprecated)]
 async fn launch_json_server_check_info() {
@@ -15,67 +14,9 @@ async fn launch_json_server_check_info() {
     let zaino_blockchain_info = dbg!(zaino_subscriber.get_blockchain_info().await.unwrap());
 
     // Clean timestamp from get_info
-    let (
-        version,
-        build,
-        subversion,
-        protocol_version,
-        blocks,
-        connections,
-        proxy,
-        difficulty,
-        testnet,
-        pay_tx_fee,
-        relay_fee,
-        errors,
-        _,
-    ) = zcashd_info.into_parts();
-    let cleaned_zcashd_info = GetInfo::new(
-        version,
-        build,
-        subversion,
-        protocol_version,
-        blocks,
-        connections,
-        proxy,
-        difficulty,
-        testnet,
-        pay_tx_fee,
-        relay_fee,
-        errors,
-        0,
-    );
+    let cleaned_zcashd_info = zaino_testutils::get_info_with_zeroed_timestamp(zcashd_info);
 
-    let (
-        version,
-        build,
-        subversion,
-        protocol_version,
-        blocks,
-        connections,
-        proxy,
-        difficulty,
-        testnet,
-        pay_tx_fee,
-        relay_fee,
-        errors,
-        _,
-    ) = zaino_info.into_parts();
-    let cleaned_zaino_info = GetInfo::new(
-        version,
-        build,
-        subversion,
-        protocol_version,
-        blocks,
-        connections,
-        proxy,
-        difficulty,
-        testnet,
-        pay_tx_fee,
-        relay_fee,
-        errors,
-        0,
-    );
+    let cleaned_zaino_info = zaino_testutils::get_info_with_zeroed_timestamp(zaino_info);
 
     assert_eq!(cleaned_zcashd_info, cleaned_zaino_info);
 
