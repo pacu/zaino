@@ -105,9 +105,9 @@ script.post = "makers notify"
 
 # -------------------------------------------------------------------
 
-[tasks.integration-test]
-description = "Run the integration-tests sub-workspace inside the CI container (forwards extra args to `cargo nextest run`)"
-env = { WORKSPACE_MANIFEST = "integration-tests/Cargo.toml", WORKSPACE_DESC = "integration-tests sub-workspace" }
+[tasks.walletless-integration-test]
+description = "Run the walletless-tests workspace inside the CI container (forwards extra args to `cargo nextest run`)"
+env = { WORKSPACE_MANIFEST = "integration-tests/Cargo.toml", WORKSPACE_DESC = "walletless-tests workspace" }
 script_runner = "bash"
 extend = "base-script"
 script.main = 'source "./tools/scripts/container-nextest-workspace.sh"'
@@ -120,6 +120,12 @@ env = { WORKSPACE_MANIFEST = "integration-tests/wallet-tests/Cargo.toml", WORKSP
 script_runner = "bash"
 extend = "base-script"
 script.main = 'source "./tools/scripts/container-nextest-workspace.sh"'
+
+# -------------------------------------------------------------------
+
+[tasks.integration-test]
+description = "Run both integration-test workspaces (walletless-tests then wallet-tests) inside the CI container"
+dependencies = ["walletless-integration-test", "wallet-integration-test"]
 
 # -------------------------------------------------------------------
 

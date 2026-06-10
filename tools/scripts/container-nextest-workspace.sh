@@ -9,7 +9,7 @@
 #   WORKSPACE_MANIFEST - path to the workspace Cargo.toml (required)
 #   WORKSPACE_DESC     - human label for the info line (required)
 #
-# Sourced as the script.main of the `integration-test` / `wallet-integration-test`
+# Sourced as the script.main of the `walletless-integration-test` / `wallet-integration-test`
 # tasks (both extend `base-script`); info comes from the base-script pre-script
 # (tools/scripts/base-script-pre.sh).
 
