@@ -2,6 +2,8 @@
 
 use futures::StreamExt as _;
 use hex::ToHex as _;
+use nonempty::NonEmpty;
+use wallet_tests::from_inputs;
 use zaino_proto::proto::service::{
     AddressList, BlockId, BlockRange, GetAddressUtxosArg, GetMempoolTxRequest, PoolType,
     TransparentAddressBlockFilter, TxFilter,
@@ -10,8 +12,8 @@ use zaino_state::ChainIndex;
 use zaino_state::FetchServiceSubscriber;
 #[allow(deprecated)]
 use zaino_state::{FetchService, LightWalletIndexer, ZcashIndexer};
-use wallet_tests::from_inputs;
 use zaino_testutils::{TestManager, ValidatorExt, ValidatorKind};
+use zcash_primitives::transaction::TxId;
 use zebra_chain::subtree::NoteCommitmentSubtreeIndex;
 use zebra_rpc::methods::{GetAddressBalanceRequest, GetAddressTxIdsRequest};
 use zip32::AccountId;
@@ -66,26 +68,52 @@ async fn fund_faucet<V: ValidatorExt>(
     }
 }
 
+/// Send `amount` from the faucet to `address`, mine a block, and return the
+/// transaction id(s). The standard "send one, mine one" step the mined tests
+/// share; callers that don't need the txid just discard the return.
+#[allow(deprecated)]
+async fn send_and_mine<V: ValidatorExt>(
+    test_manager: &TestManager<V, FetchService>,
+    clients: &mut wallet_tests::Clients,
+    fetch_service_subscriber: &FetchServiceSubscriber,
+    address: &str,
+    amount: u64,
+) -> NonEmpty<TxId> {
+    let tx = from_inputs::quick_send(&mut clients.faucet, vec![(address, amount, None)])
+        .await
+        .unwrap();
+    test_manager
+        .generate_blocks_and_wait_for_tip(1, fetch_service_subscriber)
+        .await;
+    tx
+}
+
 #[allow(deprecated)]
 async fn fetch_service_get_address_balance<V: ValidatorExt>(validator: &ValidatorKind) {
     let (mut test_manager, fetch_service_subscriber, mut clients) =
         create_test_manager_and_fetch_service::<V>(validator, None).await;
     let recipient_address = clients.get_recipient_address("transparent").await;
 
-    fund_faucet(&test_manager, &mut clients, validator, &fetch_service_subscriber, 1).await;
+    fund_faucet(
+        &test_manager,
+        &mut clients,
+        validator,
+        &fetch_service_subscriber,
+        1,
+    )
+    .await;
 
     dbg!(clients.faucet_balance().await);
     dbg!(clients.faucet.transaction_summaries(false).await.unwrap());
 
-    from_inputs::quick_send(
-        &mut clients.faucet,
-        vec![(recipient_address.as_str(), 250_000, None)],
+    send_and_mine(
+        &test_manager,
+        &mut clients,
+        &fetch_service_subscriber,
+        recipient_address.as_str(),
+        250_000,
     )
-    .await
-    .unwrap();
-    test_manager
-        .generate_blocks_and_wait_for_tip(1, &fetch_service_subscriber)
-        .await;
+    .await;
 
     clients.recipient.sync_and_await().await.unwrap();
     let recipient_balance = clients.recipient_balance().await;
@@ -121,22 +149,23 @@ async fn fetch_service_get_raw_mempool<V: ValidatorExt>(validator: &ValidatorKin
         .generate_blocks_and_wait_for_tip(1, &fetch_service_subscriber)
         .await;
 
-    fund_faucet(&test_manager, &mut clients, validator, &fetch_service_subscriber, 2).await;
+    fund_faucet(
+        &test_manager,
+        &mut clients,
+        validator,
+        &fetch_service_subscriber,
+        2,
+    )
+    .await;
 
     let recipient_ua: String = clients.get_recipient_address("unified").await;
     let recipient_taddr: String = clients.get_recipient_address("transparent").await;
-    from_inputs::quick_send(
-        &mut clients.faucet,
-        vec![(&recipient_taddr, 250_000, None)],
-    )
-    .await
-    .unwrap();
-    from_inputs::quick_send(
-        &mut clients.faucet,
-        vec![(&recipient_ua, 250_000, None)],
-    )
-    .await
-    .unwrap();
+    from_inputs::quick_send(&mut clients.faucet, vec![(&recipient_taddr, 250_000, None)])
+        .await
+        .unwrap();
+    from_inputs::quick_send(&mut clients.faucet, vec![(&recipient_ua, 250_000, None)])
+        .await
+        .unwrap();
 
     tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
 
@@ -161,7 +190,14 @@ pub async fn test_get_mempool_info<V: ValidatorExt>(validator: &ValidatorKind) {
     test_manager
         .generate_blocks_and_wait_for_tip(1, &fetch_service_subscriber)
         .await;
-    fund_faucet(&test_manager, &mut clients, validator, &fetch_service_subscriber, 2).await;
+    fund_faucet(
+        &test_manager,
+        &mut clients,
+        validator,
+        &fetch_service_subscriber,
+        2,
+    )
+    .await;
 
     let recipient_unified_address = clients.get_recipient_address("unified").await;
     let recipient_transparent_address = clients.get_recipient_address("transparent").await;
@@ -228,19 +264,24 @@ pub async fn test_get_mempool_info<V: ValidatorExt>(validator: &ValidatorKind) {
 async fn fetch_service_z_get_treestate<V: ValidatorExt>(validator: &ValidatorKind) {
     let (mut test_manager, fetch_service_subscriber, mut clients) =
         create_test_manager_and_fetch_service::<V>(validator, None).await;
-    fund_faucet(&test_manager, &mut clients, validator, &fetch_service_subscriber, 1).await;
+    fund_faucet(
+        &test_manager,
+        &mut clients,
+        validator,
+        &fetch_service_subscriber,
+        1,
+    )
+    .await;
 
     let recipient_ua = clients.get_recipient_address("unified").await;
-    from_inputs::quick_send(
-        &mut clients.faucet,
-        vec![(&recipient_ua, 250_000, None)],
+    send_and_mine(
+        &test_manager,
+        &mut clients,
+        &fetch_service_subscriber,
+        &recipient_ua,
+        250_000,
     )
-    .await
-    .unwrap();
-
-    test_manager
-        .generate_blocks_and_wait_for_tip(1, &fetch_service_subscriber)
-        .await;
+    .await;
 
     let chain_height = dbg!(fetch_service_subscriber.chain_height().await.unwrap()).0;
 
@@ -256,19 +297,24 @@ async fn fetch_service_z_get_treestate<V: ValidatorExt>(validator: &ValidatorKin
 async fn fetch_service_z_get_subtrees_by_index<V: ValidatorExt>(validator: &ValidatorKind) {
     let (mut test_manager, fetch_service_subscriber, mut clients) =
         create_test_manager_and_fetch_service::<V>(validator, None).await;
-    fund_faucet(&test_manager, &mut clients, validator, &fetch_service_subscriber, 1).await;
+    fund_faucet(
+        &test_manager,
+        &mut clients,
+        validator,
+        &fetch_service_subscriber,
+        1,
+    )
+    .await;
 
     let recipient_ua = clients.get_recipient_address("unified").await;
-    from_inputs::quick_send(
-        &mut clients.faucet,
-        vec![(&recipient_ua, 250_000, None)],
+    send_and_mine(
+        &test_manager,
+        &mut clients,
+        &fetch_service_subscriber,
+        &recipient_ua,
+        250_000,
     )
-    .await
-    .unwrap();
-
-    test_manager
-        .generate_blocks_and_wait_for_tip(1, &fetch_service_subscriber)
-        .await;
+    .await;
 
     dbg!(fetch_service_subscriber
         .z_get_subtrees_by_index("orchard".to_string(), NoteCommitmentSubtreeIndex(0), None)
@@ -282,19 +328,24 @@ async fn fetch_service_z_get_subtrees_by_index<V: ValidatorExt>(validator: &Vali
 async fn fetch_service_get_raw_transaction<V: ValidatorExt>(validator: &ValidatorKind) {
     let (mut test_manager, fetch_service_subscriber, mut clients) =
         create_test_manager_and_fetch_service::<V>(validator, None).await;
-    fund_faucet(&test_manager, &mut clients, validator, &fetch_service_subscriber, 1).await;
+    fund_faucet(
+        &test_manager,
+        &mut clients,
+        validator,
+        &fetch_service_subscriber,
+        1,
+    )
+    .await;
 
     let recipient_ua = clients.get_recipient_address("unified").await;
-    let tx = from_inputs::quick_send(
-        &mut clients.faucet,
-        vec![(&recipient_ua, 250_000, None)],
+    let tx = send_and_mine(
+        &test_manager,
+        &mut clients,
+        &fetch_service_subscriber,
+        &recipient_ua,
+        250_000,
     )
-    .await
-    .unwrap();
-
-    test_manager
-        .generate_blocks_and_wait_for_tip(1, &fetch_service_subscriber)
-        .await;
+    .await;
 
     dbg!(fetch_service_subscriber
         .get_raw_transaction(tx.first().to_string(), Some(1))
@@ -310,17 +361,23 @@ async fn fetch_service_get_address_tx_ids<V: ValidatorExt>(validator: &Validator
         create_test_manager_and_fetch_service::<V>(validator, None).await;
     let recipient_taddr = clients.get_recipient_address("transparent").await;
 
-    fund_faucet(&test_manager, &mut clients, validator, &fetch_service_subscriber, 1).await;
-
-    let tx = from_inputs::quick_send(
-        &mut clients.faucet,
-        vec![(recipient_taddr.as_str(), 250_000, None)],
+    fund_faucet(
+        &test_manager,
+        &mut clients,
+        validator,
+        &fetch_service_subscriber,
+        1,
     )
-    .await
-    .unwrap();
-    test_manager
-        .generate_blocks_and_wait_for_tip(1, &fetch_service_subscriber)
-        .await;
+    .await;
+
+    let tx = send_and_mine(
+        &test_manager,
+        &mut clients,
+        &fetch_service_subscriber,
+        recipient_taddr.as_str(),
+        250_000,
+    )
+    .await;
 
     let chain_height: u32 = {
         let idx = &fetch_service_subscriber.indexer;
@@ -350,17 +407,23 @@ async fn fetch_service_get_address_utxos<V: ValidatorExt>(validator: &ValidatorK
     let (mut test_manager, fetch_service_subscriber, mut clients) =
         create_test_manager_and_fetch_service::<V>(validator, None).await;
     let recipient_taddr = clients.get_recipient_address("transparent").await;
-    fund_faucet(&test_manager, &mut clients, validator, &fetch_service_subscriber, 1).await;
-
-    let txid_1 = from_inputs::quick_send(
-        &mut clients.faucet,
-        vec![(recipient_taddr.as_str(), 250_000, None)],
+    fund_faucet(
+        &test_manager,
+        &mut clients,
+        validator,
+        &fetch_service_subscriber,
+        1,
     )
-    .await
-    .unwrap();
-    test_manager
-        .generate_blocks_and_wait_for_tip(1, &fetch_service_subscriber)
-        .await;
+    .await;
+
+    let txid_1 = send_and_mine(
+        &test_manager,
+        &mut clients,
+        &fetch_service_subscriber,
+        recipient_taddr.as_str(),
+        250_000,
+    )
+    .await;
 
     clients.faucet.sync_and_await().await.unwrap();
 
@@ -427,13 +490,11 @@ async fn fetch_service_get_block_range_returns_all_pools<V: ValidatorExt>(
     .head;
 
     let recipient_ua = clients.get_recipient_address("unified").await;
-    let orchard_txid = from_inputs::quick_send(
-        &mut clients.faucet,
-        vec![(&recipient_ua, 250_000, None)],
-    )
-    .await
-    .unwrap()
-    .head;
+    let orchard_txid =
+        from_inputs::quick_send(&mut clients.faucet, vec![(&recipient_ua, 250_000, None)])
+            .await
+            .unwrap()
+            .head;
 
     test_manager
         .generate_blocks_and_wait_for_tip(1, &fetch_service_subscriber)
@@ -573,13 +634,11 @@ async fn fetch_service_get_block_range_no_pools_returns_sapling_orchard<V: Valid
     .head;
 
     let recipient_ua = clients.get_recipient_address("unified").await;
-    let orchard_txid = from_inputs::quick_send(
-        &mut clients.faucet,
-        vec![(&recipient_ua, 250_000, None)],
-    )
-    .await
-    .unwrap()
-    .head;
+    let orchard_txid =
+        from_inputs::quick_send(&mut clients.faucet, vec![(&recipient_ua, 250_000, None)])
+            .await
+            .unwrap()
+            .head;
 
     test_manager
         .generate_blocks_and_wait_for_tip(1, &fetch_service_subscriber)
@@ -668,18 +727,24 @@ async fn fetch_service_get_block_range_no_pools_returns_sapling_orchard<V: Valid
 async fn fetch_service_get_transaction_mined<V: ValidatorExt>(validator: &ValidatorKind) {
     let (mut test_manager, fetch_service_subscriber, mut clients) =
         create_test_manager_and_fetch_service::<V>(validator, None).await;
-    fund_faucet(&test_manager, &mut clients, validator, &fetch_service_subscriber, 1).await;
+    fund_faucet(
+        &test_manager,
+        &mut clients,
+        validator,
+        &fetch_service_subscriber,
+        1,
+    )
+    .await;
 
     let recipient_ua = clients.get_recipient_address("unified").await;
-    let tx = from_inputs::quick_send(
-        &mut clients.faucet,
-        vec![(&recipient_ua, 250_000, None)],
+    let tx = send_and_mine(
+        &test_manager,
+        &mut clients,
+        &fetch_service_subscriber,
+        &recipient_ua,
+        250_000,
     )
-    .await
-    .unwrap();
-    test_manager
-        .generate_blocks_and_wait_for_tip(1, &fetch_service_subscriber)
-        .await;
+    .await;
 
     let tx_filter = TxFilter {
         block: None,
@@ -701,15 +766,19 @@ async fn fetch_service_get_transaction_mined<V: ValidatorExt>(validator: &Valida
 async fn fetch_service_get_transaction_mempool<V: ValidatorExt>(validator: &ValidatorKind) {
     let (mut test_manager, fetch_service_subscriber, mut clients) =
         create_test_manager_and_fetch_service::<V>(validator, None).await;
-    fund_faucet(&test_manager, &mut clients, validator, &fetch_service_subscriber, 1).await;
+    fund_faucet(
+        &test_manager,
+        &mut clients,
+        validator,
+        &fetch_service_subscriber,
+        1,
+    )
+    .await;
 
     let recipient_ua = clients.get_recipient_address("unified").await;
-    let tx = from_inputs::quick_send(
-        &mut clients.faucet,
-        vec![(&recipient_ua, 250_000, None)],
-    )
-    .await
-    .unwrap();
+    let tx = from_inputs::quick_send(&mut clients.faucet, vec![(&recipient_ua, 250_000, None)])
+        .await
+        .unwrap();
 
     let tx_filter = TxFilter {
         block: None,
@@ -735,17 +804,23 @@ async fn fetch_service_get_taddress_txids<V: ValidatorExt>(validator: &Validator
         create_test_manager_and_fetch_service::<V>(validator, None).await;
     let recipient_taddr = clients.get_recipient_address("transparent").await;
 
-    fund_faucet(&test_manager, &mut clients, validator, &fetch_service_subscriber, 1).await;
-
-    let tx = from_inputs::quick_send(
-        &mut clients.faucet,
-        vec![(&recipient_taddr, 250_000, None)],
+    fund_faucet(
+        &test_manager,
+        &mut clients,
+        validator,
+        &fetch_service_subscriber,
+        1,
     )
-    .await
-    .unwrap();
-    test_manager
-        .generate_blocks_and_wait_for_tip(1, &fetch_service_subscriber)
-        .await;
+    .await;
+
+    let tx = send_and_mine(
+        &test_manager,
+        &mut clients,
+        &fetch_service_subscriber,
+        &recipient_taddr,
+        250_000,
+    )
+    .await;
 
     let chain_height: u32 = {
         let idx = &fetch_service_subscriber.indexer;
@@ -795,17 +870,23 @@ async fn fetch_service_get_taddress_balance<V: ValidatorExt>(validator: &Validat
     let (mut test_manager, fetch_service_subscriber, mut clients) =
         create_test_manager_and_fetch_service::<V>(validator, None).await;
     let recipient_taddr = clients.get_recipient_address("transparent").await;
-    fund_faucet(&test_manager, &mut clients, validator, &fetch_service_subscriber, 1).await;
-
-    from_inputs::quick_send(
-        &mut clients.faucet,
-        vec![(&recipient_taddr, 250_000, None)],
+    fund_faucet(
+        &test_manager,
+        &mut clients,
+        validator,
+        &fetch_service_subscriber,
+        1,
     )
-    .await
-    .unwrap();
-    test_manager
-        .generate_blocks_and_wait_for_tip(1, &fetch_service_subscriber)
-        .await;
+    .await;
+
+    send_and_mine(
+        &test_manager,
+        &mut clients,
+        &fetch_service_subscriber,
+        &recipient_taddr,
+        250_000,
+    )
+    .await;
 
     clients.recipient.sync_and_await().await.unwrap();
     let balance = clients.recipient_balance().await;
@@ -835,22 +916,24 @@ async fn fetch_service_get_mempool_tx<V: ValidatorExt>(validator: &ValidatorKind
     test_manager
         .generate_blocks_and_wait_for_tip(1, &fetch_service_subscriber)
         .await;
-    fund_faucet(&test_manager, &mut clients, validator, &fetch_service_subscriber, 2).await;
+    fund_faucet(
+        &test_manager,
+        &mut clients,
+        validator,
+        &fetch_service_subscriber,
+        2,
+    )
+    .await;
 
     let recipient_ua = clients.get_recipient_address("unified").await;
     let recipient_taddr = clients.get_recipient_address("transparent").await;
-    let tx_1 = from_inputs::quick_send(
-        &mut clients.faucet,
-        vec![(&recipient_taddr, 250_000, None)],
-    )
-    .await
-    .unwrap();
-    let tx_2 = from_inputs::quick_send(
-        &mut clients.faucet,
-        vec![(&recipient_ua, 250_000, None)],
-    )
-    .await
-    .unwrap();
+    let tx_1 =
+        from_inputs::quick_send(&mut clients.faucet, vec![(&recipient_taddr, 250_000, None)])
+            .await
+            .unwrap();
+    let tx_2 = from_inputs::quick_send(&mut clients.faucet, vec![(&recipient_ua, 250_000, None)])
+        .await
+        .unwrap();
 
     tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
 
@@ -917,7 +1000,14 @@ async fn fetch_service_get_mempool_stream<V: ValidatorExt>(validator: &Validator
     test_manager
         .generate_blocks_and_wait_for_tip(1, &fetch_service_subscriber)
         .await;
-    fund_faucet(&test_manager, &mut clients, validator, &fetch_service_subscriber, 2).await;
+    fund_faucet(
+        &test_manager,
+        &mut clients,
+        validator,
+        &fetch_service_subscriber,
+        2,
+    )
+    .await;
 
     let fetch_service_subscriber_2 = fetch_service_subscriber.clone();
     let fetch_service_handle = tokio::spawn(async move {
@@ -936,18 +1026,12 @@ async fn fetch_service_get_mempool_stream<V: ValidatorExt>(validator: &Validator
 
     let recipient_ua = clients.get_recipient_address("unified").await;
     let recipient_taddr = clients.get_recipient_address("transparent").await;
-    from_inputs::quick_send(
-        &mut clients.faucet,
-        vec![(&recipient_taddr, 250_000, None)],
-    )
-    .await
-    .unwrap();
-    from_inputs::quick_send(
-        &mut clients.faucet,
-        vec![(&recipient_ua, 250_000, None)],
-    )
-    .await
-    .unwrap();
+    from_inputs::quick_send(&mut clients.faucet, vec![(&recipient_taddr, 250_000, None)])
+        .await
+        .unwrap();
+    from_inputs::quick_send(&mut clients.faucet, vec![(&recipient_ua, 250_000, None)])
+        .await
+        .unwrap();
 
     tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
     test_manager
@@ -969,17 +1053,23 @@ async fn fetch_service_get_taddress_utxos<V: ValidatorExt>(validator: &Validator
     let (mut test_manager, fetch_service_subscriber, mut clients) =
         create_test_manager_and_fetch_service::<V>(validator, None).await;
     let recipient_taddr = clients.get_recipient_address("transparent").await;
-    fund_faucet(&test_manager, &mut clients, validator, &fetch_service_subscriber, 1).await;
-
-    let tx = from_inputs::quick_send(
-        &mut clients.faucet,
-        vec![(&recipient_taddr, 250_000, None)],
+    fund_faucet(
+        &test_manager,
+        &mut clients,
+        validator,
+        &fetch_service_subscriber,
+        1,
     )
-    .await
-    .unwrap();
-    test_manager
-        .generate_blocks_and_wait_for_tip(1, &fetch_service_subscriber)
-        .await;
+    .await;
+
+    let tx = send_and_mine(
+        &test_manager,
+        &mut clients,
+        &fetch_service_subscriber,
+        &recipient_taddr,
+        250_000,
+    )
+    .await;
 
     let utxos_arg = GetAddressUtxosArg {
         addresses: vec![recipient_taddr],
@@ -1003,17 +1093,23 @@ async fn fetch_service_get_taddress_utxos_stream<V: ValidatorExt>(validator: &Va
     let (mut test_manager, fetch_service_subscriber, mut clients) =
         create_test_manager_and_fetch_service::<V>(validator, None).await;
     let recipient_taddr = clients.get_recipient_address("transparent").await;
-    fund_faucet(&test_manager, &mut clients, validator, &fetch_service_subscriber, 1).await;
-
-    from_inputs::quick_send(
-        &mut clients.faucet,
-        vec![(&recipient_taddr, 250_000, None)],
+    fund_faucet(
+        &test_manager,
+        &mut clients,
+        validator,
+        &fetch_service_subscriber,
+        1,
     )
-    .await
-    .unwrap();
-    test_manager
-        .generate_blocks_and_wait_for_tip(1, &fetch_service_subscriber)
-        .await;
+    .await;
+
+    send_and_mine(
+        &test_manager,
+        &mut clients,
+        &fetch_service_subscriber,
+        &recipient_taddr,
+        250_000,
+    )
+    .await;
 
     let utxos_arg = GetAddressUtxosArg {
         addresses: vec![recipient_taddr],
@@ -1095,8 +1191,10 @@ macro_rules! fetch_service_tests {
 
                 #[tokio::test(flavor = "multi_thread")]
                 pub(crate) async fn block_range_no_pool_type_returns_sapling_orchard() {
-                    fetch_service_get_block_range_no_pools_returns_sapling_orchard::<$validator>(&$kind)
-                        .await;
+                    fetch_service_get_block_range_no_pools_returns_sapling_orchard::<$validator>(
+                        &$kind,
+                    )
+                    .await;
                 }
 
                 #[tokio::test(flavor = "multi_thread")]
@@ -1148,5 +1246,13 @@ macro_rules! fetch_service_tests {
     };
 }
 
-fetch_service_tests!(zcashd, zcash_local_net::validator::zcashd::Zcashd, ValidatorKind::Zcashd);
-fetch_service_tests!(zebrad, zcash_local_net::validator::zebrad::Zebrad, ValidatorKind::Zebrad);
+fetch_service_tests!(
+    zcashd,
+    zcash_local_net::validator::zcashd::Zcashd,
+    ValidatorKind::Zcashd
+);
+fetch_service_tests!(
+    zebrad,
+    zcash_local_net::validator::zebrad::Zebrad,
+    ValidatorKind::Zebrad
+);
