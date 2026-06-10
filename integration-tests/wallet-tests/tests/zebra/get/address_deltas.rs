@@ -242,13 +242,8 @@ pub(super) async fn main() {
         _state_service,
         state_service_subscriber,
         mut clients,
-    ) = super::create_test_manager_and_services::<Zebrad>(
-        &ValidatorKind::Zebrad,
-        None,
-        true,
-        None,
-    )
-    .await;
+    ) = super::create_test_manager_and_services::<Zebrad>(&ValidatorKind::Zebrad, None, true, None)
+        .await;
 
     let (recipient_taddr, faucet_taddr) = setup_chain(&mut test_manager, &mut clients).await;
 

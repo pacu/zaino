@@ -2,9 +2,9 @@
 
 #![forbid(unsafe_code)]
 
+use wallet_tests::from_inputs;
 use zaino_state::ZcashIndexer;
 use zaino_state::ZcashService;
-use wallet_tests::from_inputs;
 use zaino_testutils::TestManager;
 use zaino_testutils::ValidatorExt;
 use zaino_testutils::ValidatorKind;
@@ -45,7 +45,8 @@ where
     IndexerError: From<<<Service as ZcashService>::Subscriber as ZcashIndexer>::Error>,
     <Service as ZcashService>::Subscriber: zaino_testutils::PollableTip,
 {
-    let (mut test_manager, clients) = wallet_tests::launch_and_build::<V, Service>(validator, None, None).await;
+    let (mut test_manager, clients) =
+        wallet_tests::launch_and_build::<V, Service>(validator, None, None).await;
 
     clients.faucet.do_info().await;
     clients.recipient.do_info().await;
@@ -69,9 +70,12 @@ async fn send_and_assert_received<V, Service>(
     <Service as ZcashService>::Subscriber: zaino_testutils::PollableTip,
 {
     let recipient_address = clients.get_recipient_address(pool.address_kind()).await;
-    from_inputs::quick_send(&mut clients.faucet, vec![(&recipient_address, amount, None)])
-        .await
-        .unwrap();
+    from_inputs::quick_send(
+        &mut clients.faucet,
+        vec![(&recipient_address, amount, None)],
+    )
+    .await
+    .unwrap();
     test_manager
         .generate_blocks_and_wait_for_tip(1, test_manager.subscriber())
         .await;
@@ -93,7 +97,8 @@ async fn assert_send_to_pool<V, Service>(
     IndexerError: From<<<Service as ZcashService>::Subscriber as ZcashIndexer>::Error>,
     <Service as ZcashService>::Subscriber: zaino_testutils::PollableTip,
 {
-    let (mut test_manager, mut clients) = wallet_tests::launch_and_build::<V, Service>(validator, None, None).await;
+    let (mut test_manager, mut clients) =
+        wallet_tests::launch_and_build::<V, Service>(validator, None, None).await;
     fund_faucet(&test_manager, &mut clients, validator).await;
     send_and_assert_received(&test_manager, &mut clients, pool, amount).await;
     test_manager.close().await;
@@ -126,7 +131,8 @@ where
     IndexerError: From<<<Service as ZcashService>::Subscriber as ZcashIndexer>::Error>,
     <Service as ZcashService>::Subscriber: zaino_testutils::PollableTip,
 {
-    let (mut test_manager, mut clients) = wallet_tests::launch_and_build::<V, Service>(validator, None, None).await;
+    let (mut test_manager, mut clients) =
+        wallet_tests::launch_and_build::<V, Service>(validator, None, None).await;
 
     fund_faucet(&test_manager, &mut clients, validator).await;
 
@@ -194,7 +200,8 @@ where
     IndexerError: From<<<Service as ZcashService>::Subscriber as ZcashIndexer>::Error>,
     <Service as ZcashService>::Subscriber: zaino_testutils::PollableTip,
 {
-    let (mut test_manager, mut clients) = wallet_tests::launch_and_build::<V, Service>(validator, None, None).await;
+    let (mut test_manager, mut clients) =
+        wallet_tests::launch_and_build::<V, Service>(validator, None, None).await;
 
     test_manager
         .generate_blocks_and_wait_for_tip(2, test_manager.subscriber())
@@ -242,9 +249,18 @@ where
     clients.recipient.sync_and_await().await.unwrap();
 
     let balance = clients.recipient_balance().await;
-    assert_eq!(wallet_tests::Pool::Orchard.received_balance(&balance), 250_000);
-    assert_eq!(wallet_tests::Pool::Sapling.received_balance(&balance), 250_000);
-    assert_eq!(wallet_tests::Pool::Transparent.received_balance(&balance), 250_000);
+    assert_eq!(
+        wallet_tests::Pool::Orchard.received_balance(&balance),
+        250_000
+    );
+    assert_eq!(
+        wallet_tests::Pool::Sapling.received_balance(&balance),
+        250_000
+    );
+    assert_eq!(
+        wallet_tests::Pool::Transparent.received_balance(&balance),
+        250_000
+    );
 
     test_manager.close().await;
 }
@@ -256,7 +272,8 @@ where
     IndexerError: From<<<Service as ZcashService>::Subscriber as ZcashIndexer>::Error>,
     <Service as ZcashService>::Subscriber: zaino_testutils::PollableTip,
 {
-    let (mut test_manager, mut clients) = wallet_tests::launch_and_build::<V, Service>(validator, None, None).await;
+    let (mut test_manager, mut clients) =
+        wallet_tests::launch_and_build::<V, Service>(validator, None, None).await;
 
     fund_faucet(&test_manager, &mut clients, validator).await;
 
@@ -270,7 +287,9 @@ where
     clients.recipient.sync_and_await().await.unwrap();
 
     assert_eq!(
-        clients.recipient_balance().await
+        clients
+            .recipient_balance()
+            .await
             .confirmed_transparent_balance
             .unwrap()
             .into_u64(),
@@ -288,7 +307,9 @@ where
     clients.recipient.sync_and_await().await.unwrap();
 
     assert_eq!(
-        clients.recipient_balance().await
+        clients
+            .recipient_balance()
+            .await
             .total_orchard_balance
             .unwrap()
             .into_u64(),
@@ -305,7 +326,8 @@ where
     IndexerError: From<<<Service as ZcashService>::Subscriber as ZcashIndexer>::Error>,
     <Service as ZcashService>::Subscriber: zaino_testutils::PollableTip,
 {
-    let (mut test_manager, mut clients) = wallet_tests::launch_and_build::<V, Service>(validator, None, None).await;
+    let (mut test_manager, mut clients) =
+        wallet_tests::launch_and_build::<V, Service>(validator, None, None).await;
 
     test_manager
         .generate_blocks_and_wait_for_tip(1, test_manager.subscriber())
@@ -379,14 +401,18 @@ where
     );
 
     assert_eq!(
-        clients.recipient_balance().await
+        clients
+            .recipient_balance()
+            .await
             .unconfirmed_orchard_balance
             .unwrap()
             .into_u64(),
         250_000
     );
     assert_eq!(
-        clients.recipient_balance().await
+        clients
+            .recipient_balance()
+            .await
             .unconfirmed_sapling_balance
             .unwrap()
             .into_u64(),
@@ -414,14 +440,18 @@ where
     clients.recipient.sync_and_await().await.unwrap();
 
     assert_eq!(
-        clients.recipient_balance().await
+        clients
+            .recipient_balance()
+            .await
             .confirmed_orchard_balance
             .unwrap()
             .into_u64(),
         250_000
     );
     assert_eq!(
-        clients.recipient_balance().await
+        clients
+            .recipient_balance()
+            .await
             .confirmed_orchard_balance
             .unwrap()
             .into_u64(),

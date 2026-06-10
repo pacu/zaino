@@ -106,7 +106,10 @@ impl Pool {
 /// `activation_heights` must match the heights the validator was launched
 /// with: [`ActivationHeights::default`] for zcashd,
 /// [`zaino_common::network::ZEBRAD_DEFAULT_ACTIVATION_HEIGHTS`] for zebrad.
-pub fn build_clients(zaino_grpc_listen_port: u16, activation_heights: ActivationHeights) -> Clients {
+pub fn build_clients(
+    zaino_grpc_listen_port: u16,
+    activation_heights: ActivationHeights,
+) -> Clients {
     let mut client_builder = ClientBuilder::new(
         zaino_testutils::make_uri(zaino_grpc_listen_port),
         tempfile::tempdir().expect("create tempdir for lightclient wallets"),
@@ -152,10 +155,17 @@ where
     IndexerError: From<<<Service as ZcashService>::Subscriber as ZcashIndexer>::Error>,
     <Service as ZcashService>::Subscriber: PollableTip,
 {
-    let test_manager =
-        TestManager::<C, Service>::launch(validator, network, None, chain_cache, true, false, false)
-            .await
-            .expect("launch TestManager");
+    let test_manager = TestManager::<C, Service>::launch(
+        validator,
+        network,
+        None,
+        chain_cache,
+        true,
+        false,
+        false,
+    )
+    .await
+    .expect("launch TestManager");
     let clients = build_clients(
         test_manager
             .zaino_grpc_listen_address
@@ -275,9 +285,20 @@ mod launch_clients {
             dbg!(clients.faucet_balance().await);
 
             assert!(
-                clients.faucet_balance().await.confirmed_transparent_balance.unwrap().into_u64() > 0,
+                clients
+                    .faucet_balance()
+                    .await
+                    .confirmed_transparent_balance
+                    .unwrap()
+                    .into_u64()
+                    > 0,
                 "No mining reward received from {kind:?}. Faucet Transparent Balance: {:}.",
-                clients.faucet_balance().await.confirmed_transparent_balance.unwrap().into_u64()
+                clients
+                    .faucet_balance()
+                    .await
+                    .confirmed_transparent_balance
+                    .unwrap()
+                    .into_u64()
             );
 
             // *Send all transparent funds to own orchard address.
@@ -307,7 +328,9 @@ mod launch_clients {
             dbg!(clients.recipient_balance().await);
 
             assert_eq!(
-                clients.recipient_balance().await
+                clients
+                    .recipient_balance()
+                    .await
                     .confirmed_sapling_balance
                     .unwrap()
                     .into_u64(),

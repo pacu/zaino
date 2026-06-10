@@ -1,8 +1,8 @@
 //! Tests that compare the output of both `zcashd` and `zainod` through `FetchService`.
 
+use wallet_tests::from_inputs;
 #[allow(deprecated)]
 use zaino_state::{ChainIndex, FetchService, FetchServiceSubscriber, ZcashIndexer};
-use wallet_tests::from_inputs;
 use zaino_testutils::{TestManager, ValidatorKind};
 use zcash_local_net::logs::LogsToStdoutAndStderr as _;
 use zcash_local_net::validator::zcashd::Zcashd;
@@ -19,8 +19,13 @@ async fn create_zcashd_test_manager_and_fetch_services() -> (
     FetchServiceSubscriber,
     wallet_tests::Clients,
 ) {
-    let (test_manager, zcashd_fetch_service, zcashd_subscriber, zaino_fetch_service, zaino_subscriber) =
-        zaino_testutils::launch_zcashd_dual_fetch_services().await;
+    let (
+        test_manager,
+        zcashd_fetch_service,
+        zcashd_subscriber,
+        zaino_fetch_service,
+        zaino_subscriber,
+    ) = zaino_testutils::launch_zcashd_dual_fetch_services().await;
 
     let clients = wallet_tests::build_clients(
         test_manager
@@ -60,8 +65,9 @@ async fn z_get_address_balance_inner() {
     )
     .await
     .unwrap();
-    test_manager.generate_blocks_and_wait_for_tips(1, &zaino_subscriber, &zcashd_subscriber)
-    .await;
+    test_manager
+        .generate_blocks_and_wait_for_tips(1, &zaino_subscriber, &zcashd_subscriber)
+        .await;
 
     clients.recipient.sync_and_await().await.unwrap();
     let recipient_balance = clients.recipient_balance().await;
@@ -103,8 +109,9 @@ async fn get_raw_mempool_inner() {
         mut clients,
     ) = create_zcashd_test_manager_and_fetch_services().await;
 
-    test_manager.generate_blocks_and_wait_for_tips(1, &zaino_subscriber, &zcashd_subscriber)
-    .await;
+    test_manager
+        .generate_blocks_and_wait_for_tips(1, &zaino_subscriber, &zcashd_subscriber)
+        .await;
 
     clients.faucet.sync_and_await().await.unwrap();
 
@@ -143,8 +150,9 @@ async fn get_mempool_info_inner() {
         mut clients,
     ) = create_zcashd_test_manager_and_fetch_services().await;
 
-    test_manager.generate_blocks_and_wait_for_tips(1, &zaino_subscriber, &zcashd_subscriber)
-    .await;
+    test_manager
+        .generate_blocks_and_wait_for_tips(1, &zaino_subscriber, &zcashd_subscriber)
+        .await;
 
     clients.faucet.sync_and_await().await.unwrap();
 
@@ -187,8 +195,9 @@ async fn z_get_treestate_inner() {
         .await
         .unwrap();
 
-    test_manager.generate_blocks_and_wait_for_tips(1, &zaino_subscriber, &zcashd_subscriber)
-    .await;
+    test_manager
+        .generate_blocks_and_wait_for_tips(1, &zaino_subscriber, &zcashd_subscriber)
+        .await;
 
     let chain_height = dbg!(zaino_subscriber.chain_height().await.unwrap()).0;
 
@@ -224,8 +233,9 @@ async fn z_get_subtrees_by_index_inner() {
         .await
         .unwrap();
 
-    test_manager.generate_blocks_and_wait_for_tips(1, &zaino_subscriber, &zcashd_subscriber)
-    .await;
+    test_manager
+        .generate_blocks_and_wait_for_tips(1, &zaino_subscriber, &zcashd_subscriber)
+        .await;
 
     let zcashd_subtrees = dbg!(zcashd_subscriber
         .z_get_subtrees_by_index("orchard".to_string(), NoteCommitmentSubtreeIndex(0), None)
@@ -259,8 +269,9 @@ async fn get_raw_transaction_inner() {
         .await
         .unwrap();
 
-    test_manager.generate_blocks_and_wait_for_tips(1, &zaino_subscriber, &zcashd_subscriber)
-    .await;
+    test_manager
+        .generate_blocks_and_wait_for_tips(1, &zaino_subscriber, &zcashd_subscriber)
+        .await;
 
     test_manager.local_net.print_stdout();
 
@@ -299,8 +310,9 @@ async fn get_tx_out_inner() {
     )
     .await
     .unwrap();
-    test_manager.generate_blocks_and_wait_for_tips(1, &zaino_subscriber, &zcashd_subscriber)
-    .await;
+    test_manager
+        .generate_blocks_and_wait_for_tips(1, &zaino_subscriber, &zcashd_subscriber)
+        .await;
 
     let zcashd_utxos = zcashd_subscriber
         .z_get_address_utxos(GetAddressBalanceRequest::new(vec![recipient_taddr.clone()]))
@@ -353,8 +365,9 @@ async fn get_address_tx_ids_inner() {
     )
     .await
     .unwrap();
-    test_manager.generate_blocks_and_wait_for_tips(1, &zaino_subscriber, &zcashd_subscriber)
-    .await;
+    test_manager
+        .generate_blocks_and_wait_for_tips(1, &zaino_subscriber, &zcashd_subscriber)
+        .await;
 
     let chain_height: u32 = {
         let idx = &zcashd_subscriber.indexer;
@@ -411,8 +424,9 @@ async fn z_get_address_utxos_inner() {
     )
     .await
     .unwrap();
-    test_manager.generate_blocks_and_wait_for_tips(1, &zaino_subscriber, &zcashd_subscriber)
-    .await;
+    test_manager
+        .generate_blocks_and_wait_for_tips(1, &zaino_subscriber, &zcashd_subscriber)
+        .await;
 
     clients.faucet.sync_and_await().await.unwrap();
 
