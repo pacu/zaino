@@ -83,11 +83,188 @@ pub fn default_heights(validator: &ValidatorKind) -> ActivationHeights {
 /// Smoke tests relocated from `zaino-testutils`: launch a validator + Zaino,
 /// build wallet clients against it, and exercise mining-reward receipt and
 /// sends. Organised by validator / service backend.
+///
+/// The scenario bodies are shared across the validator × service matrix via
+/// the [`Scenario`] extension trait; each per-backend test is a one-line
+/// wrapper that supplies the concrete `C`/`Service` by turbofish.
 #[cfg(test)]
 mod launch_clients {
-    use super::build_clients;
-    use zaino_common::network::{ActivationHeights, ZEBRAD_DEFAULT_ACTIVATION_HEIGHTS};
-    use zaino_testutils::{TestManager, ValidatorKind};
+    use super::{build_clients, default_heights, from_inputs, Clients};
+    use std::path::PathBuf;
+    use zaino_state::{ZcashIndexer, ZcashService};
+    use zaino_testutils::{PollableTip, TestManager, TestService, ValidatorExt, ValidatorKind};
+    use zainodlib::error::IndexerError;
+    use zebra_chain::parameters::NetworkKind;
+    use zip32::AccountId;
+
+    /// Shared test bodies for the validator × service backend matrix.
+    ///
+    /// The `TestManager<C, Service>` method bound — mirroring zaino-testutils'
+    /// own `impl` — is stated once on the [`impl`](Scenario) below instead of
+    /// on every test, so a per-backend test collapses to a single turbofished
+    /// call.
+    trait Scenario: Sized {
+        /// Launch a validator + Zaino and build faucet/recipient clients whose
+        /// view matches the launched chain.
+        async fn launch_and_build(
+            kind: &ValidatorKind,
+            network: Option<NetworkKind>,
+            chain_cache: Option<PathBuf>,
+        ) -> (Self, Clients);
+
+        /// Connect clients and confirm both answer `do_info`.
+        async fn check_clients_connect(
+            kind: &ValidatorKind,
+            network: Option<NetworkKind>,
+            chain_cache: Option<PathBuf>,
+        );
+
+        /// Assert the faucet received a mining reward, maturing `mature_blocks`
+        /// first (`0` for zcashd, whose launch reward is already spendable).
+        async fn check_received_mining_reward(kind: &ValidatorKind, mature_blocks: u32);
+
+        /// Mature a reward, shield it, send to the recipient, and assert receipt.
+        async fn check_received_mining_reward_and_send(kind: &ValidatorKind);
+    }
+
+    impl<C, Service> Scenario for TestManager<C, Service>
+    where
+        C: ValidatorExt,
+        Service: TestService,
+        IndexerError: From<<<Service as ZcashService>::Subscriber as ZcashIndexer>::Error>,
+        <Service as ZcashService>::Subscriber: PollableTip,
+    {
+        async fn launch_and_build(
+            kind: &ValidatorKind,
+            network: Option<NetworkKind>,
+            chain_cache: Option<PathBuf>,
+        ) -> (Self, Clients) {
+            let test_manager = Self::launch(kind, network, None, chain_cache, true, false, false)
+                .await
+                .unwrap();
+            let clients = build_clients(
+                test_manager
+                    .zaino_grpc_listen_address
+                    .expect("zaino enabled")
+                    .port(),
+                default_heights(kind),
+            );
+            (test_manager, clients)
+        }
+
+        async fn check_clients_connect(
+            kind: &ValidatorKind,
+            network: Option<NetworkKind>,
+            chain_cache: Option<PathBuf>,
+        ) {
+            let (mut test_manager, clients) =
+                Self::launch_and_build(kind, network, chain_cache).await;
+            dbg!(clients.faucet.do_info().await);
+            dbg!(clients.recipient.do_info().await);
+            test_manager.close().await;
+        }
+
+        async fn check_received_mining_reward(kind: &ValidatorKind, mature_blocks: u32) {
+            let (mut test_manager, mut clients) = Self::launch_and_build(kind, None, None).await;
+
+            if mature_blocks > 0 {
+                clients.faucet.sync_and_await().await.unwrap();
+                dbg!(clients
+                    .faucet
+                    .account_balance(AccountId::ZERO)
+                    .await
+                    .unwrap());
+                test_manager
+                    .generate_blocks_and_wait_for_tip(mature_blocks, test_manager.subscriber())
+                    .await;
+            }
+
+            clients.faucet.sync_and_await().await.unwrap();
+            dbg!(clients
+                .faucet
+                .account_balance(AccountId::ZERO)
+                .await
+                .unwrap());
+
+            assert!(
+                clients.faucet.account_balance(AccountId::ZERO).await.unwrap().total_orchard_balance.unwrap().into_u64() > 0
+                    || clients.faucet.account_balance(AccountId::ZERO).await.unwrap().confirmed_transparent_balance.unwrap().into_u64() > 0,
+                "No mining reward received from {kind:?}. Faucet Orchard Balance: {:}. Faucet Transparent Balance: {:}.",
+                clients.faucet.account_balance(AccountId::ZERO).await.unwrap().total_orchard_balance.unwrap().into_u64(),
+                clients.faucet.account_balance(AccountId::ZERO).await.unwrap().confirmed_transparent_balance.unwrap().into_u64()
+            );
+
+            test_manager.close().await;
+        }
+
+        async fn check_received_mining_reward_and_send(kind: &ValidatorKind) {
+            let (mut test_manager, mut clients) = Self::launch_and_build(kind, None, None).await;
+
+            test_manager
+                .generate_blocks_and_wait_for_tip(100, test_manager.subscriber())
+                .await;
+            clients.faucet.sync_and_await().await.unwrap();
+            dbg!(clients
+                .faucet
+                .account_balance(AccountId::ZERO)
+                .await
+                .unwrap());
+
+            assert!(
+                clients.faucet.account_balance(AccountId::ZERO).await.unwrap().confirmed_transparent_balance.unwrap().into_u64() > 0,
+                "No mining reward received from {kind:?}. Faucet Transparent Balance: {:}.",
+                clients.faucet.account_balance(AccountId::ZERO).await.unwrap().confirmed_transparent_balance.unwrap().into_u64()
+            );
+
+            // *Send all transparent funds to own orchard address.
+            clients.faucet.quick_shield(AccountId::ZERO).await.unwrap();
+            test_manager
+                .generate_blocks_and_wait_for_tip(1, test_manager.subscriber())
+                .await;
+            clients.faucet.sync_and_await().await.unwrap();
+            dbg!(clients
+                .faucet
+                .account_balance(AccountId::ZERO)
+                .await
+                .unwrap());
+
+            assert!(
+                clients.faucet.account_balance(AccountId::ZERO).await.unwrap().total_orchard_balance.unwrap().into_u64() > 0,
+                "No funds received from shield. Faucet Orchard Balance: {:}. Faucet Transparent Balance: {:}.",
+                clients.faucet.account_balance(AccountId::ZERO).await.unwrap().total_orchard_balance.unwrap().into_u64(),
+                clients.faucet.account_balance(AccountId::ZERO).await.unwrap().confirmed_transparent_balance.unwrap().into_u64()
+            );
+
+            let recipient_zaddr = clients.get_recipient_address("sapling").await.to_string();
+            from_inputs::quick_send(&mut clients.faucet, vec![(&recipient_zaddr, 250_000, None)])
+                .await
+                .unwrap();
+
+            test_manager
+                .generate_blocks_and_wait_for_tip(1, test_manager.subscriber())
+                .await;
+            clients.recipient.sync_and_await().await.unwrap();
+            dbg!(clients
+                .recipient
+                .account_balance(AccountId::ZERO)
+                .await
+                .unwrap());
+
+            assert_eq!(
+                clients
+                    .recipient
+                    .account_balance(AccountId::ZERO)
+                    .await
+                    .unwrap()
+                    .confirmed_sapling_balance
+                    .unwrap()
+                    .into_u64(),
+                250_000
+            );
+
+            test_manager.close().await;
+        }
+    }
 
     mod zcashd {
         use super::*;
@@ -98,288 +275,75 @@ mod launch_clients {
         #[tokio::test(flavor = "multi_thread")]
         #[allow(deprecated)]
         async fn zaino_clients() {
-            let mut test_manager = TestManager::<Zcashd, FetchService>::launch(
+            TestManager::<Zcashd, FetchService>::check_clients_connect(
                 &ValidatorKind::Zcashd,
                 None,
                 None,
-                None,
-                true,
-                false,
-                false,
             )
-            .await
-            .unwrap();
-            let clients = build_clients(
-                test_manager
-                    .zaino_grpc_listen_address
-                    .expect("zaino enabled")
-                    .port(),
-                ActivationHeights::default(),
-            );
-            dbg!(clients.faucet.do_info().await);
-            dbg!(clients.recipient.do_info().await);
-            test_manager.close().await;
+            .await;
         }
 
         #[tokio::test(flavor = "multi_thread")]
         #[allow(deprecated)]
         async fn zaino_clients_receive_mining_reward() {
-            let mut test_manager = TestManager::<Zcashd, FetchService>::launch(
+            TestManager::<Zcashd, FetchService>::check_received_mining_reward(
                 &ValidatorKind::Zcashd,
-                None,
-                None,
-                None,
-                true,
-                false,
-                false,
+                0,
             )
-            .await
-            .unwrap();
-            let mut clients = build_clients(
-                test_manager
-                    .zaino_grpc_listen_address
-                    .expect("zaino enabled")
-                    .port(),
-                ActivationHeights::default(),
-            );
-
-            clients.faucet.sync_and_await().await.unwrap();
-            dbg!(clients
-                .faucet
-                .account_balance(zip32::AccountId::ZERO)
-                .await
-                .unwrap());
-
-            assert!(
-                    clients.faucet.account_balance(zip32::AccountId::ZERO).await.unwrap().total_orchard_balance.unwrap().into_u64() > 0
-                        || clients.faucet.account_balance(zip32::AccountId::ZERO).await.unwrap().confirmed_transparent_balance.unwrap().into_u64() > 0,
-                    "No mining reward received from Zcashd. Faucet Orchard Balance: {:}. Faucet Transparent Balance: {:}.",
-                    clients.faucet.account_balance(zip32::AccountId::ZERO).await.unwrap().total_orchard_balance.unwrap().into_u64(),
-                    clients.faucet.account_balance(zip32::AccountId::ZERO).await.unwrap().confirmed_transparent_balance.unwrap().into_u64()
-                );
-
-            test_manager.close().await;
+            .await;
         }
     }
 
     mod zebrad {
         use super::*;
+        use zaino_testutils::ZEBRAD_TESTNET_CACHE_DIR;
+        use zcash_local_net::validator::zebrad::Zebrad;
 
         mod fetch_service {
             use super::*;
             #[allow(deprecated)]
             use zaino_state::FetchService;
-            use zaino_testutils::ZEBRAD_TESTNET_CACHE_DIR;
-            use zcash_local_net::validator::zebrad::Zebrad;
-            use zebra_chain::parameters::NetworkKind;
-            use zip32::AccountId;
 
             #[tokio::test(flavor = "multi_thread")]
             #[allow(deprecated)]
             async fn zaino_clients() {
-                let mut test_manager = TestManager::<Zebrad, FetchService>::launch(
+                TestManager::<Zebrad, FetchService>::check_clients_connect(
                     &ValidatorKind::Zebrad,
                     None,
                     None,
-                    None,
-                    true,
-                    false,
-                    false,
                 )
-                .await
-                .unwrap();
-                let clients = build_clients(
-                    test_manager
-                        .zaino_grpc_listen_address
-                        .expect("zaino enabled")
-                        .port(),
-                    ZEBRAD_DEFAULT_ACTIVATION_HEIGHTS,
-                );
-                dbg!(clients.faucet.do_info().await);
-                dbg!(clients.recipient.do_info().await);
-                test_manager.close().await;
+                .await;
             }
 
             #[tokio::test(flavor = "multi_thread")]
             #[allow(deprecated)]
             async fn zaino_clients_receive_mining_reward() {
-                let mut test_manager = TestManager::<Zebrad, FetchService>::launch(
+                TestManager::<Zebrad, FetchService>::check_received_mining_reward(
                     &ValidatorKind::Zebrad,
-                    None,
-                    None,
-                    None,
-                    true,
-                    false,
-                    false,
+                    100,
                 )
-                .await
-                .unwrap();
-                let mut clients = build_clients(
-                    test_manager
-                        .zaino_grpc_listen_address
-                        .expect("zaino enabled")
-                        .port(),
-                    ZEBRAD_DEFAULT_ACTIVATION_HEIGHTS,
-                );
-
-                clients.faucet.sync_and_await().await.unwrap();
-                dbg!(clients
-                    .faucet
-                    .account_balance(zip32::AccountId::ZERO)
-                    .await
-                    .unwrap());
-
-                test_manager
-                    .generate_blocks_and_wait_for_tip(100, test_manager.subscriber())
-                    .await;
-                clients.faucet.sync_and_await().await.unwrap();
-                dbg!(clients
-                    .faucet
-                    .account_balance(zip32::AccountId::ZERO)
-                    .await
-                    .unwrap());
-
-                assert!(
-                    clients.faucet.account_balance(zip32::AccountId::ZERO).await.unwrap().total_orchard_balance.unwrap().into_u64() > 0
-                        || clients.faucet.account_balance(zip32::AccountId::ZERO).await.unwrap().confirmed_transparent_balance.unwrap().into_u64() > 0,
-                    "No mining reward received from Zebrad. Faucet Orchard Balance: {:}. Faucet Transparent Balance: {:}.",
-                    clients.faucet.account_balance(zip32::AccountId::ZERO).await.unwrap().total_orchard_balance.unwrap().into_u64(),
-                    clients.faucet.account_balance(zip32::AccountId::ZERO).await.unwrap().confirmed_transparent_balance.unwrap().into_u64()
-            );
-
-                test_manager.close().await;
+                .await;
             }
 
             #[tokio::test(flavor = "multi_thread")]
             #[allow(deprecated)]
             async fn zaino_clients_receive_mining_reward_and_send() {
-                let mut test_manager = TestManager::<Zebrad, FetchService>::launch(
+                TestManager::<Zebrad, FetchService>::check_received_mining_reward_and_send(
                     &ValidatorKind::Zebrad,
-                    None,
-                    None,
-                    None,
-                    true,
-                    false,
-                    false,
                 )
-                .await
-                .unwrap();
-                let mut clients = build_clients(
-                    test_manager
-                        .zaino_grpc_listen_address
-                        .expect("zaino enabled")
-                        .port(),
-                    ZEBRAD_DEFAULT_ACTIVATION_HEIGHTS,
-                );
-
-                test_manager
-                    .generate_blocks_and_wait_for_tip(100, test_manager.subscriber())
-                    .await;
-                clients.faucet.sync_and_await().await.unwrap();
-                dbg!(clients
-                    .faucet
-                    .account_balance(zip32::AccountId::ZERO)
-                    .await
-                    .unwrap());
-
-                assert!(
-                    clients
-                        .faucet
-                        .account_balance(zip32::AccountId::ZERO)
-                        .await
-                        .unwrap()
-                        .confirmed_transparent_balance
-                        .unwrap()
-                        .into_u64()
-                        > 0,
-                    "No mining reward received from Zebrad. Faucet Transparent Balance: {:}.",
-                    clients
-                        .faucet
-                        .account_balance(zip32::AccountId::ZERO)
-                        .await
-                        .unwrap()
-                        .confirmed_transparent_balance
-                        .unwrap()
-                        .into_u64()
-                );
-
-                // *Send all transparent funds to own orchard address.
-                clients.faucet.quick_shield(AccountId::ZERO).await.unwrap();
-                test_manager
-                    .generate_blocks_and_wait_for_tip(1, test_manager.subscriber())
-                    .await;
-                clients.faucet.sync_and_await().await.unwrap();
-                dbg!(clients
-                    .faucet
-                    .account_balance(zip32::AccountId::ZERO)
-                    .await
-                    .unwrap());
-
-                assert!(
-                clients.faucet.account_balance(zip32::AccountId::ZERO).await.unwrap().total_orchard_balance.unwrap().into_u64() > 0,
-                "No funds received from shield. Faucet Orchard Balance: {:}. Faucet Transparent Balance: {:}.",
-                clients.faucet.account_balance(zip32::AccountId::ZERO).await.unwrap().total_orchard_balance.unwrap().into_u64(),
-                clients.faucet.account_balance(zip32::AccountId::ZERO).await.unwrap().confirmed_transparent_balance.unwrap().into_u64()
-            );
-
-                let recipient_zaddr = clients.get_recipient_address("sapling").await.to_string();
-                zingolib::testutils::lightclient::from_inputs::quick_send(
-                    &mut clients.faucet,
-                    vec![(&recipient_zaddr, 250_000, None)],
-                )
-                .await
-                .unwrap();
-
-                test_manager
-                    .generate_blocks_and_wait_for_tip(1, test_manager.subscriber())
-                    .await;
-                clients.recipient.sync_and_await().await.unwrap();
-                dbg!(clients
-                    .recipient
-                    .account_balance(zip32::AccountId::ZERO)
-                    .await
-                    .unwrap());
-
-                assert_eq!(
-                    clients
-                        .recipient
-                        .account_balance(zip32::AccountId::ZERO)
-                        .await
-                        .unwrap()
-                        .confirmed_sapling_balance
-                        .unwrap()
-                        .into_u64(),
-                    250_000
-                );
-
-                test_manager.close().await;
+                .await;
             }
 
             #[ignore = "requires fully synced testnet."]
             #[tokio::test(flavor = "multi_thread")]
             #[allow(deprecated)]
             async fn zaino_testnet() {
-                let mut test_manager = TestManager::<Zebrad, FetchService>::launch(
+                TestManager::<Zebrad, FetchService>::check_clients_connect(
                     &ValidatorKind::Zebrad,
                     Some(NetworkKind::Testnet),
-                    None,
                     ZEBRAD_TESTNET_CACHE_DIR.clone(),
-                    true,
-                    false,
-                    false,
                 )
-                .await
-                .unwrap();
-                let clients = build_clients(
-                    test_manager
-                        .zaino_grpc_listen_address
-                        .expect("zaino enabled")
-                        .port(),
-                    ZEBRAD_DEFAULT_ACTIVATION_HEIGHTS,
-                );
-                dbg!(clients.faucet.do_info().await);
-                dbg!(clients.recipient.do_info().await);
-                test_manager.close().await;
+                .await;
             }
         }
 
@@ -387,219 +351,47 @@ mod launch_clients {
             use super::*;
             #[allow(deprecated)]
             use zaino_state::StateService;
-            use zaino_testutils::ZEBRAD_TESTNET_CACHE_DIR;
-            use zcash_local_net::validator::zebrad::Zebrad;
-            use zebra_chain::parameters::NetworkKind;
-            use zip32::AccountId;
 
             #[tokio::test(flavor = "multi_thread")]
             #[allow(deprecated)]
             async fn zaino_clients() {
-                let mut test_manager = TestManager::<Zebrad, StateService>::launch(
+                TestManager::<Zebrad, StateService>::check_clients_connect(
                     &ValidatorKind::Zebrad,
                     None,
                     None,
-                    None,
-                    true,
-                    false,
-                    false,
                 )
-                .await
-                .unwrap();
-                let clients = build_clients(
-                    test_manager
-                        .zaino_grpc_listen_address
-                        .expect("zaino enabled")
-                        .port(),
-                    ZEBRAD_DEFAULT_ACTIVATION_HEIGHTS,
-                );
-                dbg!(clients.faucet.do_info().await);
-                dbg!(clients.recipient.do_info().await);
-                test_manager.close().await;
+                .await;
             }
 
             #[tokio::test(flavor = "multi_thread")]
             #[allow(deprecated)]
             async fn zaino_clients_receive_mining_reward() {
-                let mut test_manager = TestManager::<Zebrad, StateService>::launch(
+                TestManager::<Zebrad, StateService>::check_received_mining_reward(
                     &ValidatorKind::Zebrad,
-                    None,
-                    None,
-                    None,
-                    true,
-                    false,
-                    false,
+                    100,
                 )
-                .await
-                .unwrap();
-
-                let mut clients = build_clients(
-                    test_manager
-                        .zaino_grpc_listen_address
-                        .expect("zaino enabled")
-                        .port(),
-                    ZEBRAD_DEFAULT_ACTIVATION_HEIGHTS,
-                );
-
-                clients.faucet.sync_and_await().await.unwrap();
-                dbg!(clients
-                    .faucet
-                    .account_balance(zip32::AccountId::ZERO)
-                    .await
-                    .unwrap());
-
-                test_manager
-                    .generate_blocks_and_wait_for_tip(100, test_manager.subscriber())
-                    .await;
-                clients.faucet.sync_and_await().await.unwrap();
-                dbg!(clients
-                    .faucet
-                    .account_balance(zip32::AccountId::ZERO)
-                    .await
-                    .unwrap());
-
-                assert!(
-                    clients.faucet.account_balance(zip32::AccountId::ZERO).await.unwrap().total_orchard_balance.unwrap().into_u64() > 0
-                        || clients.faucet.account_balance(zip32::AccountId::ZERO).await.unwrap().confirmed_transparent_balance.unwrap().into_u64() > 0,
-                    "No mining reward received from Zebrad. Faucet Orchard Balance: {:}. Faucet Transparent Balance: {:}.",
-                    clients.faucet.account_balance(zip32::AccountId::ZERO).await.unwrap().total_orchard_balance.unwrap().into_u64(),
-                    clients.faucet.account_balance(zip32::AccountId::ZERO).await.unwrap().confirmed_transparent_balance.unwrap().into_u64()
-            );
-
-                test_manager.close().await;
+                .await;
             }
 
             #[tokio::test(flavor = "multi_thread")]
             #[allow(deprecated)]
             async fn zaino_clients_receive_mining_reward_and_send() {
-                let mut test_manager = TestManager::<Zebrad, StateService>::launch(
+                TestManager::<Zebrad, StateService>::check_received_mining_reward_and_send(
                     &ValidatorKind::Zebrad,
-                    None,
-                    None,
-                    None,
-                    true,
-                    false,
-                    false,
                 )
-                .await
-                .unwrap();
-
-                let mut clients = build_clients(
-                    test_manager
-                        .zaino_grpc_listen_address
-                        .expect("zaino enabled")
-                        .port(),
-                    ZEBRAD_DEFAULT_ACTIVATION_HEIGHTS,
-                );
-
-                test_manager
-                    .generate_blocks_and_wait_for_tip(100, test_manager.subscriber())
-                    .await;
-                clients.faucet.sync_and_await().await.unwrap();
-                dbg!(clients
-                    .faucet
-                    .account_balance(zip32::AccountId::ZERO)
-                    .await
-                    .unwrap());
-
-                assert!(
-                    clients
-                        .faucet
-                        .account_balance(zip32::AccountId::ZERO)
-                        .await
-                        .unwrap()
-                        .confirmed_transparent_balance
-                        .unwrap()
-                        .into_u64()
-                        > 0,
-                    "No mining reward received from Zebrad. Faucet Transparent Balance: {:}.",
-                    clients
-                        .faucet
-                        .account_balance(zip32::AccountId::ZERO)
-                        .await
-                        .unwrap()
-                        .confirmed_transparent_balance
-                        .unwrap()
-                        .into_u64()
-                );
-
-                // *Send all transparent funds to own orchard address.
-                clients.faucet.quick_shield(AccountId::ZERO).await.unwrap();
-                test_manager
-                    .generate_blocks_and_wait_for_tip(1, test_manager.subscriber())
-                    .await;
-                clients.faucet.sync_and_await().await.unwrap();
-                dbg!(clients
-                    .faucet
-                    .account_balance(zip32::AccountId::ZERO)
-                    .await
-                    .unwrap());
-
-                assert!(
-                clients.faucet.account_balance(zip32::AccountId::ZERO).await.unwrap().total_orchard_balance.unwrap().into_u64() > 0,
-                "No funds received from shield. Faucet Orchard Balance: {:}. Faucet Transparent Balance: {:}.",
-                clients.faucet.account_balance(zip32::AccountId::ZERO).await.unwrap().total_orchard_balance.unwrap().into_u64(),
-                clients.faucet.account_balance(zip32::AccountId::ZERO).await.unwrap().confirmed_transparent_balance.unwrap().into_u64()
-            );
-
-                let recipient_zaddr = clients.get_recipient_address("sapling").await.to_string();
-                zingolib::testutils::lightclient::from_inputs::quick_send(
-                    &mut clients.faucet,
-                    vec![(&recipient_zaddr, 250_000, None)],
-                )
-                .await
-                .unwrap();
-
-                test_manager
-                    .generate_blocks_and_wait_for_tip(1, test_manager.subscriber())
-                    .await;
-                clients.recipient.sync_and_await().await.unwrap();
-                dbg!(clients
-                    .recipient
-                    .account_balance(zip32::AccountId::ZERO)
-                    .await
-                    .unwrap());
-
-                assert_eq!(
-                    clients
-                        .recipient
-                        .account_balance(zip32::AccountId::ZERO)
-                        .await
-                        .unwrap()
-                        .confirmed_sapling_balance
-                        .unwrap()
-                        .into_u64(),
-                    250_000
-                );
-
-                test_manager.close().await;
+                .await;
             }
 
             #[ignore = "requires fully synced testnet."]
             #[tokio::test(flavor = "multi_thread")]
             #[allow(deprecated)]
             async fn zaino_testnet() {
-                let mut test_manager = TestManager::<Zebrad, StateService>::launch(
+                TestManager::<Zebrad, StateService>::check_clients_connect(
                     &ValidatorKind::Zebrad,
                     Some(NetworkKind::Testnet),
-                    None,
                     ZEBRAD_TESTNET_CACHE_DIR.clone(),
-                    true,
-                    false,
-                    false,
                 )
-                .await
-                .unwrap();
-                let clients = build_clients(
-                    test_manager
-                        .zaino_grpc_listen_address
-                        .expect("zaino enabled")
-                        .port(),
-                    ZEBRAD_DEFAULT_ACTIVATION_HEIGHTS,
-                );
-                dbg!(clients.faucet.do_info().await);
-                dbg!(clients.recipient.do_info().await);
-                test_manager.close().await;
+                .await;
             }
         }
     }
