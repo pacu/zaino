@@ -1,8 +1,52 @@
 //! Tests that compare the output of both `zcashd` and `zainod` through `FetchService`.
 
 #[allow(deprecated)]
-use zaino_state::{FetchServiceSubscriber, ZcashIndexer};
+use zaino_state::{FetchService, FetchServiceSubscriber, ZcashIndexer};
+use zaino_testutils::TestManager;
+use zcash_local_net::validator::zcashd::Zcashd;
 use zcash_local_net::validator::Validator as _;
+
+/// Assert that `query` returns the same value from the zcashd-backed and
+/// zaino-backed subscribers. `query` takes the subscriber by value (subscribers
+/// are `Clone`) so its future owns it — sidestepping the borrow-across-await
+/// problem. The pure-compare building block of the json_server tests.
+#[allow(deprecated)]
+async fn assert_subscribers_agree<Q, Fut, T>(
+    zcashd_subscriber: &FetchServiceSubscriber,
+    zaino_subscriber: &FetchServiceSubscriber,
+    query: Q,
+) where
+    Q: Fn(FetchServiceSubscriber) -> Fut,
+    Fut: std::future::Future<Output = T>,
+    T: std::fmt::Debug + PartialEq,
+{
+    let from_zcashd = query(zcashd_subscriber.clone()).await;
+    let from_zaino = query(zaino_subscriber.clone()).await;
+    assert_eq!(from_zcashd, from_zaino);
+}
+
+/// Mine `blocks` blocks one at a time, asserting `query` agrees across both
+/// subscribers before each. The looped form of [`assert_subscribers_agree`] for
+/// tests that check an invariant holds across the chain.
+#[allow(deprecated)]
+async fn compare_over_blocks<Q, Fut, T>(
+    test_manager: &TestManager<Zcashd, FetchService>,
+    zcashd_subscriber: &FetchServiceSubscriber,
+    zaino_subscriber: &FetchServiceSubscriber,
+    blocks: u32,
+    query: Q,
+) where
+    Q: Fn(FetchServiceSubscriber) -> Fut,
+    Fut: std::future::Future<Output = T>,
+    T: std::fmt::Debug + PartialEq,
+{
+    for _ in 0..blocks {
+        assert_subscribers_agree(zcashd_subscriber, zaino_subscriber, &query).await;
+        test_manager
+            .generate_blocks_and_wait_for_tips(1, zaino_subscriber, zcashd_subscriber)
+            .await;
+    }
+}
 
 #[allow(deprecated)]
 async fn launch_json_server_check_info() {
@@ -56,10 +100,10 @@ async fn get_best_blockhash_inner() {
     let (mut test_manager, _zcashd_service, zcashd_subscriber, _zaino_service, zaino_subscriber) =
         zaino_testutils::launch_zcashd_dual_fetch_services().await;
 
-    let zcashd_bbh = dbg!(zcashd_subscriber.get_best_blockhash().await.unwrap());
-    let zaino_bbh = dbg!(zaino_subscriber.get_best_blockhash().await.unwrap());
-
-    assert_eq!(zcashd_bbh, zaino_bbh);
+    assert_subscribers_agree(&zcashd_subscriber, &zaino_subscriber, |s| async move {
+        dbg!(s.get_best_blockhash().await.unwrap())
+    })
+    .await;
 
     test_manager.close().await;
 }
@@ -68,10 +112,10 @@ async fn get_block_count_inner() {
     let (mut test_manager, _zcashd_service, zcashd_subscriber, _zaino_service, zaino_subscriber) =
         zaino_testutils::launch_zcashd_dual_fetch_services().await;
 
-    let zcashd_block_count = dbg!(zcashd_subscriber.get_block_count().await.unwrap());
-    let zaino_block_count = dbg!(zaino_subscriber.get_block_count().await.unwrap());
-
-    assert_eq!(zcashd_block_count, zaino_block_count);
+    assert_subscribers_agree(&zcashd_subscriber, &zaino_subscriber, |s| async move {
+        dbg!(s.get_block_count().await.unwrap())
+    })
+    .await;
 
     test_manager.close().await;
 }
@@ -160,8 +204,9 @@ async fn get_tx_out_set_info_inner() {
     let (mut test_manager, _zcashd_service, zcashd_subscriber, _zaino_service, zaino_subscriber) =
         zaino_testutils::launch_zcashd_dual_fetch_services().await;
 
-    test_manager.generate_blocks_and_wait_for_tips(1, &zaino_subscriber, &zcashd_subscriber)
-    .await;
+    test_manager
+        .generate_blocks_and_wait_for_tips(1, &zaino_subscriber, &zcashd_subscriber)
+        .await;
 
     let zcashd_txoutset_info = zcashd_subscriber.get_tx_out_set_info().await.unwrap();
     let zaino_txoutset_info = zaino_subscriber.get_tx_out_set_info().await.unwrap();
@@ -255,17 +300,14 @@ mod zcashd {
                 zaino_subscriber,
             ) = zaino_testutils::launch_zcashd_dual_fetch_services().await;
 
-            const BLOCK_LIMIT: i32 = 10;
-
-            for _ in 0..BLOCK_LIMIT {
-                let zcashd_difficulty = zcashd_subscriber.get_difficulty().await.unwrap();
-                let zaino_difficulty = zaino_subscriber.get_difficulty().await.unwrap();
-
-                assert_eq!(zcashd_difficulty, zaino_difficulty);
-
-                test_manager.generate_blocks_and_wait_for_tips(1, &zaino_subscriber, &zcashd_subscriber)
-                .await;
-            }
+            compare_over_blocks(
+                &test_manager,
+                &zcashd_subscriber,
+                &zaino_subscriber,
+                10,
+                |s| async move { s.get_difficulty().await.unwrap() },
+            )
+            .await;
 
             test_manager.close().await;
         }
@@ -316,17 +358,14 @@ mod zcashd {
                 zaino_subscriber,
             ) = zaino_testutils::launch_zcashd_dual_fetch_services().await;
 
-            const BLOCK_LIMIT: i32 = 10;
-
-            for _ in 0..BLOCK_LIMIT {
-                let zcashd_mining_info = zcashd_subscriber.get_mining_info().await.unwrap();
-                let zaino_mining_info = zaino_subscriber.get_mining_info().await.unwrap();
-
-                assert_eq!(zcashd_mining_info, zaino_mining_info);
-
-                test_manager.generate_blocks_and_wait_for_tips(1, &zaino_subscriber, &zcashd_subscriber)
-                .await;
-            }
+            compare_over_blocks(
+                &test_manager,
+                &zcashd_subscriber,
+                &zaino_subscriber,
+                10,
+                |s| async move { s.get_mining_info().await.unwrap() },
+            )
+            .await;
 
             test_manager.close().await;
         }
@@ -351,8 +390,9 @@ mod zcashd {
 
             assert_eq!(zcashd_peer_info, zaino_peer_info);
 
-            test_manager.generate_blocks_and_wait_for_tips(1, &zaino_subscriber, &zcashd_subscriber)
-            .await;
+            test_manager
+                .generate_blocks_and_wait_for_tips(1, &zaino_subscriber, &zcashd_subscriber)
+                .await;
 
             test_manager.close().await;
         }
@@ -367,8 +407,9 @@ mod zcashd {
                 zaino_subscriber,
             ) = zaino_testutils::launch_zcashd_dual_fetch_services().await;
 
-            test_manager.generate_blocks_and_wait_for_tips(1, &zaino_subscriber, &zcashd_subscriber)
-            .await;
+            test_manager
+                .generate_blocks_and_wait_for_tips(1, &zaino_subscriber, &zcashd_subscriber)
+                .await;
 
             let zcashd_block_subsidy = zcashd_subscriber.get_block_subsidy(1).await.unwrap();
             let zaino_block_subsidy = zaino_subscriber.get_block_subsidy(1).await.unwrap();
@@ -389,13 +430,11 @@ mod zcashd {
             let (mut test_manager, _zcashd_service, zcashd_subscriber, _zaino_service, _zaino_sub) =
                 zaino_testutils::launch_zcashd_dual_fetch_services().await;
 
-            let rpc_call = |addr: String| {
-                let subscriber: &FetchServiceSubscriber = &zcashd_subscriber;
-                async move { subscriber.z_validate_address(addr).await.unwrap() }
-            };
-
-            walletless_tests::rpc::z_validate_address::run_z_validate_suite(&rpc_call).await;
-            walletless_tests::rpc::z_validate_address::run_z_validate_sapling(&rpc_call).await;
+            walletless_tests::rpc::z_validate_address::run_z_validate_for(
+                &zcashd_subscriber,
+                walletless_tests::rpc::z_validate_address::SaplingSuite::Standard,
+            )
+            .await;
 
             test_manager.close().await;
         }
@@ -418,8 +457,9 @@ mod zcashd {
             const BLOCK_LIMIT: u32 = 10;
 
             for i in 0..BLOCK_LIMIT {
-                test_manager.generate_blocks_and_wait_for_tips(1, &zaino_subscriber, &zcashd_subscriber)
-                .await;
+                test_manager
+                    .generate_blocks_and_wait_for_tips(1, &zaino_subscriber, &zcashd_subscriber)
+                    .await;
 
                 let block = zcashd_subscriber
                     .z_get_block(i.to_string(), Some(1))
@@ -443,6 +483,5 @@ mod zcashd {
                 assert_eq!(zcashd_get_block_header, zainod_block_header_response);
             }
         }
-
     }
 }

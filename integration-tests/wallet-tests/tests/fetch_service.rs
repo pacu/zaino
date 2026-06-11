@@ -125,15 +125,19 @@ async fn block_range_fixture<V: ValidatorExt>(
     }
 
     let recipient_transparent = clients.get_recipient_address("transparent").await;
-    let deshielding_txid = clients.send_from_faucet(&recipient_transparent, 250_000).await.head;
+    let deshielding_txid = clients
+        .send_from_faucet(&recipient_transparent, 250_000)
+        .await
+        .head;
 
     let recipient_sapling = clients.get_recipient_address("sapling").await;
-    let sapling_txid =
-        clients.send_from_faucet(&recipient_sapling, 250_000).await.head;
+    let sapling_txid = clients
+        .send_from_faucet(&recipient_sapling, 250_000)
+        .await
+        .head;
 
     let recipient_ua = clients.get_recipient_address("unified").await;
-    let orchard_txid =
-        clients.send_from_faucet(&recipient_ua, 250_000).await.head;
+    let orchard_txid = clients.send_from_faucet(&recipient_ua, 250_000).await.head;
 
     test_manager
         .generate_blocks_and_wait_for_tip(1, &fetch_service_subscriber)
@@ -180,10 +184,8 @@ async fn fund_and_fill_mempool<V: ValidatorExt>(
 
     let recipient_taddr = clients.get_recipient_address("transparent").await;
     let recipient_ua = clients.get_recipient_address("unified").await;
-    let transparent_txid =
-        clients.send_from_faucet(&recipient_taddr, 250_000).await;
-    let unified_txid =
-        clients.send_from_faucet(&recipient_ua, 250_000).await;
+    let transparent_txid = clients.send_from_faucet(&recipient_taddr, 250_000).await;
+    let unified_txid = clients.send_from_faucet(&recipient_ua, 250_000).await;
 
     // Allow the broadcaster and subscribers to observe the new transactions.
     tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;

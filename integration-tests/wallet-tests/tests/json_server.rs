@@ -1,13 +1,13 @@
 //! Tests that compare the output of both `zcashd` and `zainod` through `FetchService`.
 
+use nonempty::NonEmpty;
 #[allow(deprecated)]
 use zaino_state::{ChainIndex, FetchService, FetchServiceSubscriber, ZcashIndexer};
 use zaino_testutils::{TestManager, ValidatorKind};
 use zcash_local_net::logs::LogsToStdoutAndStderr as _;
 use zcash_local_net::validator::zcashd::Zcashd;
-use zebra_chain::subtree::NoteCommitmentSubtreeIndex;
-use nonempty::NonEmpty;
 use zcash_primitives::transaction::TxId;
+use zebra_chain::subtree::NoteCommitmentSubtreeIndex;
 use zebra_rpc::client::GetAddressBalanceRequest;
 use zebra_rpc::methods::GetAddressTxIdsRequest;
 

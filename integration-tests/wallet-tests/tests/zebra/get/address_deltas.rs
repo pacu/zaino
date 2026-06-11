@@ -72,7 +72,9 @@ async fn setup_chain<V: ValidatorExt>(
         .await;
     clients.sync_faucet().await;
 
-    clients.send_from_faucet(recipient_taddr.as_str(), 250_000).await;
+    clients
+        .send_from_faucet(recipient_taddr.as_str(), 250_000)
+        .await;
     test_manager
         .generate_blocks_and_wait_for_tip(1, &state_service_subscriber)
         .await;

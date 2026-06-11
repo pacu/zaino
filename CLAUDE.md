@@ -172,11 +172,15 @@ Reach for `grep` only as a fallback — when the server is genuinely
 unavailable, still indexing, or the target isn't code it understands — and
 say so when you do.
 
-**Multi-workspace caveat (this repo):** the tree is three *separate* Cargo
-workspaces — `Cargo.toml` (root, `packages/*`), `integration-tests/Cargo.toml`
-(walletless), and `integration-tests/wallet-tests/Cargo.toml` (wallet).
-rust-analyzer must list all three in `linkedProjects` or it silently
-resolves nothing in the unlisted ones (configured in `.helix/languages.toml`).
-So if an LSP query comes back empty, confirm the target workspace is
-actually indexed before concluding "no references" — an empty result can
-mean "not loaded," not "none exist."
+**Multi-workspace caveat (this repo):** the tree has three *separate* Cargo
+workspaces — `Cargo.toml` (root, `packages/*` production), `integration-tests/Cargo.toml`
+(walletless tests), and `integration-tests/wallet-tests/Cargo.toml` (wallet
+tests). rust-analyzer is scoped (in `.helix/languages.toml` and `.vscode/settings.json`)
+to the **two integration-test workspaces only** — the production workspace is
+intentionally left out: we only need LSP on test code, and indexing all of
+`packages/*` on top wedged the server. Production crates still resolve as path
+dependencies of the test workspaces (go-to-def into them works); they're just
+not editable members. A workspace absent from `linkedProjects` is silently
+un-analyzed, so if an LSP query comes back empty, confirm the target workspace
+is actually indexed before concluding "no references" — empty can mean "not
+loaded," not "none exist."

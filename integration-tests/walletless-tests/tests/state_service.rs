@@ -7,7 +7,8 @@ use zcash_local_net::validator::{zebrad::Zebrad, Validator};
 use zebra_chain::parameters::NetworkKind;
 use zebra_rpc::methods::{GetAddressBalanceRequest, GetAddressTxIdsRequest};
 
-#[allow(deprecated)]async fn state_service_check_info<V: ValidatorExt>(
+#[allow(deprecated)]
+async fn state_service_check_info<V: ValidatorExt>(
     validator: &ValidatorKind,
     chain_cache: Option<std::path::PathBuf>,
     network: NetworkKind,
@@ -18,12 +19,22 @@ use zebra_rpc::methods::{GetAddressBalanceRequest, GetAddressTxIdsRequest};
         fetch_service_subscriber,
         _state_service,
         state_service_subscriber,
-    ) = zaino_testutils::launch_state_and_fetch_services::<V>(validator, chain_cache, false, Some(network))
-        .await;
+    ) = zaino_testutils::launch_state_and_fetch_services::<V>(
+        validator,
+        chain_cache,
+        false,
+        Some(network),
+    )
+    .await;
 
     if dbg!(network.to_string()) == *"Regtest" {
-        test_manager.generate_blocks_and_wait_for_tips(1, &fetch_service_subscriber, &state_service_subscriber)
-        .await;
+        test_manager
+            .generate_blocks_and_wait_for_tips(
+                1,
+                &fetch_service_subscriber,
+                &state_service_subscriber,
+            )
+            .await;
     }
 
     let fetch_service_info = dbg!(fetch_service_subscriber.get_info().await.unwrap());
@@ -532,8 +543,13 @@ mod zebra {
             .await;
             let mut chaintip_subscriber = state_service_subscriber.chaintip_update_subscriber();
             for _ in 0..5 {
-                test_manager.generate_blocks_and_wait_for_tips(1, &fetch_service_subscriber, &state_service_subscriber)
-                .await;
+                test_manager
+                    .generate_blocks_and_wait_for_tips(
+                        1,
+                        &fetch_service_subscriber,
+                        &state_service_subscriber,
+                    )
+                    .await;
                 assert_eq!(
                     chaintip_subscriber.next_tip_hash().await.unwrap().0,
                     <[u8; 32]>::try_from(
@@ -609,8 +625,13 @@ mod zebra {
                 Some(NetworkKind::Regtest),
             )
             .await;
-            test_manager.generate_blocks_and_wait_for_tips(2, &fetch_service_subscriber, &state_service_subscriber)
-            .await;
+            test_manager
+                .generate_blocks_and_wait_for_tips(
+                    2,
+                    &fetch_service_subscriber,
+                    &state_service_subscriber,
+                )
+                .await;
 
             let fetch_service_bbh =
                 dbg!(fetch_service_subscriber.get_best_blockhash().await.unwrap());
@@ -634,8 +655,13 @@ mod zebra {
                 Some(NetworkKind::Regtest),
             )
             .await;
-            test_manager.generate_blocks_and_wait_for_tips(2, &fetch_service_subscriber, &state_service_subscriber)
-            .await;
+            test_manager
+                .generate_blocks_and_wait_for_tips(
+                    2,
+                    &fetch_service_subscriber,
+                    &state_service_subscriber,
+                )
+                .await;
 
             let fetch_service_block_count =
                 dbg!(fetch_service_subscriber.get_block_count().await.unwrap());
@@ -712,8 +738,13 @@ mod zebra {
                 initial_state_service_difficulty
             );
 
-            test_manager.generate_blocks_and_wait_for_tips(2, &fetch_service_subscriber, &state_service_subscriber)
-            .await;
+            test_manager
+                .generate_blocks_and_wait_for_tips(
+                    2,
+                    &fetch_service_subscriber,
+                    &state_service_subscriber,
+                )
+                .await;
 
             let final_fetch_service_difficulty =
                 fetch_service_subscriber.get_difficulty().await.unwrap();
@@ -743,8 +774,13 @@ mod zebra {
             )
             .await;
 
-            test_manager.generate_blocks_and_wait_for_tips(2, &fetch_service_subscriber, &state_service_subscriber)
-            .await;
+            test_manager
+                .generate_blocks_and_wait_for_tips(
+                    2,
+                    &fetch_service_subscriber,
+                    &state_service_subscriber,
+                )
+                .await;
 
             let initial_fetch_service_get_network_sol_ps = fetch_service_subscriber
                 .get_network_sol_ps(None, None)
@@ -780,8 +816,13 @@ mod zebra {
             )
             .await;
 
-            test_manager.generate_blocks_and_wait_for_tips(2, &fetch_service_subscriber, &state_service_subscriber)
-            .await;
+            test_manager
+                .generate_blocks_and_wait_for_tips(
+                    2,
+                    &fetch_service_subscriber,
+                    &state_service_subscriber,
+                )
+                .await;
 
             let fetch_service_peer_info = fetch_service_subscriber.get_peer_info().await.unwrap();
             let state_service_peer_info = state_service_subscriber.get_peer_info().await.unwrap();
@@ -810,13 +851,11 @@ mod zebra {
                 )
                 .await;
 
-                let rpc_call = |addr: String| {
-                    let subscriber = &state_service_subscriber;
-                    async move { subscriber.z_validate_address(addr).await.unwrap() }
-                };
-
-                walletless_tests::rpc::z_validate_address::run_z_validate_suite(&rpc_call).await;
-                walletless_tests::rpc::z_validate_address::run_z_validate_sapling(&rpc_call).await;
+                walletless_tests::rpc::z_validate_address::run_z_validate_for(
+                    &state_service_subscriber,
+                    walletless_tests::rpc::z_validate_address::SaplingSuite::Standard,
+                )
+                .await;
 
                 test_manager.close().await;
             }
@@ -907,8 +946,13 @@ mod zebra {
                 Some(NetworkKind::Regtest),
             )
             .await;
-            test_manager.generate_blocks_and_wait_for_tips(1, &fetch_service_subscriber, &state_service_subscriber)
-            .await;
+            test_manager
+                .generate_blocks_and_wait_for_tips(
+                    1,
+                    &fetch_service_subscriber,
+                    &state_service_subscriber,
+                )
+                .await;
 
             let fetch_service_block =
                 dbg!(fetch_service_subscriber.get_latest_block().await.unwrap());
@@ -932,8 +976,13 @@ mod zebra {
                 Some(NetworkKind::Regtest),
             )
             .await;
-            test_manager.generate_blocks_and_wait_for_tips(2, &fetch_service_subscriber, &state_service_subscriber)
-            .await;
+            test_manager
+                .generate_blocks_and_wait_for_tips(
+                    2,
+                    &fetch_service_subscriber,
+                    &state_service_subscriber,
+                )
+                .await;
 
             let second_block_by_height = BlockId {
                 height: 2,
@@ -982,8 +1031,13 @@ mod zebra {
             const BLOCK_LIMIT: u32 = 10;
 
             for i in 0..BLOCK_LIMIT {
-                test_manager.generate_blocks_and_wait_for_tips(1, &fetch_service_subscriber, &state_service_subscriber)
-                .await;
+                test_manager
+                    .generate_blocks_and_wait_for_tips(
+                        1,
+                        &fetch_service_subscriber,
+                        &state_service_subscriber,
+                    )
+                    .await;
 
                 let block = fetch_service_subscriber
                     .z_get_block(i.to_string(), Some(1))
@@ -1026,8 +1080,13 @@ mod zebra {
                 Some(NetworkKind::Regtest),
             )
             .await;
-            test_manager.generate_blocks_and_wait_for_tips(2, &fetch_service_subscriber, &state_service_subscriber)
-            .await;
+            test_manager
+                .generate_blocks_and_wait_for_tips(
+                    2,
+                    &fetch_service_subscriber,
+                    &state_service_subscriber,
+                )
+                .await;
 
             let chain_height = dbg!(state_service_subscriber.chain_height().await.unwrap()).0;
 
@@ -1064,8 +1123,13 @@ mod zebra {
                 Some(NetworkKind::Regtest),
             )
             .await;
-            test_manager.generate_blocks_and_wait_for_tips(5, &fetch_service_subscriber, &state_service_subscriber)
-            .await;
+            test_manager
+                .generate_blocks_and_wait_for_tips(
+                    5,
+                    &fetch_service_subscriber,
+                    &state_service_subscriber,
+                )
+                .await;
 
             let sapling_subtree_roots_request = GetSubtreeRootsArg {
                 start_index: 2,
@@ -1107,8 +1171,13 @@ mod zebra {
                 Some(NetworkKind::Regtest),
             )
             .await;
-            test_manager.generate_blocks_and_wait_for_tips(2, &fetch_service_subscriber, &state_service_subscriber)
-            .await;
+            test_manager
+                .generate_blocks_and_wait_for_tips(
+                    2,
+                    &fetch_service_subscriber,
+                    &state_service_subscriber,
+                )
+                .await;
 
             let fetch_service_treestate = fetch_service_subscriber
                 .get_latest_tree_state()
@@ -1135,8 +1204,13 @@ mod zebra {
                 Some(NetworkKind::Regtest),
             )
             .await;
-            test_manager.generate_blocks_and_wait_for_tips(6, &fetch_service_subscriber, &state_service_subscriber)
-            .await;
+            test_manager
+                .generate_blocks_and_wait_for_tips(
+                    6,
+                    &fetch_service_subscriber,
+                    &state_service_subscriber,
+                )
+                .await;
 
             let start_height: u64 = 2;
             let end_height: u64 = 5;

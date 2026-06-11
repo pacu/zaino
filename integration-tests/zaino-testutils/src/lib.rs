@@ -3,6 +3,7 @@
 #![warn(missing_docs)]
 #![forbid(unsafe_code)]
 
+use futures::StreamExt as _;
 use once_cell::sync::Lazy;
 use std::{
     future::Future,
@@ -19,6 +20,9 @@ use zaino_common::{
     validator::ValidatorConfig,
     CacheConfig, DatabaseConfig, Network, ServiceConfig, StorageConfig,
 };
+use zaino_fetch::jsonrpsee::connector::{test_node_and_return_url, JsonRpSeeConnector};
+use zaino_proto::proto::compact_formats::CompactBlock;
+use zaino_proto::proto::service::{BlockId, BlockRange};
 use zaino_serve::server::config::{GrpcServerConfig, JsonRpcServerConfig};
 use zaino_state::{
     BackendType, BlockchainSource, ChainIndex, FetchServiceSubscriber, LightWalletIndexer,
@@ -38,10 +42,6 @@ use zcash_local_net::{
     validator::zcashd::{Zcashd, ZcashdConfig},
 };
 use zcash_local_net::{logs::LogsToStdoutAndStderr, process::Process};
-use futures::StreamExt as _;
-use zaino_fetch::jsonrpsee::connector::{test_node_and_return_url, JsonRpSeeConnector};
-use zaino_proto::proto::compact_formats::CompactBlock;
-use zaino_proto::proto::service::{BlockId, BlockRange};
 use zebra_chain::parameters::NetworkKind;
 use zebra_rpc::methods::GetInfo;
 
@@ -750,7 +750,8 @@ where
         mined_against: &A,
         then_synced: &B,
     ) {
-        self.generate_blocks_and_wait_for_tip(n, mined_against).await;
+        self.generate_blocks_and_wait_for_tip(n, mined_against)
+            .await;
         self.generate_blocks_and_wait_for_tip(0, then_synced).await;
     }
 
@@ -956,10 +957,17 @@ pub async fn launch_zcashd_dual_fetch_services() -> (
     FetchService,
     FetchServiceSubscriber,
 ) {
-    let test_manager =
-        TestManager::<Zcashd, FetchService>::launch(&ValidatorKind::Zcashd, None, None, None, true, true, false)
-            .await
-            .unwrap();
+    let test_manager = TestManager::<Zcashd, FetchService>::launch(
+        &ValidatorKind::Zcashd,
+        None,
+        None,
+        None,
+        true,
+        true,
+        false,
+    )
+    .await
+    .unwrap();
 
     tokio::time::sleep(std::time::Duration::from_secs(3)).await;
 
@@ -1050,10 +1058,17 @@ pub async fn launch_with_fetch_subscriber<V: ValidatorExt>(
     validator: &ValidatorKind,
     chain_cache: Option<PathBuf>,
 ) -> (TestManager<V, FetchService>, FetchServiceSubscriber) {
-    let mut test_manager =
-        TestManager::<V, FetchService>::launch(validator, None, None, chain_cache, true, false, false)
-            .await
-            .unwrap();
+    let mut test_manager = TestManager::<V, FetchService>::launch(
+        validator,
+        None,
+        None,
+        chain_cache,
+        true,
+        false,
+        false,
+    )
+    .await
+    .unwrap();
     let fetch_service_subscriber = test_manager.service_subscriber.take().unwrap();
     (test_manager, fetch_service_subscriber)
 }
@@ -1167,7 +1182,6 @@ mod launch_testmanager {
                 .unwrap();
             test_manager.close().await;
         }
-
     }
 
     mod zebrad {
@@ -1255,7 +1269,6 @@ mod launch_testmanager {
                     .unwrap();
                 test_manager.close().await;
             }
-
         }
 
         mod state_service {
@@ -1339,7 +1352,6 @@ mod launch_testmanager {
                     .unwrap();
                 test_manager.close().await;
             }
-
         }
     }
 }

@@ -1,9 +1,9 @@
 //! These tests compare the output of `FetchService` with the output of `JsonRpcConnector`.
 
 use futures::StreamExt as _;
+use zaino_fetch::jsonrpsee::connector::JsonRpSeeConnector;
 use zaino_proto::proto::compact_formats::CompactBlock;
 use zaino_proto::proto::service::{BlockId, BlockRange, GetSubtreeRootsArg, PoolType};
-use zaino_fetch::jsonrpsee::connector::JsonRpSeeConnector;
 #[allow(deprecated)]
 use zaino_state::{
     FetchService, FetchServiceSubscriber, LightWalletIndexer, Status, StatusType, ZcashIndexer,
@@ -643,13 +643,11 @@ mod zcashd {
                 )
                 .await;
 
-            let rpc_call = |addr: String| {
-                let subscriber = &fetch_service_subscriber;
-                async move { subscriber.z_validate_address(addr).await.unwrap() }
-            };
-
-            walletless_tests::rpc::z_validate_address::run_z_validate_suite(&rpc_call).await;
-            walletless_tests::rpc::z_validate_address::run_z_validate_sapling(&rpc_call).await;
+            walletless_tests::rpc::z_validate_address::run_z_validate_for(
+                &fetch_service_subscriber,
+                walletless_tests::rpc::z_validate_address::SaplingSuite::Standard,
+            )
+            .await;
 
             test_manager.close().await;
         }
@@ -730,13 +728,11 @@ mod zebrad {
                 )
                 .await;
 
-            let rpc_call = |addr: String| {
-                let subscriber = &fetch_service_subscriber;
-                async move { subscriber.z_validate_address(addr).await.unwrap() }
-            };
-
-            walletless_tests::rpc::z_validate_address::run_z_validate_suite(&rpc_call).await;
-            walletless_tests::rpc::z_validate_address::run_z_validate_sapling_zebrad_passthrough_fetchservice(&rpc_call).await;
+            walletless_tests::rpc::z_validate_address::run_z_validate_for(
+                &fetch_service_subscriber,
+                walletless_tests::rpc::z_validate_address::SaplingSuite::ZebradPassthroughFetchService,
+            )
+            .await;
 
             test_manager.close().await;
         }

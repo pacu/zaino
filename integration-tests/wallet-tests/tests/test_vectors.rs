@@ -96,7 +96,9 @@ async fn create_200_block_regtest_chain_vectors() {
 
     // create transactions
     clients.shield_faucet().await;
-    clients.send_from_faucet(recipient_uaddr.as_str(), 250_000).await;
+    clients
+        .send_from_faucet(recipient_uaddr.as_str(), 250_000)
+        .await;
 
     // Generate block
     test_manager
@@ -110,8 +112,12 @@ async fn create_200_block_regtest_chain_vectors() {
     // create transactions
     clients.shield_faucet().await;
 
-    clients.send_from_faucet(recipient_taddr.as_str(), 250_000).await;
-    clients.send_from_faucet(recipient_uaddr.as_str(), 250_000).await;
+    clients
+        .send_from_faucet(recipient_taddr.as_str(), 250_000)
+        .await;
+    clients
+        .send_from_faucet(recipient_uaddr.as_str(), 250_000)
+        .await;
 
     from_inputs::quick_send(
         &mut clients.recipient,
@@ -133,8 +139,12 @@ async fn create_200_block_regtest_chain_vectors() {
     clients.shield_faucet().await;
     clients.shield_recipient().await;
 
-    clients.send_from_faucet(recipient_taddr.as_str(), 250_000).await;
-    clients.send_from_faucet(recipient_uaddr.as_str(), 250_000).await;
+    clients
+        .send_from_faucet(recipient_taddr.as_str(), 250_000)
+        .await;
+    clients
+        .send_from_faucet(recipient_uaddr.as_str(), 250_000)
+        .await;
 
     from_inputs::quick_send(
         &mut clients.recipient,
@@ -163,8 +173,12 @@ async fn create_200_block_regtest_chain_vectors() {
         clients.shield_faucet().await;
         clients.shield_recipient().await;
 
-        clients.send_from_faucet(recipient_taddr.as_str(), 250_000).await;
-        clients.send_from_faucet(recipient_uaddr.as_str(), 250_000).await;
+        clients
+            .send_from_faucet(recipient_taddr.as_str(), 250_000)
+            .await;
+        clients
+            .send_from_faucet(recipient_uaddr.as_str(), 250_000)
+            .await;
 
         from_inputs::quick_send(
             &mut clients.recipient,
@@ -198,9 +212,15 @@ async fn create_200_block_regtest_chain_vectors() {
         clients.shield_faucet().await;
         clients.shield_recipient().await;
 
-        clients.send_from_faucet(recipient_taddr.as_str(), 250_000).await;
-        clients.send_from_faucet(recipient_saddr.as_str(), 250_000).await;
-        clients.send_from_faucet(recipient_uaddr.as_str(), 250_000).await;
+        clients
+            .send_from_faucet(recipient_taddr.as_str(), 250_000)
+            .await;
+        clients
+            .send_from_faucet(recipient_saddr.as_str(), 250_000)
+            .await;
+        clients
+            .send_from_faucet(recipient_uaddr.as_str(), 250_000)
+            .await;
 
         from_inputs::quick_send(
             &mut clients.recipient,

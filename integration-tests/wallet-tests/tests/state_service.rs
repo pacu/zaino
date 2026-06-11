@@ -3,6 +3,7 @@ use zaino_fetch::jsonrpsee::response::address_deltas::GetAddressDeltasParams;
 use zaino_proto::proto::service::{BlockId, BlockRange, PoolType, TransparentAddressBlockFilter};
 use zaino_state::ChainIndex as _;
 
+use nonempty::NonEmpty;
 #[allow(deprecated)]
 use zaino_state::{
     FetchService, FetchServiceSubscriber, LightWalletIndexer, StateService, StateServiceSubscriber,
@@ -11,11 +12,10 @@ use zaino_state::{
 use zaino_testutils::ValidatorExt;
 use zaino_testutils::{TestManager, ValidatorKind};
 use zcash_local_net::validator::zebrad::Zebrad;
+use zcash_primitives::transaction::TxId;
 use zebra_chain::parameters::NetworkKind;
 use zebra_chain::subtree::NoteCommitmentSubtreeIndex;
 use zebra_rpc::methods::{GetAddressBalanceRequest, GetAddressTxIdsRequest};
-use nonempty::NonEmpty;
-use zcash_primitives::transaction::TxId;
 
 #[allow(deprecated)]
 // NOTE: the fetch and state services each have a seperate chain index to the instance of zaino connected to the lightclients and may be out of sync
@@ -467,14 +467,19 @@ async fn state_service_get_block_range_returns_all_pools<V: ValidatorExt>(
     };
 
     let recipient_transparent = clients.get_recipient_address("transparent").await;
-    let deshielding_txid = clients.send_from_faucet(&recipient_transparent, 250_000).await.head;
+    let deshielding_txid = clients
+        .send_from_faucet(&recipient_transparent, 250_000)
+        .await
+        .head;
 
     let recipient_sapling = clients.get_recipient_address("sapling").await;
-    let sapling_txid = clients.send_from_faucet(&recipient_sapling, 250_000).await.head;
+    let sapling_txid = clients
+        .send_from_faucet(&recipient_sapling, 250_000)
+        .await
+        .head;
 
     let recipient_ua = clients.get_recipient_address("unified").await;
-    let orchard_txid =
-        clients.send_from_faucet(&recipient_ua, 250_000).await.head;
+    let orchard_txid = clients.send_from_faucet(&recipient_ua, 250_000).await.head;
 
     test_manager
         .generate_blocks_and_wait_for_tips(1, &fetch_service_subscriber, &state_service_subscriber)
@@ -562,13 +567,9 @@ async fn state_service_get_block_range_out_of_range_test_upper_bound<V: Validato
         all_pools.clone(),
     )
     .await;
-    let (state_service_blocks, state_errored) = zaino_testutils::drain_block_range(
-        &state_service_subscriber,
-        1,
-        end_height,
-        all_pools,
-    )
-    .await;
+    let (state_service_blocks, state_errored) =
+        zaino_testutils::drain_block_range(&state_service_subscriber, 1, end_height, all_pools)
+            .await;
 
     // check that the block range is the same
     assert_eq!(fetch_service_blocks, state_service_blocks);
@@ -619,13 +620,9 @@ async fn state_service_get_block_range_out_of_range_test_lower_bound<V: Validato
         PoolType::Orchard as i32,
     ];
 
-    let (fetch_service_blocks, fetch_errored) = zaino_testutils::drain_block_range(
-        &fetch_service_subscriber,
-        106,
-        1,
-        all_pools.clone(),
-    )
-    .await;
+    let (fetch_service_blocks, fetch_errored) =
+        zaino_testutils::drain_block_range(&fetch_service_subscriber, 106, 1, all_pools.clone())
+            .await;
     let (state_service_blocks, state_errored) =
         zaino_testutils::drain_block_range(&state_service_subscriber, 106, 1, all_pools).await;
 
@@ -789,7 +786,9 @@ async fn state_service_get_address_transactions_regtest<V: ValidatorExt>(
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
     };
 
-    let tx = clients.send_from_faucet(recipient_taddr.as_str(), 250_000).await;
+    let tx = clients
+        .send_from_faucet(recipient_taddr.as_str(), 250_000)
+        .await;
     test_manager.local_net.generate_blocks(1).await.unwrap();
     tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
 
@@ -1044,7 +1043,9 @@ mod zebra {
                 .await;
             clients.sync_faucet().await;
 
-            clients.send_from_faucet(recipient_taddr.as_str(), 250_000).await;
+            clients
+                .send_from_faucet(recipient_taddr.as_str(), 250_000)
+                .await;
 
             // Let the broadcaster/subscribers observe the new tx
             tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
