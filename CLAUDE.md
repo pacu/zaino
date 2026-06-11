@@ -159,3 +159,24 @@ it, double-check whether `?` (in a `fn() -> Result<_, _>` test), a more
 descriptive `.expect("...")` with a message naming the invariant, or an
 `assert!`/`assert_matches!` would make the failure mode clearer. Prefer
 those alternatives whenever they fit.
+
+## Use the language server (LSP) for definitive code intelligence
+
+When answering *where* a symbol is defined, *who* calls or references it,
+its type, or its implementors, use the language server (go-to-definition,
+find-references, hover, call-hierarchy, workspace-symbol) — not `grep` or
+text search. Text search *guesses*; the LSP *resolves*: it follows `use`
+aliases, re-exports, generics, trait impls, and macro expansions a regex
+cannot, and it is not fooled by comments, strings, or shadowed names.
+Reach for `grep` only as a fallback — when the server is genuinely
+unavailable, still indexing, or the target isn't code it understands — and
+say so when you do.
+
+**Multi-workspace caveat (this repo):** the tree is three *separate* Cargo
+workspaces — `Cargo.toml` (root, `packages/*`), `integration-tests/Cargo.toml`
+(walletless), and `integration-tests/wallet-tests/Cargo.toml` (wallet).
+rust-analyzer must list all three in `linkedProjects` or it silently
+resolves nothing in the unlisted ones (configured in `.helix/languages.toml`).
+So if an LSP query comes back empty, confirm the target workspace is
+actually indexed before concluding "no references" — an empty result can
+mean "not loaded," not "none exist."
