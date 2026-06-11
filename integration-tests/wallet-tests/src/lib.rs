@@ -256,6 +256,89 @@ where
     (test_manager, clients)
 }
 
+/// Sync the faucet and, on zebrad, run `shield_rounds` rounds of "mature 100
+/// coinbase blocks, sync, shield", then mine one block and sync — waiting on
+/// both subscribers each time. The dual-subscriber funding preamble shared by
+/// the state_service and json_server tests; zcashd needs no shield, so the
+/// zebrad-only branch is skipped there.
+#[allow(deprecated)]
+pub async fn fund_faucet_dual<C, Service, A, B>(
+    test_manager: &TestManager<C, Service>,
+    clients: &mut Clients,
+    validator: &ValidatorKind,
+    mined_against: &A,
+    then_synced: &B,
+    shield_rounds: u32,
+) where
+    C: ValidatorExt,
+    Service: TestService,
+    IndexerError: From<<<Service as ZcashService>::Subscriber as ZcashIndexer>::Error>,
+    <Service as ZcashService>::Subscriber: PollableTip,
+    A: PollableTip,
+    B: PollableTip,
+{
+    clients.sync_faucet().await;
+    if matches!(validator, ValidatorKind::Zebrad) {
+        for _ in 0..shield_rounds {
+            test_manager
+                .generate_blocks_and_wait_for_tips(100, mined_against, then_synced)
+                .await;
+            clients.sync_faucet().await;
+            clients.shield_faucet().await;
+        }
+        test_manager
+            .generate_blocks_and_wait_for_tips(1, mined_against, then_synced)
+            .await;
+        clients.sync_faucet().await;
+    }
+}
+
+/// Fund the faucet via [`fund_faucet_dual`], optionally send 250_000 to the
+/// recipient's `send` pool address, then mine one block on both subscribers.
+/// Returns the recipient's transparent and unified addresses and the send txid
+/// (if `send` was `Some`). The shared dual-subscriber "fund and send one tx"
+/// setup behind state_service's `fund_and_send` and json_server's `jsonrpc_fund`.
+#[allow(deprecated)]
+pub async fn fund_and_send_dual<C, Service, A, B>(
+    test_manager: &TestManager<C, Service>,
+    clients: &mut Clients,
+    validator: &ValidatorKind,
+    mined_against: &A,
+    then_synced: &B,
+    shield_rounds: u32,
+    send: Option<Pool>,
+) -> (String, String, Option<NonEmpty<TxId>>)
+where
+    C: ValidatorExt,
+    Service: TestService,
+    IndexerError: From<<<Service as ZcashService>::Subscriber as ZcashIndexer>::Error>,
+    <Service as ZcashService>::Subscriber: PollableTip,
+    A: PollableTip,
+    B: PollableTip,
+{
+    fund_faucet_dual(
+        test_manager,
+        clients,
+        validator,
+        mined_against,
+        then_synced,
+        shield_rounds,
+    )
+    .await;
+    let recipient_taddr = clients.get_recipient_address("transparent").await;
+    let recipient_ua = clients.get_recipient_address("unified").await;
+    let txid = if let Some(pool) = send {
+        let addr = clients.get_recipient_address(pool.address_kind()).await;
+        Some(clients.send_from_faucet(&addr, 250_000).await)
+    } else {
+        None
+    };
+    test_manager
+        .generate_blocks_and_wait_for_tips(1, mined_against, then_synced)
+        .await;
+    (recipient_taddr, recipient_ua, txid)
+}
+
 /// Smoke tests relocated from `zaino-testutils`: launch a validator + Zaino,
 /// build wallet clients against it, and exercise mining-reward receipt and
 /// sends. Organised by validator / service backend.

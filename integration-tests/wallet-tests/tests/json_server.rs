@@ -60,19 +60,16 @@ async fn jsonrpc_fund(
     zcashd_subscriber: &FetchServiceSubscriber,
     send: Option<wallet_tests::Pool>,
 ) -> (String, String, Option<NonEmpty<TxId>>) {
-    clients.sync_faucet().await;
-    let recipient_taddr = clients.get_recipient_address("transparent").await;
-    let recipient_ua = clients.get_recipient_address("unified").await;
-    let txid = if let Some(pool) = send {
-        let addr = clients.get_recipient_address(pool.address_kind()).await;
-        Some(clients.send_from_faucet(&addr, 250_000).await)
-    } else {
-        None
-    };
-    test_manager
-        .generate_blocks_and_wait_for_tips(1, zaino_subscriber, zcashd_subscriber)
-        .await;
-    (recipient_taddr, recipient_ua, txid)
+    wallet_tests::fund_and_send_dual(
+        test_manager,
+        clients,
+        &ValidatorKind::Zcashd,
+        zaino_subscriber,
+        zcashd_subscriber,
+        1,
+        send,
+    )
+    .await
 }
 
 #[allow(deprecated)]

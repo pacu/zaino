@@ -75,29 +75,15 @@ async fn fund_faucet<V: ValidatorExt>(
     state_service_subscriber: &StateServiceSubscriber,
     shield_rounds: u32,
 ) {
-    clients.sync_faucet().await;
-
-    if matches!(validator, ValidatorKind::Zebrad) {
-        for _ in 0..shield_rounds {
-            test_manager
-                .generate_blocks_and_wait_for_tips(
-                    100,
-                    fetch_service_subscriber,
-                    state_service_subscriber,
-                )
-                .await;
-            clients.sync_faucet().await;
-            clients.shield_faucet().await;
-        }
-        test_manager
-            .generate_blocks_and_wait_for_tips(
-                1,
-                fetch_service_subscriber,
-                state_service_subscriber,
-            )
-            .await;
-        clients.sync_faucet().await;
-    }
+    wallet_tests::fund_faucet_dual(
+        test_manager,
+        clients,
+        validator,
+        fetch_service_subscriber,
+        state_service_subscriber,
+        shield_rounds,
+    )
+    .await;
 }
 
 /// Sync the faucet and, on zebrad, generate blocks up to height 100 (computing
@@ -149,22 +135,25 @@ async fn fund_and_send<V: ValidatorExt>(
     state_service_subscriber: &StateServiceSubscriber,
     pool: wallet_tests::Pool,
 ) -> (String, NonEmpty<TxId>) {
-    fund_faucet(
+    let (recipient_taddr, recipient_ua, txid) = wallet_tests::fund_and_send_dual(
         test_manager,
         clients,
         validator,
         fetch_service_subscriber,
         state_service_subscriber,
         1,
+        Some(pool),
     )
     .await;
-
-    let recipient = clients.get_recipient_address(pool.address_kind()).await;
-    let txid = clients.send_from_faucet(&recipient, 250_000).await;
-    test_manager
-        .generate_blocks_and_wait_for_tips(1, fetch_service_subscriber, state_service_subscriber)
-        .await;
-    (recipient, txid)
+    let recipient = if matches!(pool, wallet_tests::Pool::Transparent) {
+        recipient_taddr
+    } else {
+        recipient_ua
+    };
+    (
+        recipient,
+        txid.expect("fund_and_send_dual sends a tx when given Some(pool)"),
+    )
 }
 
 /// The best (nonfinalized) chaintip height as seen through the fetch service's
