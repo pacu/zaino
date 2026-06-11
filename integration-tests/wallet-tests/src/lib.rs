@@ -20,12 +20,11 @@ use zebra_chain::parameters::testnet::ConfiguredActivationHeights;
 use zebra_chain::parameters::NetworkKind;
 use zingo_test_vectors::seeds;
 use zingolib::lightclient::LightClient;
+use zingolib::wallet::balance::AccountBalance;
 use zingolib_testutils::scenarios::ClientBuilder;
 
-/// Re-exports so relocated tests keep their original call sites.
-pub use zingolib::get_base_address_macro;
+/// Re-export so relocated tests keep their original call sites.
 pub use zingolib::testutils::lightclient::from_inputs;
-pub use zingolib::wallet::balance::AccountBalance;
 
 /// Holds zingo lightclients along with the lightclient builder for
 /// wallet-to-validator tests.
@@ -50,7 +49,12 @@ impl Clients {
     }
 
     /// The faucet's account-0 balance.
-    pub async fn faucet_balance(&self) -> AccountBalance {
+    ///
+    /// Only called from the `launch_clients` test module; without the
+    /// `allow`, non-test builds (which compile that module out) would
+    /// flag it dead.
+    #[cfg_attr(not(test), allow(dead_code))]
+    async fn faucet_balance(&self) -> AccountBalance {
         self.faucet
             .account_balance(zip32::AccountId::ZERO)
             .await
