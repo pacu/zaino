@@ -2,7 +2,6 @@
 
 #![forbid(unsafe_code)]
 
-use wallet_tests::from_inputs;
 use zaino_state::ZcashIndexer;
 use zaino_state::ZcashService;
 use zaino_testutils::TestManager;
@@ -70,12 +69,7 @@ async fn send_and_assert_received<V, Service>(
     <Service as ZcashService>::Subscriber: zaino_testutils::PollableTip,
 {
     let recipient_address = clients.get_recipient_address(pool.address_kind()).await;
-    from_inputs::quick_send(
-        &mut clients.faucet,
-        vec![(&recipient_address, amount, None)],
-    )
-    .await
-    .unwrap();
+    clients.send_from_faucet(&recipient_address, amount).await;
     test_manager
         .generate_blocks_and_wait_for_tip(1, test_manager.subscriber())
         .await;
@@ -137,9 +131,7 @@ where
     fund_faucet(&test_manager, &mut clients, validator).await;
 
     let recipient_taddr = clients.get_recipient_address("transparent").await;
-    from_inputs::quick_send(&mut clients.faucet, vec![(&recipient_taddr, 250_000, None)])
-        .await
-        .unwrap();
+    clients.send_from_faucet(&recipient_taddr, 250_000).await;
 
     test_manager
         .generate_blocks_and_wait_for_tip(1, test_manager.subscriber())
@@ -234,15 +226,9 @@ where
     let recipient_ua = clients.get_recipient_address("unified").await;
     let recipient_zaddr = clients.get_recipient_address("sapling").await;
     let recipient_taddr = clients.get_recipient_address("transparent").await;
-    from_inputs::quick_send(&mut clients.faucet, vec![(&recipient_ua, 250_000, None)])
-        .await
-        .unwrap();
-    from_inputs::quick_send(&mut clients.faucet, vec![(&recipient_zaddr, 250_000, None)])
-        .await
-        .unwrap();
-    from_inputs::quick_send(&mut clients.faucet, vec![(&recipient_taddr, 250_000, None)])
-        .await
-        .unwrap();
+    clients.send_from_faucet(&recipient_ua, 250_000).await;
+    clients.send_from_faucet(&recipient_zaddr, 250_000).await;
+    clients.send_from_faucet(&recipient_taddr, 250_000).await;
     test_manager
         .generate_blocks_and_wait_for_tip(100, test_manager.subscriber())
         .await;
@@ -278,9 +264,7 @@ where
     fund_faucet(&test_manager, &mut clients, validator).await;
 
     let recipient_taddr = clients.get_recipient_address("transparent").await;
-    from_inputs::quick_send(&mut clients.faucet, vec![(&recipient_taddr, 250_000, None)])
-        .await
-        .unwrap();
+    clients.send_from_faucet(&recipient_taddr, 250_000).await;
     test_manager
         .generate_blocks_and_wait_for_tip(100, test_manager.subscriber())
         .await;
@@ -351,26 +335,10 @@ where
         clients.faucet.sync_and_await().await.unwrap();
     };
 
-    let txid_1 = from_inputs::quick_send(
-        &mut clients.faucet,
-        vec![(
-            &wallet_tests::get_base_address_macro!(&mut clients.recipient, "unified"),
-            250_000,
-            None,
-        )],
-    )
-    .await
-    .unwrap();
-    let txid_2 = from_inputs::quick_send(
-        &mut clients.faucet,
-        vec![(
-            &wallet_tests::get_base_address_macro!(&mut clients.recipient, "sapling"),
-            250_000,
-            None,
-        )],
-    )
-    .await
-    .unwrap();
+    let recipient_ua = clients.get_recipient_address("unified").await;
+    let txid_1 = clients.send_from_faucet(&recipient_ua, 250_000).await;
+    let recipient_zaddr = clients.get_recipient_address("sapling").await;
+    let txid_2 = clients.send_from_faucet(&recipient_zaddr, 250_000).await;
 
     println!("\n\nStarting Mempool!\n");
     clients.recipient.wallet.write().await.clear_all();

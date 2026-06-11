@@ -8,6 +8,7 @@
 
 #![forbid(unsafe_code)]
 
+use nonempty::NonEmpty;
 use std::path::PathBuf;
 use zaino_common::network::{ActivationHeights, ZEBRAD_DEFAULT_ACTIVATION_HEIGHTS};
 use zaino_proto::proto::compact_formats::CompactBlock;
@@ -62,6 +63,35 @@ impl Clients {
             .account_balance(zip32::AccountId::ZERO)
             .await
             .expect("recipient account_balance")
+    }
+
+    /// Send `amount` zatoshis from the faucet to `address`, returning the
+    /// transaction id(s).
+    pub async fn send_from_faucet(&mut self, address: &str, amount: u64) -> NonEmpty<TxId> {
+        from_inputs::quick_send(&mut self.faucet, vec![(address, amount, None)])
+            .await
+            .expect("quick_send from faucet")
+    }
+
+    /// Shield the faucet's account-0 transparent funds.
+    pub async fn shield_faucet(&mut self) {
+        self.faucet
+            .quick_shield(zip32::AccountId::ZERO)
+            .await
+            .expect("quick_shield faucet");
+    }
+
+    /// Sync the faucet wallet to the chain tip.
+    pub async fn sync_faucet(&mut self) {
+        self.faucet.sync_and_await().await.expect("sync faucet");
+    }
+
+    /// Sync the recipient wallet to the chain tip.
+    pub async fn sync_recipient(&mut self) {
+        self.recipient
+            .sync_and_await()
+            .await
+            .expect("sync recipient");
     }
 }
 

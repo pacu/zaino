@@ -3,7 +3,6 @@
 use futures::StreamExt as _;
 use hex::ToHex as _;
 use nonempty::NonEmpty;
-use wallet_tests::from_inputs;
 use zaino_proto::proto::service::{
     AddressList, BlockId, BlockRange, GetAddressUtxosArg, GetMempoolTxRequest, PoolType,
     TransparentAddressBlockFilter, TxFilter,
@@ -79,9 +78,7 @@ async fn send_and_mine<V: ValidatorExt>(
     address: &str,
     amount: u64,
 ) -> NonEmpty<TxId> {
-    let tx = from_inputs::quick_send(&mut clients.faucet, vec![(address, amount, None)])
-        .await
-        .unwrap();
+    let tx = clients.send_from_faucet(address, amount).await;
     test_manager
         .generate_blocks_and_wait_for_tip(1, fetch_service_subscriber)
         .await;
@@ -129,27 +126,15 @@ async fn block_range_fixture<V: ValidatorExt>(
     }
 
     let recipient_transparent = clients.get_recipient_address("transparent").await;
-    let deshielding_txid = from_inputs::quick_send(
-        &mut clients.faucet,
-        vec![(&recipient_transparent, 250_000, None)],
-    )
-    .await
-    .unwrap()
-    .head;
+    let deshielding_txid = clients.send_from_faucet(&recipient_transparent, 250_000).await.head;
 
     let recipient_sapling = clients.get_recipient_address("sapling").await;
     let sapling_txid =
-        from_inputs::quick_send(&mut clients.faucet, vec![(&recipient_sapling, 250_000, None)])
-            .await
-            .unwrap()
-            .head;
+        clients.send_from_faucet(&recipient_sapling, 250_000).await.head;
 
     let recipient_ua = clients.get_recipient_address("unified").await;
     let orchard_txid =
-        from_inputs::quick_send(&mut clients.faucet, vec![(&recipient_ua, 250_000, None)])
-            .await
-            .unwrap()
-            .head;
+        clients.send_from_faucet(&recipient_ua, 250_000).await.head;
 
     test_manager
         .generate_blocks_and_wait_for_tip(1, &fetch_service_subscriber)
@@ -197,13 +182,9 @@ async fn fund_and_fill_mempool<V: ValidatorExt>(
     let recipient_taddr = clients.get_recipient_address("transparent").await;
     let recipient_ua = clients.get_recipient_address("unified").await;
     let transparent_txid =
-        from_inputs::quick_send(&mut clients.faucet, vec![(&recipient_taddr, 250_000, None)])
-            .await
-            .unwrap();
+        clients.send_from_faucet(&recipient_taddr, 250_000).await;
     let unified_txid =
-        from_inputs::quick_send(&mut clients.faucet, vec![(&recipient_ua, 250_000, None)])
-            .await
-            .unwrap();
+        clients.send_from_faucet(&recipient_ua, 250_000).await;
 
     // Allow the broadcaster and subscribers to observe the new transactions.
     tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
@@ -599,9 +580,7 @@ async fn fetch_service_get_transaction_mempool<V: ValidatorExt>(validator: &Vali
     .await;
 
     let recipient_ua = clients.get_recipient_address("unified").await;
-    let tx = from_inputs::quick_send(&mut clients.faucet, vec![(&recipient_ua, 250_000, None)])
-        .await
-        .unwrap();
+    let tx = clients.send_from_faucet(&recipient_ua, 250_000).await;
 
     let tx_filter = TxFilter {
         block: None,
@@ -787,12 +766,8 @@ async fn fetch_service_get_mempool_stream<V: ValidatorExt>(validator: &Validator
 
     let recipient_ua = clients.get_recipient_address("unified").await;
     let recipient_taddr = clients.get_recipient_address("transparent").await;
-    from_inputs::quick_send(&mut clients.faucet, vec![(&recipient_taddr, 250_000, None)])
-        .await
-        .unwrap();
-    from_inputs::quick_send(&mut clients.faucet, vec![(&recipient_ua, 250_000, None)])
-        .await
-        .unwrap();
+    clients.send_from_faucet(&recipient_taddr, 250_000).await;
+    clients.send_from_faucet(&recipient_ua, 250_000).await;
 
     tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
     test_manager

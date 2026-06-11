@@ -3,7 +3,6 @@ use zaino_fetch::jsonrpsee::response::address_deltas::GetAddressDeltasParams;
 use zaino_proto::proto::service::{BlockId, BlockRange, PoolType, TransparentAddressBlockFilter};
 use zaino_state::ChainIndex as _;
 
-use wallet_tests::from_inputs;
 #[allow(deprecated)]
 use zaino_state::{
     FetchService, FetchServiceSubscriber, LightWalletIndexer, StateService, StateServiceSubscriber,
@@ -96,12 +95,7 @@ async fn state_service_get_address_balance<V: ValidatorExt>(validator: &Validato
         clients.faucet.sync_and_await().await.unwrap();
     };
 
-    from_inputs::quick_send(
-        &mut clients.faucet,
-        vec![(recipient_taddr.as_str(), 250_000, None)],
-    )
-    .await
-    .unwrap();
+    clients.send_from_faucet(recipient_taddr.as_str(), 250_000).await;
     test_manager
         .generate_blocks_and_wait_for_tips(1, &fetch_service_subscriber, &state_service_subscriber)
         .await;
@@ -183,12 +177,8 @@ async fn state_service_get_raw_mempool<V: ValidatorExt>(validator: &ValidatorKin
 
     let recipient_ua = clients.get_recipient_address("unified").await;
     let recipient_taddr = clients.get_recipient_address("transparent").await;
-    from_inputs::quick_send(&mut clients.faucet, vec![(&recipient_taddr, 250_000, None)])
-        .await
-        .unwrap();
-    from_inputs::quick_send(&mut clients.faucet, vec![(&recipient_ua, 250_000, None)])
-        .await
-        .unwrap();
+    clients.send_from_faucet(&recipient_taddr, 250_000).await;
+    clients.send_from_faucet(&recipient_ua, 250_000).await;
 
     tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
 
@@ -244,9 +234,7 @@ async fn state_service_get_block_range_returns_default_pools<V: ValidatorExt>(
     };
 
     let recipient_ua = clients.get_recipient_address("unified").await;
-    from_inputs::quick_send(&mut clients.faucet, vec![(&recipient_ua, 250_000, None)])
-        .await
-        .unwrap();
+    clients.send_from_faucet(&recipient_ua, 250_000).await;
 
     test_manager
         .generate_blocks_and_wait_for_tips(1, &fetch_service_subscriber, &state_service_subscriber)
@@ -386,29 +374,14 @@ async fn state_service_get_block_range_returns_all_pools<V: ValidatorExt>(
     };
 
     let recipient_transparent = clients.get_recipient_address("transparent").await;
-    let deshielding_txid = from_inputs::quick_send(
-        &mut clients.faucet,
-        vec![(&recipient_transparent, 250_000, None)],
-    )
-    .await
-    .unwrap()
-    .head;
+    let deshielding_txid = clients.send_from_faucet(&recipient_transparent, 250_000).await.head;
 
     let recipient_sapling = clients.get_recipient_address("sapling").await;
-    let sapling_txid = from_inputs::quick_send(
-        &mut clients.faucet,
-        vec![(&recipient_sapling, 250_000, None)],
-    )
-    .await
-    .unwrap()
-    .head;
+    let sapling_txid = clients.send_from_faucet(&recipient_sapling, 250_000).await.head;
 
     let recipient_ua = clients.get_recipient_address("unified").await;
     let orchard_txid =
-        from_inputs::quick_send(&mut clients.faucet, vec![(&recipient_ua, 250_000, None)])
-            .await
-            .unwrap()
-            .head;
+        clients.send_from_faucet(&recipient_ua, 250_000).await.head;
 
     test_manager
         .generate_blocks_and_wait_for_tips(1, &fetch_service_subscriber, &state_service_subscriber)
@@ -717,9 +690,7 @@ async fn state_service_z_get_treestate<V: ValidatorExt>(validator: &ValidatorKin
     };
 
     let recipient_ua = clients.get_recipient_address("unified").await;
-    from_inputs::quick_send(&mut clients.faucet, vec![(&recipient_ua, 250_000, None)])
-        .await
-        .unwrap();
+    clients.send_from_faucet(&recipient_ua, 250_000).await;
 
     test_manager
         .generate_blocks_and_wait_for_tips(1, &fetch_service_subscriber, &state_service_subscriber)
@@ -775,9 +746,7 @@ async fn state_service_z_get_subtrees_by_index<V: ValidatorExt>(validator: &Vali
     };
 
     let recipient_ua = clients.get_recipient_address("unified").await;
-    from_inputs::quick_send(&mut clients.faucet, vec![(&recipient_ua, 250_000, None)])
-        .await
-        .unwrap();
+    clients.send_from_faucet(&recipient_ua, 250_000).await;
 
     test_manager
         .generate_blocks_and_wait_for_tips(1, &fetch_service_subscriber, &state_service_subscriber)
@@ -834,9 +803,7 @@ async fn state_service_get_raw_transaction<V: ValidatorExt + LogsToStdoutAndStde
     };
 
     let recipient_ua = clients.get_recipient_address("unified").await.to_string();
-    let tx = from_inputs::quick_send(&mut clients.faucet, vec![(&recipient_ua, 250_000, None)])
-        .await
-        .unwrap();
+    let tx = clients.send_from_faucet(&recipient_ua, 250_000).await;
 
     test_manager
         .generate_blocks_and_wait_for_tips(1, &fetch_service_subscriber, &state_service_subscriber)
@@ -886,12 +853,7 @@ async fn state_service_get_address_transactions_regtest<V: ValidatorExt>(
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
     };
 
-    let tx = from_inputs::quick_send(
-        &mut clients.faucet,
-        vec![(recipient_taddr.as_str(), 250_000, None)],
-    )
-    .await
-    .unwrap();
+    let tx = clients.send_from_faucet(recipient_taddr.as_str(), 250_000).await;
     test_manager.local_net.generate_blocks(1).await.unwrap();
     tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
 
@@ -964,12 +926,7 @@ async fn state_service_get_address_tx_ids<V: ValidatorExt>(validator: &Validator
         clients.faucet.sync_and_await().await.unwrap();
     };
 
-    let tx = from_inputs::quick_send(
-        &mut clients.faucet,
-        vec![(recipient_taddr.as_str(), 250_000, None)],
-    )
-    .await
-    .unwrap();
+    let tx = clients.send_from_faucet(recipient_taddr.as_str(), 250_000).await;
     test_manager
         .generate_blocks_and_wait_for_tips(1, &fetch_service_subscriber, &state_service_subscriber)
         .await;
@@ -1043,12 +1000,7 @@ async fn state_service_get_address_utxos<V: ValidatorExt>(validator: &ValidatorK
         clients.faucet.sync_and_await().await.unwrap();
     };
 
-    let txid_1 = from_inputs::quick_send(
-        &mut clients.faucet,
-        vec![(recipient_taddr.as_str(), 250_000, None)],
-    )
-    .await
-    .unwrap();
+    let txid_1 = clients.send_from_faucet(recipient_taddr.as_str(), 250_000).await;
     test_manager
         .generate_blocks_and_wait_for_tips(1, &fetch_service_subscriber, &state_service_subscriber)
         .await;
@@ -1201,12 +1153,7 @@ mod zebra {
                 .await;
             clients.faucet.sync_and_await().await.unwrap();
 
-            from_inputs::quick_send(
-                &mut clients.faucet,
-                vec![(recipient_taddr.as_str(), 250_000, None)],
-            )
-            .await
-            .unwrap();
+            clients.send_from_faucet(recipient_taddr.as_str(), 250_000).await;
 
             // Let the broadcaster/subscribers observe the new tx
             tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
