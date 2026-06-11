@@ -136,31 +136,43 @@
 //!
 //! ## v1.1.0 → v1.2.0
 //!
-//! `Migration1_1_0To1_2_0` is a **minor in-place index backfill**.
+//! `Migration1_1_0To1_2_0` is a **minor in-place index backfill**, run as two sequential stages.
 //!
 //! Important changes in v1.2.0:
 //! - The `spent` outpoint index is promoted to a core finalised-state table rather than being tied
 //!   to transparent address-history support.
-//! - Existing databases must backfill `spent` from the already-stored transparent transaction data.
+//! - A reverse transaction-id index (`txid_location`, `txid -> TxLocation`) is added so
+//!   previous-output resolution is an O(log n) point lookup instead of a full scan of the
+//!   height-keyed `txids` table.
+//! - Existing databases must backfill both indices from the already-stored transparent transaction
+//!   data.
 //!
 //! Mechanics:
 //! - No shadow database is created.
-//! - The migration reads each block’s `TransparentTxList` through the existing transparent block
-//!   capability.
-//! - For every non-null transparent input, it writes:
-//!   `Outpoint -> StoredEntryFixed<TxLocation>`
-//!   into the `spent` table.
-//! - Progress is stored as a temporary `StoredEntryFixed<Height>` entry in the existing metadata DB
-//!   under `_migration_spent_progress_1_2_0_next_height`.
-//! - The temporary progress entry is removed once the migration reaches `Complete`.
+//! - Stage A builds `txid_location`: it scans the raw `txids` table from genesis to the current
+//!   finalised tip and writes `txid -> StoredEntryFixed<TxLocation>`. It runs first because Stage B
+//!   resolves previous outputs through this index.
+//! - Stage B builds `spent` + the txout-set accumulator: it reads each block's `TransparentTxList`
+//!   through the existing transparent block capability and, for every non-null transparent input,
+//!   writes `Outpoint -> StoredEntryFixed<TxLocation>` into the `spent` table, advancing the
+//!   singleton accumulator per block.
+//! - Each stage tracks its own progress as a temporary `StoredEntryFixed<Height>` entry in the
+//!   metadata DB (`_migration_txid_location_progress_1_2_0_next_height` and
+//!   `_migration_spent_progress_1_2_0_next_height`); both are removed on `Complete`.
+//! - **0.4.0-alpha.1 compatibility (temporary):** a cache built by the alpha is recorded at v1.2.0
+//!   with an empty `txid_location` index. On open, a non-empty database at version >= 1.2.0 whose
+//!   `txid_location` table is empty has its `spent` table cleared and its recorded version rolled
+//!   back to 1.1.0 so this migration rebuilds the indices in place. This shim is removed once 0.4.0
+//!   ships.
 //!
 //! Safety and resumability:
-//! - Deterministic: the `spent` index is derived only from existing transparent block data.
-//! - Crash-resumable: the temporary progress height records the next block height to migrate.
-//! - Crash-safe: spent entries for a height and the progress update are committed in the same LMDB
-//!   write transaction.
-//! - Idempotent on resume: if a spent entry already exists, the migration verifies its checksum and
-//!   `TxLocation`; matching entries are accepted, conflicting entries fail the migration.
+//! - Deterministic: both indices are derived only from existing transparent / txid block data.
+//! - Crash-resumable: each stage resumes from its own temporary progress height.
+//! - Crash-safe: for each height the `spent` entries, accumulator, and progress update are committed
+//!   in one LMDB transaction; `txid_location` entries and their progress likewise.
+//! - Idempotent on resume: an already-present `spent` / `txid_location` entry is verified by checksum
+//!   and `TxLocation`; matching entries are accepted, conflicting entries fail the migration.
+//! - Re-entrant: `migrate` drives itself off the per-stage progress keys, not `migration_status`.
 //! - No unsafe code and no temporary named LMDB database are used.
 
 use super::{
