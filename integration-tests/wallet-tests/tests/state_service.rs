@@ -14,6 +14,8 @@ use zcash_local_net::validator::zebrad::Zebrad;
 use zebra_chain::parameters::NetworkKind;
 use zebra_chain::subtree::NoteCommitmentSubtreeIndex;
 use zebra_rpc::methods::{GetAddressBalanceRequest, GetAddressTxIdsRequest};
+use nonempty::NonEmpty;
+use zcash_primitives::transaction::TxId;
 
 #[allow(deprecated)]
 // NOTE: the fetch and state services each have a seperate chain index to the instance of zaino connected to the lightclients and may be out of sync
@@ -131,6 +133,49 @@ async fn generate_up_to_height_100<V: ValidatorExt>(
     }
 }
 
+/// Fund the faucet (one shield round) and send 250_000 to the recipient's
+/// `pool` address, mining it in on both subscribers; returns the recipient
+/// address and the send txid. The shared "fund and send one transaction" setup
+/// the single-send state_service query tests share (the dual-subscriber
+/// analogue of the fetch_service `fund_and_send`). Takes the handles by
+/// reference because the owned fetch/state services must stay alive in the
+/// caller.
+#[allow(deprecated)]
+async fn fund_and_send<V: ValidatorExt>(
+    test_manager: &TestManager<V, StateService>,
+    clients: &mut wallet_tests::Clients,
+    validator: &ValidatorKind,
+    fetch_service_subscriber: &FetchServiceSubscriber,
+    state_service_subscriber: &StateServiceSubscriber,
+    pool: wallet_tests::Pool,
+) -> (String, NonEmpty<TxId>) {
+    fund_faucet(
+        test_manager,
+        clients,
+        validator,
+        fetch_service_subscriber,
+        state_service_subscriber,
+        1,
+    )
+    .await;
+
+    let recipient = clients.get_recipient_address(pool.address_kind()).await;
+    let txid = clients.send_from_faucet(&recipient, 250_000).await;
+    test_manager
+        .generate_blocks_and_wait_for_tips(1, fetch_service_subscriber, state_service_subscriber)
+        .await;
+    (recipient, txid)
+}
+
+/// The best (nonfinalized) chaintip height as seen through the fetch service's
+/// indexer snapshot.
+#[allow(deprecated)]
+async fn best_chaintip_height(fetch_service_subscriber: &FetchServiceSubscriber) -> u32 {
+    let idx = &fetch_service_subscriber.indexer;
+    let snapshot = idx.snapshot_nonfinalized_state().await.unwrap();
+    u32::from(idx.best_chaintip(&snapshot).await.unwrap().height)
+}
+
 #[allow(deprecated)]
 async fn state_service_get_address_balance<V: ValidatorExt>(validator: &ValidatorKind) {
     let (
@@ -142,22 +187,15 @@ async fn state_service_get_address_balance<V: ValidatorExt>(validator: &Validato
         mut clients,
     ) = create_test_manager_and_services::<V>(validator, None, true, None).await;
 
-    let recipient_taddr = clients.get_recipient_address("transparent").await;
-
-    fund_faucet(
+    let (recipient_taddr, _txid) = fund_and_send(
         &test_manager,
         &mut clients,
         validator,
         &fetch_service_subscriber,
         &state_service_subscriber,
-        1,
+        wallet_tests::Pool::Transparent,
     )
     .await;
-
-    clients.send_from_faucet(recipient_taddr.as_str(), 250_000).await;
-    test_manager
-        .generate_blocks_and_wait_for_tips(1, &fetch_service_subscriber, &state_service_subscriber)
-        .await;
 
     clients.sync_recipient().await;
     let recipient_balance = clients.recipient_balance().await;
@@ -249,22 +287,15 @@ async fn state_service_get_block_range_returns_default_pools<V: ValidatorExt>(
         mut clients,
     ) = create_test_manager_and_services::<V>(validator, None, true, None).await;
 
-    fund_faucet(
+    fund_and_send(
         &test_manager,
         &mut clients,
         validator,
         &fetch_service_subscriber,
         &state_service_subscriber,
-        1,
+        wallet_tests::Pool::Orchard,
     )
     .await;
-
-    let recipient_ua = clients.get_recipient_address("unified").await;
-    clients.send_from_faucet(&recipient_ua, 250_000).await;
-
-    test_manager
-        .generate_blocks_and_wait_for_tips(1, &fetch_service_subscriber, &state_service_subscriber)
-        .await;
 
     let start_height: u64 = 100;
     let end_height: u64 = 103;
@@ -569,22 +600,15 @@ async fn state_service_z_get_treestate<V: ValidatorExt>(validator: &ValidatorKin
         mut clients,
     ) = create_test_manager_and_services::<V>(validator, None, true, None).await;
 
-    fund_faucet(
+    fund_and_send(
         &test_manager,
         &mut clients,
         validator,
         &fetch_service_subscriber,
         &state_service_subscriber,
-        1,
+        wallet_tests::Pool::Orchard,
     )
     .await;
-
-    let recipient_ua = clients.get_recipient_address("unified").await;
-    clients.send_from_faucet(&recipient_ua, 250_000).await;
-
-    test_manager
-        .generate_blocks_and_wait_for_tips(1, &fetch_service_subscriber, &state_service_subscriber)
-        .await;
 
     let chain_height = dbg!(state_service_subscriber.chain_height().await.unwrap()).0;
 
@@ -613,22 +637,15 @@ async fn state_service_z_get_subtrees_by_index<V: ValidatorExt>(validator: &Vali
         mut clients,
     ) = create_test_manager_and_services::<V>(validator, None, true, None).await;
 
-    fund_faucet(
+    fund_and_send(
         &test_manager,
         &mut clients,
         validator,
         &fetch_service_subscriber,
         &state_service_subscriber,
-        1,
+        wallet_tests::Pool::Orchard,
     )
     .await;
-
-    let recipient_ua = clients.get_recipient_address("unified").await;
-    clients.send_from_faucet(&recipient_ua, 250_000).await;
-
-    test_manager
-        .generate_blocks_and_wait_for_tips(1, &fetch_service_subscriber, &state_service_subscriber)
-        .await;
 
     let fetch_service_subtrees = dbg!(fetch_service_subscriber
         .z_get_subtrees_by_index("orchard".to_string(), NoteCommitmentSubtreeIndex(0), None)
@@ -658,22 +675,15 @@ async fn state_service_get_raw_transaction<V: ValidatorExt + LogsToStdoutAndStde
         mut clients,
     ) = create_test_manager_and_services::<V>(validator, None, true, None).await;
 
-    fund_faucet(
+    let (_recipient_ua, tx) = fund_and_send(
         &test_manager,
         &mut clients,
         validator,
         &fetch_service_subscriber,
         &state_service_subscriber,
-        1,
+        wallet_tests::Pool::Orchard,
     )
     .await;
-
-    let recipient_ua = clients.get_recipient_address("unified").await.to_string();
-    let tx = clients.send_from_faucet(&recipient_ua, 250_000).await;
-
-    test_manager
-        .generate_blocks_and_wait_for_tips(1, &fetch_service_subscriber, &state_service_subscriber)
-        .await;
 
     test_manager.local_net.print_stdout();
 
@@ -723,11 +733,7 @@ async fn state_service_get_address_transactions_regtest<V: ValidatorExt>(
     test_manager.local_net.generate_blocks(1).await.unwrap();
     tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
 
-    let chain_height: u32 = {
-        let idx = &fetch_service_subscriber.indexer;
-        let snapshot = idx.snapshot_nonfinalized_state().await.unwrap();
-        u32::from(idx.best_chaintip(&snapshot).await.unwrap().height)
-    };
+    let chain_height = best_chaintip_height(&fetch_service_subscriber).await;
     dbg!(&chain_height);
 
     let state_service_txids = state_service_subscriber
@@ -769,28 +775,17 @@ async fn state_service_get_address_tx_ids<V: ValidatorExt>(validator: &Validator
         mut clients,
     ) = create_test_manager_and_services::<V>(validator, None, true, None).await;
 
-    let recipient_taddr = clients.get_recipient_address("transparent").await;
-    fund_faucet(
+    let (recipient_taddr, tx) = fund_and_send(
         &test_manager,
         &mut clients,
         validator,
         &fetch_service_subscriber,
         &state_service_subscriber,
-        1,
+        wallet_tests::Pool::Transparent,
     )
     .await;
 
-    let tx = clients.send_from_faucet(recipient_taddr.as_str(), 250_000).await;
-    test_manager
-        .generate_blocks_and_wait_for_tips(1, &fetch_service_subscriber, &state_service_subscriber)
-        .await;
-
-    let chain_height: u32 = {
-        let idx = &fetch_service_subscriber.indexer;
-        let snapshot = idx.snapshot_nonfinalized_state().await.unwrap();
-        u32::from(idx.best_chaintip(&snapshot).await.unwrap().height)
-    };
-
+    let chain_height = best_chaintip_height(&fetch_service_subscriber).await;
     dbg!(&chain_height);
 
     let fetch_service_txids = fetch_service_subscriber
@@ -831,21 +826,15 @@ async fn state_service_get_address_utxos<V: ValidatorExt>(validator: &ValidatorK
         mut clients,
     ) = create_test_manager_and_services::<V>(validator, None, true, None).await;
 
-    let recipient_taddr = clients.get_recipient_address("transparent").await;
-    fund_faucet(
+    let (recipient_taddr, txid_1) = fund_and_send(
         &test_manager,
         &mut clients,
         validator,
         &fetch_service_subscriber,
         &state_service_subscriber,
-        1,
+        wallet_tests::Pool::Transparent,
     )
     .await;
-
-    let txid_1 = clients.send_from_faucet(recipient_taddr.as_str(), 250_000).await;
-    test_manager
-        .generate_blocks_and_wait_for_tips(1, &fetch_service_subscriber, &state_service_subscriber)
-        .await;
 
     clients.sync_faucet().await;
 
