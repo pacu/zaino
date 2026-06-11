@@ -98,6 +98,39 @@ async fn fund_faucet<V: ValidatorExt>(
     }
 }
 
+/// Sync the faucet and, on zebrad, generate blocks up to height 100 (computing
+/// how many are still needed from the current tip). Shared setup for the
+/// out-of-range block_range tests, which need a known tip but no funding.
+#[allow(deprecated)]
+async fn generate_up_to_height_100<V: ValidatorExt>(
+    test_manager: &TestManager<V, StateService>,
+    clients: &mut wallet_tests::Clients,
+    validator: &ValidatorKind,
+    fetch_service_subscriber: &FetchServiceSubscriber,
+    state_service_subscriber: &StateServiceSubscriber,
+) {
+    clients.sync_faucet().await;
+
+    // Test manager generates blocks on startup; only generate up to height 100.
+    let chain_height = state_service_subscriber
+        .get_latest_block()
+        .await
+        .unwrap()
+        .height as u32;
+    let blocks_to_height_100 = 100 - chain_height;
+
+    if matches!(validator, ValidatorKind::Zebrad) {
+        test_manager
+            .generate_blocks_and_wait_for_tips(
+                blocks_to_height_100,
+                fetch_service_subscriber,
+                state_service_subscriber,
+            )
+            .await;
+        clients.sync_faucet().await;
+    }
+}
+
 #[allow(deprecated)]
 async fn state_service_get_address_balance<V: ValidatorExt>(validator: &ValidatorKind) {
     let (
@@ -415,95 +448,53 @@ async fn state_service_get_block_range_out_of_range_test_upper_bound<V: Validato
         mut clients,
     ) = create_test_manager_and_services::<V>(validator, None, true, None).await;
 
-    clients.sync_faucet().await;
+    generate_up_to_height_100(
+        &test_manager,
+        &mut clients,
+        validator,
+        &fetch_service_subscriber,
+        &state_service_subscriber,
+    )
+    .await;
 
-    // Test manager generates blocks on startup, check current height to ensure we only generate up to height 100
-    let chain_height = state_service_subscriber
-        .get_latest_block()
-        .await
-        .unwrap()
-        .height as u32;
-    let block_required_height_100 = 100 - chain_height;
-
-    if matches!(validator, ValidatorKind::Zebrad) {
-        test_manager
-            .generate_blocks_and_wait_for_tips(
-                block_required_height_100,
-                &fetch_service_subscriber,
-                &state_service_subscriber,
-            )
-            .await;
-        clients.sync_faucet().await;
-    };
-
-    let start_height: u64 = 1;
+    let all_pools = vec![
+        PoolType::Transparent as i32,
+        PoolType::Sapling as i32,
+        PoolType::Orchard as i32,
+    ];
     let end_height: u64 = 106;
 
-    let block_range = BlockRange {
-        start: Some(BlockId {
-            height: start_height,
-            hash: vec![],
-        }),
-        end: Some(BlockId {
-            height: end_height,
-            hash: vec![],
-        }),
-        pool_types: vec![
-            PoolType::Transparent as i32,
-            PoolType::Sapling as i32,
-            PoolType::Orchard as i32,
-        ],
-    };
+    let (fetch_service_blocks, fetch_errored) = zaino_testutils::drain_block_range(
+        &fetch_service_subscriber,
+        1,
+        end_height,
+        all_pools.clone(),
+    )
+    .await;
+    let (state_service_blocks, state_errored) = zaino_testutils::drain_block_range(
+        &state_service_subscriber,
+        1,
+        end_height,
+        all_pools,
+    )
+    .await;
 
-    let mut fetch_service_stream = fetch_service_subscriber
-        .get_block_range(block_range.clone())
-        .await
-        .expect("get_block_range call itself should not fail");
-
-    let mut fetch_service_blocks = Vec::new();
-    let mut fetch_service_terminal_error = None;
-
-    while let Some(item) = fetch_service_stream.next().await {
-        match item {
-            Ok(block) => fetch_service_blocks.push(block),
-            Err(e) => {
-                fetch_service_terminal_error = Some(e);
-                break;
-            }
-        }
-    }
-
-    let mut state_service_stream = state_service_subscriber
-        .get_block_range(block_range)
-        .await
-        .expect("get_block_range call itself should not fail");
-
-    let mut state_service_blocks = Vec::new();
-    let mut state_service_terminal_error = None;
-
-    while let Some(item) = state_service_stream.next().await {
-        match item {
-            Ok(block) => state_service_blocks.push(block),
-            Err(e) => {
-                state_service_terminal_error = Some(e);
-                break;
-            }
-        }
-    }
     // check that the block range is the same
     assert_eq!(fetch_service_blocks, state_service_blocks);
 
     let compact_block = state_service_blocks.last().unwrap();
-
     assert!(compact_block.height < end_height);
-
     assert_eq!(fetch_service_blocks.len(), 100);
 
-    // Assert – then an error, not a clean end-of-stream
-    let _ = state_service_terminal_error
-        .expect("state service stream should terminate with an error, not cleanly");
-    let _ = fetch_service_terminal_error
-        .expect("fetch service stream should terminate with an error, not cleanly");
+    // ...then an error, not a clean end-of-stream
+    assert!(
+        state_errored,
+        "state service stream should terminate with an error, not cleanly"
+    );
+    assert!(
+        fetch_errored,
+        "fetch service stream should terminate with an error, not cleanly"
+    );
 
     test_manager.close().await;
 }
@@ -522,91 +513,44 @@ async fn state_service_get_block_range_out_of_range_test_lower_bound<V: Validato
         mut clients,
     ) = create_test_manager_and_services::<V>(validator, None, true, None).await;
 
-    clients.sync_faucet().await;
+    generate_up_to_height_100(
+        &test_manager,
+        &mut clients,
+        validator,
+        &fetch_service_subscriber,
+        &state_service_subscriber,
+    )
+    .await;
 
-    // Test manager generates blocks on startup, check current height to ensure we only generate up to height 100
-    let chain_height = state_service_subscriber
-        .get_latest_block()
-        .await
-        .unwrap()
-        .height as u32;
-    let block_required_height_100 = 100 - chain_height;
+    let all_pools = vec![
+        PoolType::Transparent as i32,
+        PoolType::Sapling as i32,
+        PoolType::Orchard as i32,
+    ];
 
-    if matches!(validator, ValidatorKind::Zebrad) {
-        test_manager
-            .generate_blocks_and_wait_for_tips(
-                block_required_height_100,
-                &fetch_service_subscriber,
-                &state_service_subscriber,
-            )
-            .await;
-        clients.sync_faucet().await;
-    };
+    let (fetch_service_blocks, fetch_errored) = zaino_testutils::drain_block_range(
+        &fetch_service_subscriber,
+        106,
+        1,
+        all_pools.clone(),
+    )
+    .await;
+    let (state_service_blocks, state_errored) =
+        zaino_testutils::drain_block_range(&state_service_subscriber, 106, 1, all_pools).await;
 
-    let start_height: u64 = 106;
-    let end_height: u64 = 1;
-
-    let block_range = BlockRange {
-        start: Some(BlockId {
-            height: start_height,
-            hash: vec![],
-        }),
-        end: Some(BlockId {
-            height: end_height,
-            hash: vec![],
-        }),
-        pool_types: vec![
-            PoolType::Transparent as i32,
-            PoolType::Sapling as i32,
-            PoolType::Orchard as i32,
-        ],
-    };
-
-    let mut fetch_service_stream = fetch_service_subscriber
-        .get_block_range(block_range.clone())
-        .await
-        .expect("get_block_range call itself should not fail");
-
-    let mut fetch_service_blocks = Vec::new();
-    let mut fetch_service_terminal_error = None;
-
-    while let Some(item) = fetch_service_stream.next().await {
-        match item {
-            Ok(block) => fetch_service_blocks.push(block),
-            Err(e) => {
-                fetch_service_terminal_error = Some(e);
-                break;
-            }
-        }
-    }
-
-    let mut state_service_stream = state_service_subscriber
-        .get_block_range(block_range)
-        .await
-        .expect("get_block_range call itself should not fail");
-
-    let mut state_service_blocks = Vec::new();
-    let mut state_service_terminal_error = None;
-
-    while let Some(item) = state_service_stream.next().await {
-        match item {
-            Ok(block) => state_service_blocks.push(block),
-            Err(e) => {
-                state_service_terminal_error = Some(e);
-                break;
-            }
-        }
-    }
     // check that the block range is the same
     assert_eq!(fetch_service_blocks, state_service_blocks);
-
     assert!(fetch_service_blocks.is_empty());
 
-    // Assert – then an error, not a clean end-of-stream
-    let _ = state_service_terminal_error
-        .expect("state service stream should terminate with an error, not cleanly");
-    let _ = fetch_service_terminal_error
-        .expect("fetch service stream should terminate with an error, not cleanly");
+    // ...then an error, not a clean end-of-stream
+    assert!(
+        state_errored,
+        "state service stream should terminate with an error, not cleanly"
+    );
+    assert!(
+        fetch_errored,
+        "fetch service stream should terminate with an error, not cleanly"
+    );
     // assert!(
     //     matches!(err, ZainoStateError::BlockOutOfRange { .. }),
     //     "unexpected error variant: {err:?}"

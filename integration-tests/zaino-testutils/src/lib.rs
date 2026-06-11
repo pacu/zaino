@@ -98,6 +98,46 @@ pub async fn collect_block_range<S: LightWalletIndexer>(
         .await
 }
 
+/// Drain a `get_block_range` query over heights `[start, end]` for `pool_types`,
+/// collecting the compact blocks and reporting whether the stream terminated
+/// with an error (`true`) rather than a clean end-of-stream (`false`). The
+/// error-tolerant counterpart to [`collect_block_range`], for out-of-range
+/// tests that expect the stream to error partway through.
+#[allow(deprecated)]
+pub async fn drain_block_range<S: LightWalletIndexer>(
+    subscriber: &S,
+    start: u64,
+    end: u64,
+    pool_types: Vec<i32>,
+) -> (Vec<CompactBlock>, bool) {
+    let mut stream = subscriber
+        .get_block_range(BlockRange {
+            start: Some(BlockId {
+                height: start,
+                hash: vec![],
+            }),
+            end: Some(BlockId {
+                height: end,
+                hash: vec![],
+            }),
+            pool_types,
+        })
+        .await
+        .expect("get_block_range");
+    let mut blocks = Vec::new();
+    let mut errored = false;
+    while let Some(item) = stream.next().await {
+        match item {
+            Ok(block) => blocks.push(block),
+            Err(_) => {
+                errored = true;
+                break;
+            }
+        }
+    }
+    (blocks, errored)
+}
+
 /// Helper to get the test binary path from the TEST_BINARIES_DIR env var.
 fn binary_path(binary_name: &str) -> Option<PathBuf> {
     std::env::var("TEST_BINARIES_DIR")
