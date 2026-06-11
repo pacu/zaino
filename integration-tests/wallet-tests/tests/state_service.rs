@@ -459,40 +459,13 @@ async fn state_service_get_block_range_returns_all_pools<V: ValidatorExt>(
     // the compact block has 4 transactions (3 sent + coinbase)
     assert_eq!(compact_block.vtx.len(), 4);
 
-    // transaction order is not guaranteed so it's necessary to look up for them by TXID
-    let deshielding_tx = compact_block
-        .vtx
-        .iter()
-        .find(|tx| tx.txid == deshielding_txid.as_ref().to_vec())
-        .unwrap();
-
-    assert!(
-        !deshielding_tx.vout.is_empty(),
-        "transparent data should be present when transaparent pool type is specified in the request."
+    wallet_tests::assert_pool_present(
+        compact_block,
+        &deshielding_txid,
+        wallet_tests::Pool::Transparent,
     );
-
-    // transaction order is not guaranteed so it's necessary to look up for them by TXID
-    let sapling_tx = compact_block
-        .vtx
-        .iter()
-        .find(|tx| tx.txid == sapling_txid.as_ref().to_vec())
-        .unwrap();
-
-    assert!(
-        !sapling_tx.outputs.is_empty(),
-        "sapling data should be present when all pool types are specified in the request."
-    );
-
-    let orchard_tx = compact_block
-        .vtx
-        .iter()
-        .find(|tx| tx.txid == orchard_txid.as_ref().to_vec())
-        .unwrap();
-
-    assert!(
-        !orchard_tx.actions.is_empty(),
-        "orchard data should be present when all pool types are specified in the request."
-    );
+    wallet_tests::assert_pool_present(compact_block, &sapling_txid, wallet_tests::Pool::Sapling);
+    wallet_tests::assert_pool_present(compact_block, &orchard_txid, wallet_tests::Pool::Orchard);
 
     test_manager.close().await;
 }

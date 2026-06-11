@@ -3,7 +3,6 @@
 use futures::StreamExt as _;
 use hex::ToHex as _;
 use nonempty::NonEmpty;
-use zaino_proto::proto::compact_formats::CompactBlock;
 use wallet_tests::from_inputs;
 use zaino_proto::proto::service::{
     AddressList, BlockId, BlockRange, GetAddressUtxosArg, GetMempoolTxRequest, PoolType,
@@ -164,37 +163,6 @@ async fn block_range_fixture<V: ValidatorExt>(
         sapling_txid,
         orchard_txid,
     )
-}
-
-/// Whether the compact tx with `txid` carries no data for `pool` (transparent
-/// `vout` / sapling `outputs` / orchard `actions`).
-fn pool_tx_field_empty(block: &CompactBlock, txid: &TxId, pool: wallet_tests::Pool) -> bool {
-    let tx = block
-        .vtx
-        .iter()
-        .find(|tx| tx.txid == txid.as_ref().to_vec())
-        .expect("sent tx present in compact block");
-    match pool {
-        wallet_tests::Pool::Transparent => tx.vout.is_empty(),
-        wallet_tests::Pool::Sapling => tx.outputs.is_empty(),
-        wallet_tests::Pool::Orchard => tx.actions.is_empty(),
-    }
-}
-
-/// Assert the compact tx with `txid` carries `pool` data.
-fn assert_pool_present(block: &CompactBlock, txid: &TxId, pool: wallet_tests::Pool) {
-    assert!(
-        !pool_tx_field_empty(block, txid, pool),
-        "{pool:?} data should be present in the compact block"
-    );
-}
-
-/// Assert the compact tx with `txid` carries no `pool` data.
-fn assert_pool_absent(block: &CompactBlock, txid: &TxId, pool: wallet_tests::Pool) {
-    assert!(
-        pool_tx_field_empty(block, txid, pool),
-        "{pool:?} data should be absent from the compact block"
-    );
 }
 
 /// Launch, fund the faucet, then broadcast (without mining) one transparent and
@@ -520,9 +488,13 @@ async fn fetch_service_get_block_range_returns_all_pools<V: ValidatorExt>(
     // so expect 4 (3 sent tx + coinbase).
     assert_eq!(compact_block.vtx.len(), 4);
 
-    assert_pool_present(compact_block, &deshielding_txid, wallet_tests::Pool::Transparent);
-    assert_pool_present(compact_block, &sapling_txid, wallet_tests::Pool::Sapling);
-    assert_pool_present(compact_block, &orchard_txid, wallet_tests::Pool::Orchard);
+    wallet_tests::assert_pool_present(
+        compact_block,
+        &deshielding_txid,
+        wallet_tests::Pool::Transparent,
+    );
+    wallet_tests::assert_pool_present(compact_block, &sapling_txid, wallet_tests::Pool::Sapling);
+    wallet_tests::assert_pool_present(compact_block, &orchard_txid, wallet_tests::Pool::Orchard);
 
     test_manager.close().await;
 }
@@ -581,9 +553,13 @@ async fn fetch_service_get_block_range_no_pools_returns_sapling_orchard<V: Valid
     assert_eq!(compact_block.vtx.len(), expected_tx_count);
 
     // No pools requested: transparent data is omitted, sapling/orchard default in.
-    assert_pool_absent(compact_block, &deshielding_txid, wallet_tests::Pool::Transparent);
-    assert_pool_present(compact_block, &sapling_txid, wallet_tests::Pool::Sapling);
-    assert_pool_present(compact_block, &orchard_txid, wallet_tests::Pool::Orchard);
+    wallet_tests::assert_pool_absent(
+        compact_block,
+        &deshielding_txid,
+        wallet_tests::Pool::Transparent,
+    );
+    wallet_tests::assert_pool_present(compact_block, &sapling_txid, wallet_tests::Pool::Sapling);
+    wallet_tests::assert_pool_present(compact_block, &orchard_txid, wallet_tests::Pool::Orchard);
 
     test_manager.close().await;
 }

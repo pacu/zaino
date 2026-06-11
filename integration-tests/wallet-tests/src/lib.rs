@@ -10,9 +10,11 @@
 
 use std::path::PathBuf;
 use zaino_common::network::{ActivationHeights, ZEBRAD_DEFAULT_ACTIVATION_HEIGHTS};
+use zaino_proto::proto::compact_formats::CompactBlock;
 use zaino_state::{ZcashIndexer, ZcashService};
 use zaino_testutils::{PollableTip, TestManager, TestService, ValidatorExt, ValidatorKind};
 use zainodlib::error::IndexerError;
+use zcash_primitives::transaction::TxId;
 use zebra_chain::parameters::testnet::ConfiguredActivationHeights;
 use zebra_chain::parameters::NetworkKind;
 use zingo_test_vectors::seeds;
@@ -98,6 +100,37 @@ impl Pool {
         .expect("pool balance present")
         .into_u64()
     }
+}
+
+/// Whether the compact tx with `txid` carries no data for `pool` (transparent
+/// `vout` / sapling `outputs` / orchard `actions`).
+fn pool_tx_field_empty(block: &CompactBlock, txid: &TxId, pool: Pool) -> bool {
+    let tx = block
+        .vtx
+        .iter()
+        .find(|tx| tx.txid == txid.as_ref().to_vec())
+        .expect("sent tx present in compact block");
+    match pool {
+        Pool::Transparent => tx.vout.is_empty(),
+        Pool::Sapling => tx.outputs.is_empty(),
+        Pool::Orchard => tx.actions.is_empty(),
+    }
+}
+
+/// Assert the compact tx with `txid` carries `pool` data.
+pub fn assert_pool_present(block: &CompactBlock, txid: &TxId, pool: Pool) {
+    assert!(
+        !pool_tx_field_empty(block, txid, pool),
+        "{pool:?} data should be present in the compact block"
+    );
+}
+
+/// Assert the compact tx with `txid` carries no `pool` data.
+pub fn assert_pool_absent(block: &CompactBlock, txid: &TxId, pool: Pool) {
+    assert!(
+        pool_tx_field_empty(block, txid, pool),
+        "{pool:?} data should be absent from the compact block"
+    );
 }
 
 /// Builds the faucet + recipient lightclients pointed at a running Zaino's
