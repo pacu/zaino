@@ -1,6 +1,0 @@
-{
-  "rust-analyzer.linkedProjects": [
-    "integration-tests/Cargo.toml",
-    "integration-tests/wallet-tests/Cargo.toml"
-  ]
-}
