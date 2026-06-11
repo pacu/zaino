@@ -176,6 +176,30 @@ async fn best_chaintip_height(fetch_service_subscriber: &FetchServiceSubscriber)
     u32::from(idx.best_chaintip(&snapshot).await.unwrap().height)
 }
 
+/// Generate `blocks` blocks (waiting on both subscribers) and return the
+/// faucet's transparent address. The shared preamble of the
+/// `lightwallet_indexer` tests that query the faucet's coinbase data. Takes the
+/// handles by reference because the owned fetch/state services must stay alive
+/// in the caller.
+#[allow(deprecated)]
+async fn generate_and_faucet_taddr<V: ValidatorExt>(
+    test_manager: &TestManager<V, StateService>,
+    clients: &wallet_tests::Clients,
+    fetch_service_subscriber: &FetchServiceSubscriber,
+    state_service_subscriber: &StateServiceSubscriber,
+    blocks: u32,
+) -> String {
+    let taddr = clients.get_faucet_address("transparent").await;
+    test_manager
+        .generate_blocks_and_wait_for_tips(
+            blocks,
+            fetch_service_subscriber,
+            state_service_subscriber,
+        )
+        .await;
+    taddr
+}
+
 #[allow(deprecated)]
 async fn state_service_get_address_balance<V: ValidatorExt>(validator: &ValidatorKind) {
     let (
@@ -1126,14 +1150,14 @@ mod zebra {
             )
             .await;
 
-            let taddr = clients.get_faucet_address("transparent").await;
-            test_manager
-                .generate_blocks_and_wait_for_tips(
-                    100,
-                    &fetch_service_subscriber,
-                    &state_service_subscriber,
-                )
-                .await;
+            let taddr = generate_and_faucet_taddr(
+                &test_manager,
+                &clients,
+                &fetch_service_subscriber,
+                &state_service_subscriber,
+                100,
+            )
+            .await;
 
             let state_service_taddress_txids = state_service_subscriber
                 .get_address_tx_ids(GetAddressTxIdsRequest::new(
@@ -1169,14 +1193,14 @@ mod zebra {
             )
             .await;
 
-            let taddr = clients.get_faucet_address("transparent").await;
-            test_manager
-                .generate_blocks_and_wait_for_tips(
-                    5,
-                    &fetch_service_subscriber,
-                    &state_service_subscriber,
-                )
-                .await;
+            let taddr = generate_and_faucet_taddr(
+                &test_manager,
+                &clients,
+                &fetch_service_subscriber,
+                &state_service_subscriber,
+                5,
+            )
+            .await;
             let request = GetAddressUtxosArg {
                 addresses: vec![taddr],
                 start_height: 2,
@@ -1230,14 +1254,14 @@ mod zebra {
             )
             .await;
 
-            let taddr = clients.get_faucet_address("transparent").await;
-            test_manager
-                .generate_blocks_and_wait_for_tips(
-                    5,
-                    &fetch_service_subscriber,
-                    &state_service_subscriber,
-                )
-                .await;
+            let taddr = generate_and_faucet_taddr(
+                &test_manager,
+                &clients,
+                &fetch_service_subscriber,
+                &state_service_subscriber,
+                5,
+            )
+            .await;
             let request = GetAddressUtxosArg {
                 addresses: vec![taddr],
                 start_height: 2,
@@ -1286,14 +1310,14 @@ mod zebra {
             )
             .await;
 
-            let taddr = clients.get_faucet_address("transparent").await;
-            test_manager
-                .generate_blocks_and_wait_for_tips(
-                    5,
-                    &fetch_service_subscriber,
-                    &state_service_subscriber,
-                )
-                .await;
+            let taddr = generate_and_faucet_taddr(
+                &test_manager,
+                &clients,
+                &fetch_service_subscriber,
+                &state_service_subscriber,
+                5,
+            )
+            .await;
 
             let state_service_taddress_balance = state_service_subscriber
                 .get_taddress_balance(AddressList {
