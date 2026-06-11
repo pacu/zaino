@@ -21,19 +21,15 @@ async fn fund_faucet<V, Service>(
     IndexerError: From<<<Service as ZcashService>::Subscriber as ZcashIndexer>::Error>,
     <Service as ZcashService>::Subscriber: zaino_testutils::PollableTip,
 {
-    clients.sync_faucet().await;
-
-    if matches!(validator, ValidatorKind::Zebrad) {
-        test_manager
-            .generate_blocks_and_wait_for_tip(100, test_manager.subscriber())
-            .await;
-        clients.sync_faucet().await;
-        clients.shield_faucet().await;
-        test_manager
-            .generate_blocks_and_wait_for_tip(1, test_manager.subscriber())
-            .await;
-        clients.sync_faucet().await;
-    }
+    wallet_tests::fund_faucet_dual(
+        test_manager,
+        clients,
+        validator,
+        test_manager.subscriber(),
+        test_manager.subscriber(),
+        1,
+    )
+    .await;
 }
 
 async fn connect_to_node_get_info_for_validator<V, Service>(validator: &ValidatorKind)
@@ -197,30 +193,17 @@ where
     test_manager
         .generate_blocks_and_wait_for_tip(2, test_manager.subscriber())
         .await;
-    clients.sync_faucet().await;
 
     // "Create" 3 orchard notes in faucet.
-    if matches!(validator, ValidatorKind::Zebrad) {
-        test_manager
-            .generate_blocks_and_wait_for_tip(100, test_manager.subscriber())
-            .await;
-        clients.sync_faucet().await;
-        clients.shield_faucet().await;
-        test_manager
-            .generate_blocks_and_wait_for_tip(100, test_manager.subscriber())
-            .await;
-        clients.sync_faucet().await;
-        clients.shield_faucet().await;
-        test_manager
-            .generate_blocks_and_wait_for_tip(100, test_manager.subscriber())
-            .await;
-        clients.sync_faucet().await;
-        clients.shield_faucet().await;
-        test_manager
-            .generate_blocks_and_wait_for_tip(1, test_manager.subscriber())
-            .await;
-        clients.sync_faucet().await;
-    };
+    wallet_tests::fund_faucet_dual(
+        &test_manager,
+        &mut clients,
+        validator,
+        test_manager.subscriber(),
+        test_manager.subscriber(),
+        3,
+    )
+    .await;
 
     let recipient_ua = clients.get_recipient_address("unified").await;
     let recipient_zaddr = clients.get_recipient_address("sapling").await;
@@ -311,24 +294,16 @@ where
     test_manager
         .generate_blocks_and_wait_for_tip(1, test_manager.subscriber())
         .await;
-    clients.sync_faucet().await;
 
-    if matches!(validator, ValidatorKind::Zebrad) {
-        test_manager
-            .generate_blocks_and_wait_for_tip(100, test_manager.subscriber())
-            .await;
-        clients.sync_faucet().await;
-        clients.shield_faucet().await;
-        test_manager
-            .generate_blocks_and_wait_for_tip(100, test_manager.subscriber())
-            .await;
-        clients.sync_faucet().await;
-        clients.shield_faucet().await;
-        test_manager
-            .generate_blocks_and_wait_for_tip(1, test_manager.subscriber())
-            .await;
-        clients.sync_faucet().await;
-    };
+    wallet_tests::fund_faucet_dual(
+        &test_manager,
+        &mut clients,
+        validator,
+        test_manager.subscriber(),
+        test_manager.subscriber(),
+        2,
+    )
+    .await;
 
     let recipient_ua = clients.get_recipient_address("unified").await;
     let txid_1 = clients.send_from_faucet(&recipient_ua, 250_000).await;

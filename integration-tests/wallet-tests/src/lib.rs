@@ -260,6 +260,61 @@ where
     (test_manager, clients)
 }
 
+/// Mine `blocks` and sync the faucet to the new tip, waiting on
+/// `mined_against` and then `then_synced`. One half of the faucet funding
+/// step; the other half is [`Clients::shield_faucet`]. Callers with a single
+/// subscriber pass it as both `mined_against` and `then_synced`
+/// ([`TestManager::generate_blocks_and_wait_for_tips`] waits on each in turn,
+/// so the repeated wait is a no-op).
+#[allow(deprecated)]
+pub async fn mine_and_sync_faucet<C, Service, A, B>(
+    test_manager: &TestManager<C, Service>,
+    clients: &mut Clients,
+    mined_against: &A,
+    then_synced: &B,
+    blocks: u32,
+) where
+    C: ValidatorExt,
+    Service: TestService,
+    IndexerError: From<<<Service as ZcashService>::Subscriber as ZcashIndexer>::Error>,
+    <Service as ZcashService>::Subscriber: PollableTip,
+    A: PollableTip,
+    B: PollableTip,
+{
+    test_manager
+        .generate_blocks_and_wait_for_tips(blocks, mined_against, then_synced)
+        .await;
+    clients.sync_faucet().await;
+}
+
+/// Run faucet shield rounds: for each entry of `round_blocks`, mine that many
+/// blocks, sync the faucet, and shield its transparent funds; then mine
+/// `final_blocks` and sync so the last shield is spendable. `&[100; n]` matures
+/// a fresh coinbase batch before every shield; `&[100, 1, 1]` matures once and
+/// spreads three shields over consecutive blocks.
+#[allow(deprecated)]
+pub async fn shield_faucet_rounds<C, Service, A, B>(
+    test_manager: &TestManager<C, Service>,
+    clients: &mut Clients,
+    mined_against: &A,
+    then_synced: &B,
+    round_blocks: &[u32],
+    final_blocks: u32,
+) where
+    C: ValidatorExt,
+    Service: TestService,
+    IndexerError: From<<<Service as ZcashService>::Subscriber as ZcashIndexer>::Error>,
+    <Service as ZcashService>::Subscriber: PollableTip,
+    A: PollableTip,
+    B: PollableTip,
+{
+    for &blocks in round_blocks {
+        mine_and_sync_faucet(test_manager, clients, mined_against, then_synced, blocks).await;
+        clients.shield_faucet().await;
+    }
+    mine_and_sync_faucet(test_manager, clients, mined_against, then_synced, final_blocks).await;
+}
+
 /// Sync the faucet and, on zebrad, run `shield_rounds` rounds of "mature 100
 /// coinbase blocks, sync, shield", then mine one block and sync — waiting on
 /// both subscribers each time. The dual-subscriber funding preamble shared by
@@ -283,17 +338,15 @@ pub async fn fund_faucet_dual<C, Service, A, B>(
 {
     clients.sync_faucet().await;
     if matches!(validator, ValidatorKind::Zebrad) {
-        for _ in 0..shield_rounds {
-            test_manager
-                .generate_blocks_and_wait_for_tips(100, mined_against, then_synced)
-                .await;
-            clients.sync_faucet().await;
-            clients.shield_faucet().await;
-        }
-        test_manager
-            .generate_blocks_and_wait_for_tips(1, mined_against, then_synced)
-            .await;
-        clients.sync_faucet().await;
+        shield_faucet_rounds(
+            test_manager,
+            clients,
+            mined_against,
+            then_synced,
+            &vec![100; shield_rounds as usize],
+            1,
+        )
+        .await;
     }
 }
 
@@ -444,10 +497,14 @@ mod launch_clients {
         async fn check_received_mining_reward_and_send(kind: &ValidatorKind) {
             let (mut test_manager, mut clients) = Self::launch_and_build(kind, None, None).await;
 
-            test_manager
-                .generate_blocks_and_wait_for_tip(100, test_manager.subscriber())
-                .await;
-            clients.sync_faucet().await;
+            super::mine_and_sync_faucet(
+                &test_manager,
+                &mut clients,
+                test_manager.subscriber(),
+                test_manager.subscriber(),
+                100,
+            )
+            .await;
             dbg!(clients.faucet_balance().await);
 
             assert!(
@@ -469,10 +526,14 @@ mod launch_clients {
 
             // *Send all transparent funds to own orchard address.
             clients.shield_faucet().await;
-            test_manager
-                .generate_blocks_and_wait_for_tip(1, test_manager.subscriber())
-                .await;
-            clients.sync_faucet().await;
+            super::mine_and_sync_faucet(
+                &test_manager,
+                &mut clients,
+                test_manager.subscriber(),
+                test_manager.subscriber(),
+                1,
+            )
+            .await;
             dbg!(clients.faucet_balance().await);
 
             assert!(

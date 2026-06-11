@@ -59,18 +59,16 @@ async fn setup_chain<V: ValidatorExt>(
     let recipient_taddr = clients.get_recipient_address("transparent").await;
     let faucet_taddr = clients.get_faucet_address("transparent").await;
 
-    clients.sync_faucet().await;
-
     // Generate blocks and perform transaction
-    test_manager
-        .generate_blocks_and_wait_for_tip(100, &state_service_subscriber)
-        .await;
-    clients.sync_faucet().await;
-    clients.shield_faucet().await;
-    test_manager
-        .generate_blocks_and_wait_for_tip(1, &state_service_subscriber)
-        .await;
-    clients.sync_faucet().await;
+    wallet_tests::fund_faucet_dual(
+        test_manager,
+        clients,
+        &ValidatorKind::Zebrad,
+        &state_service_subscriber,
+        &state_service_subscriber,
+        1,
+    )
+    .await;
 
     clients
         .send_from_faucet(recipient_taddr.as_str(), 250_000)

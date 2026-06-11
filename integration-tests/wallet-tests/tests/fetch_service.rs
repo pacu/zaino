@@ -49,21 +49,15 @@ async fn fund_faucet<V: ValidatorExt>(
     fetch_service_subscriber: &FetchServiceSubscriber,
     shield_rounds: u32,
 ) {
-    clients.sync_faucet().await;
-
-    if matches!(validator, ValidatorKind::Zebrad) {
-        for _ in 0..shield_rounds {
-            test_manager
-                .generate_blocks_and_wait_for_tip(100, fetch_service_subscriber)
-                .await;
-            clients.sync_faucet().await;
-            clients.shield_faucet().await;
-        }
-        test_manager
-            .generate_blocks_and_wait_for_tip(1, fetch_service_subscriber)
-            .await;
-        clients.sync_faucet().await;
-    }
+    wallet_tests::fund_faucet_dual(
+        test_manager,
+        clients,
+        validator,
+        fetch_service_subscriber,
+        fetch_service_subscriber,
+        shield_rounds,
+    )
+    .await;
 }
 
 /// Send `amount` from the faucet to `address`, mine a block, and return the
@@ -105,23 +99,27 @@ async fn block_range_fixture<V: ValidatorExt>(
     clients.sync_faucet().await;
 
     if matches!(validator, ValidatorKind::Zebrad) {
-        test_manager
-            .generate_blocks_and_wait_for_tip(100, &fetch_service_subscriber)
-            .await;
-        clients.sync_faucet().await;
-        for _ in 1..4 {
-            clients.shield_faucet().await;
-            test_manager
-                .generate_blocks_and_wait_for_tip(1, &fetch_service_subscriber)
-                .await;
-            clients.sync_faucet().await;
-        }
+        // Mature one coinbase batch, then spread three shields over
+        // consecutive blocks.
+        wallet_tests::shield_faucet_rounds(
+            &test_manager,
+            &mut clients,
+            &fetch_service_subscriber,
+            &fetch_service_subscriber,
+            &[100, 1, 1],
+            1,
+        )
+        .await;
     } else {
         // zcashd
-        test_manager
-            .generate_blocks_and_wait_for_tip(14, &fetch_service_subscriber)
-            .await;
-        clients.sync_faucet().await;
+        wallet_tests::mine_and_sync_faucet(
+            &test_manager,
+            &mut clients,
+            &fetch_service_subscriber,
+            &fetch_service_subscriber,
+            14,
+        )
+        .await;
     }
 
     let recipient_transparent = clients.get_recipient_address("transparent").await;

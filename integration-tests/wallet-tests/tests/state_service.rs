@@ -444,26 +444,17 @@ async fn state_service_get_block_range_returns_all_pools<V: ValidatorExt>(
     clients.sync_faucet().await;
 
     if matches!(validator, ValidatorKind::Zebrad) {
-        test_manager
-            .generate_blocks_and_wait_for_tips(
-                100,
-                &fetch_service_subscriber,
-                &state_service_subscriber,
-            )
-            .await;
-        clients.sync_faucet().await;
-        for _ in 1..4 {
-            clients.shield_faucet().await;
-            test_manager
-                .generate_blocks_and_wait_for_tips(
-                    1,
-                    &fetch_service_subscriber,
-                    &state_service_subscriber,
-                )
-                .await;
-
-            clients.sync_faucet().await;
-        }
+        // Mature one coinbase batch, then spread three shields over
+        // consecutive blocks.
+        wallet_tests::shield_faucet_rounds(
+            &test_manager,
+            &mut clients,
+            &fetch_service_subscriber,
+            &state_service_subscriber,
+            &[100, 1, 1],
+            1,
+        )
+        .await;
     };
 
     let recipient_transparent = clients.get_recipient_address("transparent").await;
@@ -772,19 +763,15 @@ async fn state_service_get_address_transactions_regtest<V: ValidatorExt>(
     ) = create_test_manager_and_services::<V>(validator, None, true, None).await;
 
     let recipient_taddr = clients.get_recipient_address("transparent").await;
-    clients.sync_faucet().await;
-
-    if matches!(validator, ValidatorKind::Zebrad) {
-        test_manager.local_net.generate_blocks(100).await.unwrap();
-        tokio::time::sleep(std::time::Duration::from_millis(3000)).await;
-        clients.sync_faucet().await;
-        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-        clients.shield_faucet().await;
-        test_manager.local_net.generate_blocks(1).await.unwrap();
-        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-        clients.sync_faucet().await;
-        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-    };
+    fund_faucet(
+        &test_manager,
+        &mut clients,
+        validator,
+        &fetch_service_subscriber,
+        &state_service_subscriber,
+        1,
+    )
+    .await;
 
     let tx = clients
         .send_from_faucet(recipient_taddr.as_str(), 250_000)
@@ -1023,25 +1010,15 @@ mod zebra {
 
             let recipient_taddr = clients.get_recipient_address("transparent").await;
 
-            clients.sync_faucet().await;
-
-            test_manager
-                .generate_blocks_and_wait_for_tips(
-                    100,
-                    &fetch_service_subscriber,
-                    &state_service_subscriber,
-                )
-                .await;
-            clients.sync_faucet().await;
-            clients.shield_faucet().await;
-            test_manager
-                .generate_blocks_and_wait_for_tips(
-                    1,
-                    &fetch_service_subscriber,
-                    &state_service_subscriber,
-                )
-                .await;
-            clients.sync_faucet().await;
+            fund_faucet(
+                &test_manager,
+                &mut clients,
+                &ValidatorKind::Zebrad,
+                &fetch_service_subscriber,
+                &state_service_subscriber,
+                1,
+            )
+            .await;
 
             clients
                 .send_from_faucet(recipient_taddr.as_str(), 250_000)
@@ -1125,24 +1102,15 @@ mod zebra {
                 Some(NetworkKind::Regtest),
             )
             .await;
-            test_manager
-                .generate_blocks_and_wait_for_tips(
-                    100,
-                    &fetch_service_subscriber,
-                    &state_service_subscriber,
-                )
-                .await;
-
-            clients.sync_faucet().await;
-            clients.shield_faucet().await;
-
-            test_manager
-                .generate_blocks_and_wait_for_tips(
-                    2,
-                    &fetch_service_subscriber,
-                    &state_service_subscriber,
-                )
-                .await;
+            wallet_tests::shield_faucet_rounds(
+                &test_manager,
+                &mut clients,
+                &fetch_service_subscriber,
+                &state_service_subscriber,
+                &[100],
+                2,
+            )
+            .await;
 
             let block = BlockId {
                 height: 103,

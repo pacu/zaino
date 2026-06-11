@@ -72,28 +72,19 @@ async fn create_200_block_regtest_chain_vectors() {
     let recipient_saddr = clients.get_recipient_address("sapling").await;
     let recipient_uaddr = clients.get_recipient_address("unified").await;
 
-    clients.sync_faucet().await;
-
-    // *** Mine 100 blocks to finalise first block reward ***
-    test_manager
-        .generate_blocks_and_wait_for_tip(100, &state_service_subscriber)
-        .await;
+    // *** Mine 100 blocks to finalise first block reward, shield it, and mine
+    // the shield in ***
+    wallet_tests::fund_faucet_dual(
+        &test_manager,
+        &mut clients,
+        &ValidatorKind::Zebrad,
+        &state_service_subscriber,
+        &state_service_subscriber,
+        1,
+    )
+    .await;
 
     // *** Build 100 block chain holding transparent, sapling, and orchard transactions ***
-    // sync wallets
-    clients.sync_faucet().await;
-
-    // create transactions
-    clients.shield_faucet().await;
-
-    // Generate block
-    test_manager
-        .generate_blocks_and_wait_for_tip(1, &state_service_subscriber)
-        .await;
-
-    // sync wallets
-    clients.sync_faucet().await;
-
     // create transactions
     clients.shield_faucet().await;
     clients
