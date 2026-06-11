@@ -439,27 +439,17 @@ async fn fetch_service_get_block_range_returns_all_pools<V: ValidatorExt>(
         17
     };
 
-    let fetch_service_get_block_range = fetch_service_subscriber
-        .get_block_range(BlockRange {
-            start: Some(BlockId {
-                height: start_height,
-                hash: vec![],
-            }),
-            end: Some(BlockId {
-                height: end_height,
-                hash: vec![],
-            }),
-            pool_types: vec![
-                PoolType::Transparent as i32,
-                PoolType::Sapling as i32,
-                PoolType::Orchard as i32,
-            ],
-        })
-        .await
-        .unwrap()
-        .map(Result::unwrap)
-        .collect::<Vec<_>>()
-        .await;
+    let fetch_service_get_block_range = zaino_testutils::collect_block_range(
+        &fetch_service_subscriber,
+        start_height,
+        end_height,
+        vec![
+            PoolType::Transparent as i32,
+            PoolType::Sapling as i32,
+            PoolType::Orchard as i32,
+        ],
+    )
+    .await;
 
     let compact_block = fetch_service_get_block_range.last().unwrap();
 
@@ -504,23 +494,13 @@ async fn fetch_service_get_block_range_no_pools_returns_sapling_orchard<V: Valid
         17
     };
 
-    let fetch_service_get_block_range = fetch_service_subscriber
-        .get_block_range(BlockRange {
-            start: Some(BlockId {
-                height: start_height,
-                hash: vec![],
-            }),
-            end: Some(BlockId {
-                height: end_height,
-                hash: vec![],
-            }),
-            pool_types: vec![],
-        })
-        .await
-        .unwrap()
-        .map(Result::unwrap)
-        .collect::<Vec<_>>()
-        .await;
+    let fetch_service_get_block_range = zaino_testutils::collect_block_range(
+        &fetch_service_subscriber,
+        start_height,
+        end_height,
+        vec![],
+    )
+    .await;
 
     let compact_block = fetch_service_get_block_range.last().unwrap();
 

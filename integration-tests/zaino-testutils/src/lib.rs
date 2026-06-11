@@ -38,7 +38,10 @@ use zcash_local_net::{
     validator::zcashd::{Zcashd, ZcashdConfig},
 };
 use zcash_local_net::{logs::LogsToStdoutAndStderr, process::Process};
+use futures::StreamExt as _;
 use zaino_fetch::jsonrpsee::connector::{test_node_and_return_url, JsonRpSeeConnector};
+use zaino_proto::proto::compact_formats::CompactBlock;
+use zaino_proto::proto::service::{BlockId, BlockRange};
 use zebra_chain::parameters::NetworkKind;
 use zebra_rpc::methods::GetInfo;
 
@@ -62,6 +65,37 @@ macro_rules! validator_tests {
             }
         )*
     };
+}
+
+/// Collect a `get_block_range` query over heights `[start, end]` for the given
+/// proto `pool_types` into a vector of compact blocks. Generic over the
+/// lightwallet subscriber, so it serves both `FetchServiceSubscriber` and
+/// `StateServiceSubscriber`. Shared by the fetch_service and state_service
+/// tests in both workspaces.
+#[allow(deprecated)]
+pub async fn collect_block_range<S: LightWalletIndexer>(
+    subscriber: &S,
+    start: u64,
+    end: u64,
+    pool_types: Vec<i32>,
+) -> Vec<CompactBlock> {
+    subscriber
+        .get_block_range(BlockRange {
+            start: Some(BlockId {
+                height: start,
+                hash: vec![],
+            }),
+            end: Some(BlockId {
+                height: end,
+                hash: vec![],
+            }),
+            pool_types,
+        })
+        .await
+        .expect("get_block_range")
+        .map(|block| block.expect("compact block in range"))
+        .collect()
+        .await
 }
 
 /// Helper to get the test binary path from the TEST_BINARIES_DIR env var.

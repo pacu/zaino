@@ -44,6 +44,7 @@ zebra-rpc = { workspace = true }
 zcash_local_net = { workspace = true }
 
 # Miscellaneous
+futures = { workspace = true }
 http = { workspace = true }
 once_cell = { workspace = true }
 portpicker = { workspace = true }

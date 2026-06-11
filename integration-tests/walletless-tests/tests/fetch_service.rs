@@ -433,28 +433,8 @@ async fn fetch_service_get_block_range<V: ValidatorExt>(validator: &ValidatorKin
         .generate_blocks_and_wait_for_tip(10, &fetch_service_subscriber)
         .await;
 
-    let block_range = BlockRange {
-        start: Some(BlockId {
-            height: 1,
-            hash: Vec::new(),
-        }),
-        end: Some(BlockId {
-            height: 10,
-            hash: Vec::new(),
-        }),
-        pool_types: vec![],
-    };
-
-    let fetch_service_stream = fetch_service_subscriber
-        .get_block_range(block_range.clone())
-        .await
-        .unwrap();
-    let fetch_service_compact_blocks: Vec<_> = fetch_service_stream.collect().await;
-
-    let fetch_blocks: Vec<_> = fetch_service_compact_blocks
-        .into_iter()
-        .filter_map(|result| result.ok())
-        .collect();
+    let fetch_blocks =
+        zaino_testutils::collect_block_range(&fetch_service_subscriber, 1, 10, vec![]).await;
 
     dbg!(fetch_blocks);
 

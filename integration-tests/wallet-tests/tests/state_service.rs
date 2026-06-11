@@ -243,66 +243,42 @@ async fn state_service_get_block_range_returns_default_pools<V: ValidatorExt>(
     let start_height: u64 = 100;
     let end_height: u64 = 103;
 
-    let default_pools_request = BlockRange {
-        start: Some(BlockId {
-            height: start_height,
-            hash: vec![],
-        }),
-        end: Some(BlockId {
-            height: end_height,
-            hash: vec![],
-        }),
-        pool_types: vec![],
-    };
+    let fetch_service_get_block_range = zaino_testutils::collect_block_range(
+        &fetch_service_subscriber,
+        start_height,
+        end_height,
+        vec![],
+    )
+    .await;
 
-    let fetch_service_get_block_range = fetch_service_subscriber
-        .get_block_range(default_pools_request.clone())
-        .await
-        .unwrap()
-        .map(Result::unwrap)
-        .collect::<Vec<_>>()
-        .await;
-
-    let explicit_default_pool_request = BlockRange {
-        start: Some(BlockId {
-            height: start_height,
-            hash: vec![],
-        }),
-        end: Some(BlockId {
-            height: end_height,
-            hash: vec![],
-        }),
-        pool_types: vec![PoolType::Sapling as i32, PoolType::Orchard as i32],
-    };
-
-    let fetch_service_get_block_range_specifying_pools = fetch_service_subscriber
-        .get_block_range(explicit_default_pool_request.clone())
-        .await
-        .unwrap()
-        .map(Result::unwrap)
-        .collect::<Vec<_>>()
-        .await;
+    let fetch_service_get_block_range_specifying_pools = zaino_testutils::collect_block_range(
+        &fetch_service_subscriber,
+        start_height,
+        end_height,
+        vec![PoolType::Sapling as i32, PoolType::Orchard as i32],
+    )
+    .await;
 
     assert_eq!(
         fetch_service_get_block_range,
         fetch_service_get_block_range_specifying_pools
     );
 
-    let state_service_get_block_range_specifying_pools = state_service_subscriber
-        .get_block_range(explicit_default_pool_request)
-        .await
-        .unwrap()
-        .map(Result::unwrap)
-        .collect::<Vec<_>>()
-        .await;
+    let state_service_get_block_range_specifying_pools = zaino_testutils::collect_block_range(
+        &state_service_subscriber,
+        start_height,
+        end_height,
+        vec![PoolType::Sapling as i32, PoolType::Orchard as i32],
+    )
+    .await;
 
-    let state_service_get_block_range = state_service_subscriber
-        .get_block_range(default_pools_request)
-        .await
-        .unwrap()
-        .map(Result::unwrap)
-        .collect::<Vec<_>>()
-        .await;
+    let state_service_get_block_range = zaino_testutils::collect_block_range(
+        &state_service_subscriber,
+        start_height,
+        end_height,
+        vec![],
+    )
+    .await;
 
     assert_eq!(
         state_service_get_block_range,
@@ -389,38 +365,27 @@ async fn state_service_get_block_range_returns_all_pools<V: ValidatorExt>(
 
     let start_height: u64 = 100;
     let end_height: u64 = 106;
+    let all_pools = vec![
+        PoolType::Transparent as i32,
+        PoolType::Sapling as i32,
+        PoolType::Orchard as i32,
+    ];
 
-    let block_range = BlockRange {
-        start: Some(BlockId {
-            height: start_height,
-            hash: vec![],
-        }),
-        end: Some(BlockId {
-            height: end_height,
-            hash: vec![],
-        }),
-        pool_types: vec![
-            PoolType::Transparent as i32,
-            PoolType::Sapling as i32,
-            PoolType::Orchard as i32,
-        ],
-    };
+    let fetch_service_get_block_range = zaino_testutils::collect_block_range(
+        &fetch_service_subscriber,
+        start_height,
+        end_height,
+        all_pools.clone(),
+    )
+    .await;
 
-    let fetch_service_get_block_range = fetch_service_subscriber
-        .get_block_range(block_range.clone())
-        .await
-        .unwrap()
-        .map(Result::unwrap)
-        .collect::<Vec<_>>()
-        .await;
-
-    let state_service_get_block_range = state_service_subscriber
-        .get_block_range(block_range)
-        .await
-        .unwrap()
-        .map(Result::unwrap)
-        .collect::<Vec<_>>()
-        .await;
+    let state_service_get_block_range = zaino_testutils::collect_block_range(
+        &state_service_subscriber,
+        start_height,
+        end_height,
+        all_pools,
+    )
+    .await;
 
     // check that the block range is the same
     assert_eq!(fetch_service_get_block_range, state_service_get_block_range);
@@ -1211,7 +1176,7 @@ mod zebra {
     pub(crate) mod lightwallet_indexer {
         use futures::StreamExt as _;
         use zaino_proto::proto::{
-            service::{AddressList, BlockId, BlockRange, GetAddressUtxosArg, PoolType, TxFilter},
+            service::{AddressList, BlockId, GetAddressUtxosArg, PoolType, TxFilter},
             utils::pool_types_into_i32_vec,
         };
         use zebra_rpc::methods::GetAddressTxIdsRequest;
@@ -1540,25 +1505,15 @@ mod zebra {
             // Issue: https://github.com/zingolabs/zaino/issues/818
             //
             // To see bug update start height of get_block_range to 0.
-            let compact_block_range = state_service_subscriber
-                .get_block_range(BlockRange {
-                    start: Some(BlockId {
-                        height: 1,
-                        hash: Vec::new(),
-                    }),
-                    end: Some(BlockId {
-                        height: chain_height,
-                        hash: Vec::new(),
-                    }),
-                    pool_types: pool_types_into_i32_vec(
-                        [PoolType::Transparent, PoolType::Sapling, PoolType::Orchard].to_vec(),
-                    ),
-                })
-                .await
-                .unwrap()
-                .map(Result::unwrap)
-                .collect::<Vec<_>>()
-                .await;
+            let compact_block_range = zaino_testutils::collect_block_range(
+                &state_service_subscriber,
+                1,
+                chain_height,
+                pool_types_into_i32_vec(
+                    [PoolType::Transparent, PoolType::Sapling, PoolType::Orchard].to_vec(),
+                ),
+            )
+            .await;
 
             for cb in compact_block_range.into_iter() {
                 for tx in cb.vtx {

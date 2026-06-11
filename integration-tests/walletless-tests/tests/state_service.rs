@@ -1138,12 +1138,14 @@ mod zebra {
             test_manager.generate_blocks_and_wait_for_tips(6, &fetch_service_subscriber, &state_service_subscriber)
             .await;
 
+            let start_height: u64 = 2;
+            let end_height: u64 = 5;
             let start = Some(BlockId {
-                height: 2,
+                height: start_height,
                 hash: vec![],
             });
             let end = Some(BlockId {
-                height: 5,
+                height: end_height,
                 hash: vec![],
             });
             let request = BlockRange {
@@ -1176,20 +1178,25 @@ mod zebra {
                     assert_eq!(fetch_service_get_block_range, state_service_get_block_range);
                 }
             } else {
-                let fetch_service_get_block_range = fetch_service_subscriber
-                    .get_block_range(request.clone())
-                    .await
-                    .unwrap()
-                    .map(Result::unwrap)
-                    .collect::<Vec<_>>()
-                    .await;
-                let state_service_get_block_range = state_service_subscriber
-                    .get_block_range(request)
-                    .await
-                    .unwrap()
-                    .map(Result::unwrap)
-                    .collect::<Vec<_>>()
-                    .await;
+                let pools = vec![
+                    PoolType::Transparent as i32,
+                    PoolType::Sapling as i32,
+                    PoolType::Orchard as i32,
+                ];
+                let fetch_service_get_block_range = zaino_testutils::collect_block_range(
+                    &fetch_service_subscriber,
+                    start_height,
+                    end_height,
+                    pools.clone(),
+                )
+                .await;
+                let state_service_get_block_range = zaino_testutils::collect_block_range(
+                    &state_service_subscriber,
+                    start_height,
+                    end_height,
+                    pools,
+                )
+                .await;
                 assert_eq!(fetch_service_get_block_range, state_service_get_block_range);
             }
         }
