@@ -1,6 +1,5 @@
 //! Tests that compare the output of both `zcashd` and `zainod` through `FetchService`.
 
-use wallet_tests::from_inputs;
 #[allow(deprecated)]
 use zaino_state::{ChainIndex, FetchService, FetchServiceSubscriber, ZcashIndexer};
 use zaino_testutils::{TestManager, ValidatorKind};
@@ -57,19 +56,14 @@ async fn z_get_address_balance_inner() {
 
     let recipient_taddr = clients.get_recipient_address("transparent").await;
 
-    clients.faucet.sync_and_await().await.unwrap();
+    clients.sync_faucet().await;
 
-    from_inputs::quick_send(
-        &mut clients.faucet,
-        vec![(recipient_taddr.as_str(), 250_000, None)],
-    )
-    .await
-    .unwrap();
+    clients.send_from_faucet(recipient_taddr.as_str(), 250_000).await;
     test_manager
         .generate_blocks_and_wait_for_tips(1, &zaino_subscriber, &zcashd_subscriber)
         .await;
 
-    clients.recipient.sync_and_await().await.unwrap();
+    clients.sync_recipient().await;
     let recipient_balance = clients.recipient_balance().await;
 
     let zcashd_service_balance = zcashd_subscriber
@@ -113,16 +107,12 @@ async fn get_raw_mempool_inner() {
         .generate_blocks_and_wait_for_tips(1, &zaino_subscriber, &zcashd_subscriber)
         .await;
 
-    clients.faucet.sync_and_await().await.unwrap();
+    clients.sync_faucet().await;
 
     let recipient_ua = &clients.get_recipient_address("unified").await;
     let recipient_taddr = &clients.get_recipient_address("transparent").await;
-    from_inputs::quick_send(&mut clients.faucet, vec![(recipient_taddr, 250_000, None)])
-        .await
-        .unwrap();
-    from_inputs::quick_send(&mut clients.faucet, vec![(recipient_ua, 250_000, None)])
-        .await
-        .unwrap();
+    clients.send_from_faucet(recipient_taddr, 250_000).await;
+    clients.send_from_faucet(recipient_ua, 250_000).await;
 
     tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
 
@@ -154,16 +144,12 @@ async fn get_mempool_info_inner() {
         .generate_blocks_and_wait_for_tips(1, &zaino_subscriber, &zcashd_subscriber)
         .await;
 
-    clients.faucet.sync_and_await().await.unwrap();
+    clients.sync_faucet().await;
 
     let recipient_ua = &clients.get_recipient_address("unified").await;
     let recipient_taddr = &clients.get_recipient_address("transparent").await;
-    from_inputs::quick_send(&mut clients.faucet, vec![(recipient_taddr, 250_000, None)])
-        .await
-        .unwrap();
-    from_inputs::quick_send(&mut clients.faucet, vec![(recipient_ua, 250_000, None)])
-        .await
-        .unwrap();
+    clients.send_from_faucet(recipient_taddr, 250_000).await;
+    clients.send_from_faucet(recipient_ua, 250_000).await;
 
     tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
 
@@ -188,12 +174,10 @@ async fn z_get_treestate_inner() {
         mut clients,
     ) = create_zcashd_test_manager_and_fetch_services().await;
 
-    clients.faucet.sync_and_await().await.unwrap();
+    clients.sync_faucet().await;
 
     let recipient_ua = &clients.get_recipient_address("unified").await;
-    from_inputs::quick_send(&mut clients.faucet, vec![(recipient_ua, 250_000, None)])
-        .await
-        .unwrap();
+    clients.send_from_faucet(recipient_ua, 250_000).await;
 
     test_manager
         .generate_blocks_and_wait_for_tips(1, &zaino_subscriber, &zcashd_subscriber)
@@ -226,12 +210,10 @@ async fn z_get_subtrees_by_index_inner() {
         mut clients,
     ) = create_zcashd_test_manager_and_fetch_services().await;
 
-    clients.faucet.sync_and_await().await.unwrap();
+    clients.sync_faucet().await;
 
     let recipient_ua = &clients.get_recipient_address("unified").await;
-    from_inputs::quick_send(&mut clients.faucet, vec![(recipient_ua, 250_000, None)])
-        .await
-        .unwrap();
+    clients.send_from_faucet(recipient_ua, 250_000).await;
 
     test_manager
         .generate_blocks_and_wait_for_tips(1, &zaino_subscriber, &zcashd_subscriber)
@@ -262,12 +244,10 @@ async fn get_raw_transaction_inner() {
         mut clients,
     ) = create_zcashd_test_manager_and_fetch_services().await;
 
-    clients.faucet.sync_and_await().await.unwrap();
+    clients.sync_faucet().await;
 
     let recipient_ua = &clients.get_recipient_address("unified").await;
-    let tx = from_inputs::quick_send(&mut clients.faucet, vec![(recipient_ua, 250_000, None)])
-        .await
-        .unwrap();
+    let tx = clients.send_from_faucet(recipient_ua, 250_000).await;
 
     test_manager
         .generate_blocks_and_wait_for_tips(1, &zaino_subscriber, &zcashd_subscriber)
@@ -302,14 +282,9 @@ async fn get_tx_out_inner() {
 
     let recipient_taddr = clients.get_recipient_address("transparent").await;
 
-    clients.faucet.sync_and_await().await.unwrap();
+    clients.sync_faucet().await;
 
-    from_inputs::quick_send(
-        &mut clients.faucet,
-        vec![(recipient_taddr.as_str(), 250_000, None)],
-    )
-    .await
-    .unwrap();
+    clients.send_from_faucet(recipient_taddr.as_str(), 250_000).await;
     test_manager
         .generate_blocks_and_wait_for_tips(1, &zaino_subscriber, &zcashd_subscriber)
         .await;
@@ -357,14 +332,9 @@ async fn get_address_tx_ids_inner() {
 
     let recipient_taddr = clients.get_recipient_address("transparent").await;
 
-    clients.faucet.sync_and_await().await.unwrap();
+    clients.sync_faucet().await;
 
-    let tx = from_inputs::quick_send(
-        &mut clients.faucet,
-        vec![(recipient_taddr.as_str(), 250_000, None)],
-    )
-    .await
-    .unwrap();
+    let tx = clients.send_from_faucet(recipient_taddr.as_str(), 250_000).await;
     test_manager
         .generate_blocks_and_wait_for_tips(1, &zaino_subscriber, &zcashd_subscriber)
         .await;
@@ -416,19 +386,14 @@ async fn z_get_address_utxos_inner() {
 
     let recipient_taddr = clients.get_recipient_address("transparent").await;
 
-    clients.faucet.sync_and_await().await.unwrap();
+    clients.sync_faucet().await;
 
-    let txid_1 = from_inputs::quick_send(
-        &mut clients.faucet,
-        vec![(recipient_taddr.as_str(), 250_000, None)],
-    )
-    .await
-    .unwrap();
+    let txid_1 = clients.send_from_faucet(recipient_taddr.as_str(), 250_000).await;
     test_manager
         .generate_blocks_and_wait_for_tips(1, &zaino_subscriber, &zcashd_subscriber)
         .await;
 
-    clients.faucet.sync_and_await().await.unwrap();
+    clients.sync_faucet().await;
 
     let zcashd_utxos = zcashd_subscriber
         .z_get_address_utxos(GetAddressBalanceRequest::new(vec![recipient_taddr.clone()]))

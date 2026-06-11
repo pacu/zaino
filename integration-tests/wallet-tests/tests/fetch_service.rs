@@ -15,7 +15,6 @@ use zaino_testutils::{TestManager, ValidatorExt, ValidatorKind};
 use zcash_primitives::transaction::TxId;
 use zebra_chain::subtree::NoteCommitmentSubtreeIndex;
 use zebra_rpc::methods::{GetAddressBalanceRequest, GetAddressTxIdsRequest};
-use zip32::AccountId;
 
 #[allow(deprecated)]
 async fn create_test_manager_and_fetch_service<V: ValidatorExt>(
@@ -50,20 +49,20 @@ async fn fund_faucet<V: ValidatorExt>(
     fetch_service_subscriber: &FetchServiceSubscriber,
     shield_rounds: u32,
 ) {
-    clients.faucet.sync_and_await().await.unwrap();
+    clients.sync_faucet().await;
 
     if matches!(validator, ValidatorKind::Zebrad) {
         for _ in 0..shield_rounds {
             test_manager
                 .generate_blocks_and_wait_for_tip(100, fetch_service_subscriber)
                 .await;
-            clients.faucet.sync_and_await().await.unwrap();
-            clients.faucet.quick_shield(AccountId::ZERO).await.unwrap();
+            clients.sync_faucet().await;
+            clients.shield_faucet().await;
         }
         test_manager
             .generate_blocks_and_wait_for_tip(1, fetch_service_subscriber)
             .await;
-        clients.faucet.sync_and_await().await.unwrap();
+        clients.sync_faucet().await;
     }
 }
 
@@ -103,26 +102,26 @@ async fn block_range_fixture<V: ValidatorExt>(
     let (test_manager, fetch_service_subscriber, mut clients) =
         create_test_manager_and_fetch_service::<V>(validator, None).await;
 
-    clients.faucet.sync_and_await().await.unwrap();
+    clients.sync_faucet().await;
 
     if matches!(validator, ValidatorKind::Zebrad) {
         test_manager
             .generate_blocks_and_wait_for_tip(100, &fetch_service_subscriber)
             .await;
-        clients.faucet.sync_and_await().await.unwrap();
+        clients.sync_faucet().await;
         for _ in 1..4 {
-            clients.faucet.quick_shield(AccountId::ZERO).await.unwrap();
+            clients.shield_faucet().await;
             test_manager
                 .generate_blocks_and_wait_for_tip(1, &fetch_service_subscriber)
                 .await;
-            clients.faucet.sync_and_await().await.unwrap();
+            clients.sync_faucet().await;
         }
     } else {
         // zcashd
         test_manager
             .generate_blocks_and_wait_for_tip(14, &fetch_service_subscriber)
             .await;
-        clients.faucet.sync_and_await().await.unwrap();
+        clients.sync_faucet().await;
     }
 
     let recipient_transparent = clients.get_recipient_address("transparent").await;
@@ -239,7 +238,7 @@ async fn fetch_service_get_address_balance<V: ValidatorExt>(validator: &Validato
         fund_and_send::<V>(validator, wallet_tests::Pool::Transparent).await;
     let recipient_address = clients.get_recipient_address("transparent").await;
 
-    clients.recipient.sync_and_await().await.unwrap();
+    clients.sync_recipient().await;
     let recipient_balance = clients.recipient_balance().await;
 
     let fetch_service_balance = fetch_service_subscriber
@@ -400,7 +399,7 @@ async fn fetch_service_get_address_utxos<V: ValidatorExt>(validator: &ValidatorK
         fund_and_send::<V>(validator, wallet_tests::Pool::Transparent).await;
     let recipient_taddr = clients.get_recipient_address("transparent").await;
 
-    clients.faucet.sync_and_await().await.unwrap();
+    clients.sync_faucet().await;
 
     let fetch_service_utxos = fetch_service_subscriber
         .z_get_address_utxos(GetAddressBalanceRequest::new(vec![recipient_taddr]))
@@ -631,7 +630,7 @@ async fn fetch_service_get_taddress_balance<V: ValidatorExt>(validator: &Validat
         fund_and_send::<V>(validator, wallet_tests::Pool::Transparent).await;
     let recipient_taddr = clients.get_recipient_address("transparent").await;
 
-    clients.recipient.sync_and_await().await.unwrap();
+    clients.sync_recipient().await;
     let balance = clients.recipient_balance().await;
 
     let address_list = AddressList {

@@ -14,7 +14,6 @@ use zcash_local_net::validator::zebrad::Zebrad;
 use zebra_chain::parameters::NetworkKind;
 use zebra_chain::subtree::NoteCommitmentSubtreeIndex;
 use zebra_rpc::methods::{GetAddressBalanceRequest, GetAddressTxIdsRequest};
-use zip32::AccountId;
 
 #[allow(deprecated)]
 // NOTE: the fetch and state services each have a seperate chain index to the instance of zaino connected to the lightclients and may be out of sync
@@ -73,7 +72,7 @@ async fn state_service_get_address_balance<V: ValidatorExt>(validator: &Validato
 
     let recipient_taddr = clients.get_recipient_address("transparent").await;
 
-    clients.faucet.sync_and_await().await.unwrap();
+    clients.sync_faucet().await;
 
     if matches!(validator, ValidatorKind::Zebrad) {
         test_manager
@@ -83,8 +82,8 @@ async fn state_service_get_address_balance<V: ValidatorExt>(validator: &Validato
                 &state_service_subscriber,
             )
             .await;
-        clients.faucet.sync_and_await().await.unwrap();
-        clients.faucet.quick_shield(AccountId::ZERO).await.unwrap();
+        clients.sync_faucet().await;
+        clients.shield_faucet().await;
         test_manager
             .generate_blocks_and_wait_for_tips(
                 1,
@@ -92,7 +91,7 @@ async fn state_service_get_address_balance<V: ValidatorExt>(validator: &Validato
                 &state_service_subscriber,
             )
             .await;
-        clients.faucet.sync_and_await().await.unwrap();
+        clients.sync_faucet().await;
     };
 
     clients.send_from_faucet(recipient_taddr.as_str(), 250_000).await;
@@ -100,7 +99,7 @@ async fn state_service_get_address_balance<V: ValidatorExt>(validator: &Validato
         .generate_blocks_and_wait_for_tips(1, &fetch_service_subscriber, &state_service_subscriber)
         .await;
 
-    clients.recipient.sync_and_await().await.unwrap();
+    clients.sync_recipient().await;
     let recipient_balance = clients.recipient_balance().await;
 
     let fetch_service_balance = fetch_service_subscriber
@@ -144,7 +143,7 @@ async fn state_service_get_raw_mempool<V: ValidatorExt>(validator: &ValidatorKin
         .generate_blocks_and_wait_for_tips(1, &fetch_service_subscriber, &state_service_subscriber)
         .await;
 
-    clients.faucet.sync_and_await().await.unwrap();
+    clients.sync_faucet().await;
 
     if matches!(validator, ValidatorKind::Zebrad) {
         test_manager
@@ -154,8 +153,8 @@ async fn state_service_get_raw_mempool<V: ValidatorExt>(validator: &ValidatorKin
                 &state_service_subscriber,
             )
             .await;
-        clients.faucet.sync_and_await().await.unwrap();
-        clients.faucet.quick_shield(AccountId::ZERO).await.unwrap();
+        clients.sync_faucet().await;
+        clients.shield_faucet().await;
         test_manager
             .generate_blocks_and_wait_for_tips(
                 100,
@@ -163,8 +162,8 @@ async fn state_service_get_raw_mempool<V: ValidatorExt>(validator: &ValidatorKin
                 &state_service_subscriber,
             )
             .await;
-        clients.faucet.sync_and_await().await.unwrap();
-        clients.faucet.quick_shield(AccountId::ZERO).await.unwrap();
+        clients.sync_faucet().await;
+        clients.shield_faucet().await;
         test_manager
             .generate_blocks_and_wait_for_tips(
                 1,
@@ -172,7 +171,7 @@ async fn state_service_get_raw_mempool<V: ValidatorExt>(validator: &ValidatorKin
                 &state_service_subscriber,
             )
             .await;
-        clients.faucet.sync_and_await().await.unwrap();
+        clients.sync_faucet().await;
     };
 
     let recipient_ua = clients.get_recipient_address("unified").await;
@@ -211,7 +210,7 @@ async fn state_service_get_block_range_returns_default_pools<V: ValidatorExt>(
         mut clients,
     ) = create_test_manager_and_services::<V>(validator, None, true, None).await;
 
-    clients.faucet.sync_and_await().await.unwrap();
+    clients.sync_faucet().await;
 
     if matches!(validator, ValidatorKind::Zebrad) {
         test_manager
@@ -221,8 +220,8 @@ async fn state_service_get_block_range_returns_default_pools<V: ValidatorExt>(
                 &state_service_subscriber,
             )
             .await;
-        clients.faucet.sync_and_await().await.unwrap();
-        clients.faucet.quick_shield(AccountId::ZERO).await.unwrap();
+        clients.sync_faucet().await;
+        clients.shield_faucet().await;
         test_manager
             .generate_blocks_and_wait_for_tips(
                 1,
@@ -230,7 +229,7 @@ async fn state_service_get_block_range_returns_default_pools<V: ValidatorExt>(
                 &state_service_subscriber,
             )
             .await;
-        clients.faucet.sync_and_await().await.unwrap();
+        clients.sync_faucet().await;
     };
 
     let recipient_ua = clients.get_recipient_address("unified").await;
@@ -324,7 +323,7 @@ async fn state_service_get_block_range_returns_all_pools<V: ValidatorExt>(
         mut clients,
     ) = create_test_manager_and_services::<V>(validator, None, true, None).await;
 
-    clients.faucet.sync_and_await().await.unwrap();
+    clients.sync_faucet().await;
 
     if matches!(validator, ValidatorKind::Zebrad) {
         test_manager
@@ -334,9 +333,9 @@ async fn state_service_get_block_range_returns_all_pools<V: ValidatorExt>(
                 &state_service_subscriber,
             )
             .await;
-        clients.faucet.sync_and_await().await.unwrap();
+        clients.sync_faucet().await;
         for _ in 1..4 {
-            clients.faucet.quick_shield(AccountId::ZERO).await.unwrap();
+            clients.shield_faucet().await;
             test_manager
                 .generate_blocks_and_wait_for_tips(
                     1,
@@ -345,7 +344,7 @@ async fn state_service_get_block_range_returns_all_pools<V: ValidatorExt>(
                 )
                 .await;
 
-            clients.faucet.sync_and_await().await.unwrap();
+            clients.sync_faucet().await;
         }
     };
 
@@ -422,7 +421,7 @@ async fn state_service_get_block_range_out_of_range_test_upper_bound<V: Validato
         mut clients,
     ) = create_test_manager_and_services::<V>(validator, None, true, None).await;
 
-    clients.faucet.sync_and_await().await.unwrap();
+    clients.sync_faucet().await;
 
     // Test manager generates blocks on startup, check current height to ensure we only generate up to height 100
     let chain_height = state_service_subscriber
@@ -440,7 +439,7 @@ async fn state_service_get_block_range_out_of_range_test_upper_bound<V: Validato
                 &state_service_subscriber,
             )
             .await;
-        clients.faucet.sync_and_await().await.unwrap();
+        clients.sync_faucet().await;
     };
 
     let start_height: u64 = 1;
@@ -529,7 +528,7 @@ async fn state_service_get_block_range_out_of_range_test_lower_bound<V: Validato
         mut clients,
     ) = create_test_manager_and_services::<V>(validator, None, true, None).await;
 
-    clients.faucet.sync_and_await().await.unwrap();
+    clients.sync_faucet().await;
 
     // Test manager generates blocks on startup, check current height to ensure we only generate up to height 100
     let chain_height = state_service_subscriber
@@ -547,7 +546,7 @@ async fn state_service_get_block_range_out_of_range_test_lower_bound<V: Validato
                 &state_service_subscriber,
             )
             .await;
-        clients.faucet.sync_and_await().await.unwrap();
+        clients.sync_faucet().await;
     };
 
     let start_height: u64 = 106;
@@ -632,7 +631,7 @@ async fn state_service_z_get_treestate<V: ValidatorExt>(validator: &ValidatorKin
         mut clients,
     ) = create_test_manager_and_services::<V>(validator, None, true, None).await;
 
-    clients.faucet.sync_and_await().await.unwrap();
+    clients.sync_faucet().await;
 
     if matches!(validator, ValidatorKind::Zebrad) {
         test_manager
@@ -642,8 +641,8 @@ async fn state_service_z_get_treestate<V: ValidatorExt>(validator: &ValidatorKin
                 &state_service_subscriber,
             )
             .await;
-        clients.faucet.sync_and_await().await.unwrap();
-        clients.faucet.quick_shield(AccountId::ZERO).await.unwrap();
+        clients.sync_faucet().await;
+        clients.shield_faucet().await;
         test_manager
             .generate_blocks_and_wait_for_tips(
                 1,
@@ -651,7 +650,7 @@ async fn state_service_z_get_treestate<V: ValidatorExt>(validator: &ValidatorKin
                 &state_service_subscriber,
             )
             .await;
-        clients.faucet.sync_and_await().await.unwrap();
+        clients.sync_faucet().await;
     };
 
     let recipient_ua = clients.get_recipient_address("unified").await;
@@ -688,7 +687,7 @@ async fn state_service_z_get_subtrees_by_index<V: ValidatorExt>(validator: &Vali
         mut clients,
     ) = create_test_manager_and_services::<V>(validator, None, true, None).await;
 
-    clients.faucet.sync_and_await().await.unwrap();
+    clients.sync_faucet().await;
 
     if matches!(validator, ValidatorKind::Zebrad) {
         test_manager
@@ -698,8 +697,8 @@ async fn state_service_z_get_subtrees_by_index<V: ValidatorExt>(validator: &Vali
                 &state_service_subscriber,
             )
             .await;
-        clients.faucet.sync_and_await().await.unwrap();
-        clients.faucet.quick_shield(AccountId::ZERO).await.unwrap();
+        clients.sync_faucet().await;
+        clients.shield_faucet().await;
         test_manager
             .generate_blocks_and_wait_for_tips(
                 1,
@@ -707,7 +706,7 @@ async fn state_service_z_get_subtrees_by_index<V: ValidatorExt>(validator: &Vali
                 &state_service_subscriber,
             )
             .await;
-        clients.faucet.sync_and_await().await.unwrap();
+        clients.sync_faucet().await;
     };
 
     let recipient_ua = clients.get_recipient_address("unified").await;
@@ -745,7 +744,7 @@ async fn state_service_get_raw_transaction<V: ValidatorExt + LogsToStdoutAndStde
         mut clients,
     ) = create_test_manager_and_services::<V>(validator, None, true, None).await;
 
-    clients.faucet.sync_and_await().await.unwrap();
+    clients.sync_faucet().await;
 
     if matches!(validator, ValidatorKind::Zebrad) {
         test_manager
@@ -755,8 +754,8 @@ async fn state_service_get_raw_transaction<V: ValidatorExt + LogsToStdoutAndStde
                 &state_service_subscriber,
             )
             .await;
-        clients.faucet.sync_and_await().await.unwrap();
-        clients.faucet.quick_shield(AccountId::ZERO).await.unwrap();
+        clients.sync_faucet().await;
+        clients.shield_faucet().await;
         test_manager
             .generate_blocks_and_wait_for_tips(
                 1,
@@ -764,7 +763,7 @@ async fn state_service_get_raw_transaction<V: ValidatorExt + LogsToStdoutAndStde
                 &state_service_subscriber,
             )
             .await;
-        clients.faucet.sync_and_await().await.unwrap();
+        clients.sync_faucet().await;
     };
 
     let recipient_ua = clients.get_recipient_address("unified").await.to_string();
@@ -804,17 +803,17 @@ async fn state_service_get_address_transactions_regtest<V: ValidatorExt>(
     ) = create_test_manager_and_services::<V>(validator, None, true, None).await;
 
     let recipient_taddr = clients.get_recipient_address("transparent").await;
-    clients.faucet.sync_and_await().await.unwrap();
+    clients.sync_faucet().await;
 
     if matches!(validator, ValidatorKind::Zebrad) {
         test_manager.local_net.generate_blocks(100).await.unwrap();
         tokio::time::sleep(std::time::Duration::from_millis(3000)).await;
-        clients.faucet.sync_and_await().await.unwrap();
+        clients.sync_faucet().await;
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-        clients.faucet.quick_shield(AccountId::ZERO).await.unwrap();
+        clients.shield_faucet().await;
         test_manager.local_net.generate_blocks(1).await.unwrap();
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-        clients.faucet.sync_and_await().await.unwrap();
+        clients.sync_faucet().await;
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
     };
 
@@ -869,7 +868,7 @@ async fn state_service_get_address_tx_ids<V: ValidatorExt>(validator: &Validator
     ) = create_test_manager_and_services::<V>(validator, None, true, None).await;
 
     let recipient_taddr = clients.get_recipient_address("transparent").await;
-    clients.faucet.sync_and_await().await.unwrap();
+    clients.sync_faucet().await;
 
     if matches!(validator, ValidatorKind::Zebrad) {
         test_manager
@@ -879,8 +878,8 @@ async fn state_service_get_address_tx_ids<V: ValidatorExt>(validator: &Validator
                 &state_service_subscriber,
             )
             .await;
-        clients.faucet.sync_and_await().await.unwrap();
-        clients.faucet.quick_shield(AccountId::ZERO).await.unwrap();
+        clients.sync_faucet().await;
+        clients.shield_faucet().await;
         test_manager
             .generate_blocks_and_wait_for_tips(
                 1,
@@ -888,7 +887,7 @@ async fn state_service_get_address_tx_ids<V: ValidatorExt>(validator: &Validator
                 &state_service_subscriber,
             )
             .await;
-        clients.faucet.sync_and_await().await.unwrap();
+        clients.sync_faucet().await;
     };
 
     let tx = clients.send_from_faucet(recipient_taddr.as_str(), 250_000).await;
@@ -943,7 +942,7 @@ async fn state_service_get_address_utxos<V: ValidatorExt>(validator: &ValidatorK
     ) = create_test_manager_and_services::<V>(validator, None, true, None).await;
 
     let recipient_taddr = clients.get_recipient_address("transparent").await;
-    clients.faucet.sync_and_await().await.unwrap();
+    clients.sync_faucet().await;
 
     if matches!(validator, ValidatorKind::Zebrad) {
         test_manager
@@ -953,8 +952,8 @@ async fn state_service_get_address_utxos<V: ValidatorExt>(validator: &ValidatorK
                 &state_service_subscriber,
             )
             .await;
-        clients.faucet.sync_and_await().await.unwrap();
-        clients.faucet.quick_shield(AccountId::ZERO).await.unwrap();
+        clients.sync_faucet().await;
+        clients.shield_faucet().await;
         test_manager
             .generate_blocks_and_wait_for_tips(
                 1,
@@ -962,7 +961,7 @@ async fn state_service_get_address_utxos<V: ValidatorExt>(validator: &ValidatorK
                 &state_service_subscriber,
             )
             .await;
-        clients.faucet.sync_and_await().await.unwrap();
+        clients.sync_faucet().await;
     };
 
     let txid_1 = clients.send_from_faucet(recipient_taddr.as_str(), 250_000).await;
@@ -970,7 +969,7 @@ async fn state_service_get_address_utxos<V: ValidatorExt>(validator: &ValidatorK
         .generate_blocks_and_wait_for_tips(1, &fetch_service_subscriber, &state_service_subscriber)
         .await;
 
-    clients.faucet.sync_and_await().await.unwrap();
+    clients.sync_faucet().await;
 
     let fetch_service_utxos = fetch_service_subscriber
         .z_get_address_utxos(GetAddressBalanceRequest::new(vec![recipient_taddr.clone()]))
@@ -1098,7 +1097,7 @@ mod zebra {
 
             let recipient_taddr = clients.get_recipient_address("transparent").await;
 
-            clients.faucet.sync_and_await().await.unwrap();
+            clients.sync_faucet().await;
 
             test_manager
                 .generate_blocks_and_wait_for_tips(
@@ -1107,8 +1106,8 @@ mod zebra {
                     &state_service_subscriber,
                 )
                 .await;
-            clients.faucet.sync_and_await().await.unwrap();
-            clients.faucet.quick_shield(AccountId::ZERO).await.unwrap();
+            clients.sync_faucet().await;
+            clients.shield_faucet().await;
             test_manager
                 .generate_blocks_and_wait_for_tips(
                     1,
@@ -1116,7 +1115,7 @@ mod zebra {
                     &state_service_subscriber,
                 )
                 .await;
-            clients.faucet.sync_and_await().await.unwrap();
+            clients.sync_faucet().await;
 
             clients.send_from_faucet(recipient_taddr.as_str(), 250_000).await;
 
@@ -1206,8 +1205,8 @@ mod zebra {
                 )
                 .await;
 
-            clients.faucet.sync_and_await().await.unwrap();
-            clients.faucet.quick_shield(AccountId::ZERO).await.unwrap();
+            clients.sync_faucet().await;
+            clients.shield_faucet().await;
 
             test_manager
                 .generate_blocks_and_wait_for_tips(
@@ -1334,7 +1333,7 @@ mod zebra {
                 fetch_service_address_utxos_streamed,
                 state_service_address_utxos_streamed
             );
-            clients.faucet.sync_and_await().await.unwrap();
+            clients.sync_faucet().await;
             assert_eq!(
                 fetch_service_address_utxos_streamed.first().unwrap().txid,
                 clients
@@ -1386,7 +1385,7 @@ mod zebra {
                 .await
                 .unwrap();
             assert_eq!(fetch_service_address_utxos, state_service_address_utxos);
-            clients.faucet.sync_and_await().await.unwrap();
+            clients.sync_faucet().await;
             assert_eq!(
                 fetch_service_address_utxos
                     .address_utxos

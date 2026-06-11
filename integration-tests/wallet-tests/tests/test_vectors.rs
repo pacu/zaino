@@ -72,7 +72,7 @@ async fn create_200_block_regtest_chain_vectors() {
     let recipient_saddr = clients.get_recipient_address("sapling").await;
     let recipient_uaddr = clients.get_recipient_address("unified").await;
 
-    clients.faucet.sync_and_await().await.unwrap();
+    clients.sync_faucet().await;
 
     // *** Mine 100 blocks to finalise first block reward ***
     test_manager
@@ -81,14 +81,10 @@ async fn create_200_block_regtest_chain_vectors() {
 
     // *** Build 100 block chain holding transparent, sapling, and orchard transactions ***
     // sync wallets
-    clients.faucet.sync_and_await().await.unwrap();
+    clients.sync_faucet().await;
 
     // create transactions
-    clients
-        .faucet
-        .quick_shield(zip32::AccountId::ZERO)
-        .await
-        .unwrap();
+    clients.shield_faucet().await;
 
     // Generate block
     test_manager
@@ -96,20 +92,11 @@ async fn create_200_block_regtest_chain_vectors() {
         .await;
 
     // sync wallets
-    clients.faucet.sync_and_await().await.unwrap();
+    clients.sync_faucet().await;
 
     // create transactions
-    clients
-        .faucet
-        .quick_shield(zip32::AccountId::ZERO)
-        .await
-        .unwrap();
-    from_inputs::quick_send(
-        &mut clients.faucet,
-        vec![(recipient_uaddr.as_str(), 250_000, None)],
-    )
-    .await
-    .unwrap();
+    clients.shield_faucet().await;
+    clients.send_from_faucet(recipient_uaddr.as_str(), 250_000).await;
 
     // Generate block
     test_manager
@@ -117,28 +104,14 @@ async fn create_200_block_regtest_chain_vectors() {
         .await;
 
     // sync wallets
-    clients.faucet.sync_and_await().await.unwrap();
-    clients.recipient.sync_and_await().await.unwrap();
+    clients.sync_faucet().await;
+    clients.sync_recipient().await;
 
     // create transactions
-    clients
-        .faucet
-        .quick_shield(zip32::AccountId::ZERO)
-        .await
-        .unwrap();
+    clients.shield_faucet().await;
 
-    from_inputs::quick_send(
-        &mut clients.faucet,
-        vec![(recipient_taddr.as_str(), 250_000, None)],
-    )
-    .await
-    .unwrap();
-    from_inputs::quick_send(
-        &mut clients.faucet,
-        vec![(recipient_uaddr.as_str(), 250_000, None)],
-    )
-    .await
-    .unwrap();
+    clients.send_from_faucet(recipient_taddr.as_str(), 250_000).await;
+    clients.send_from_faucet(recipient_uaddr.as_str(), 250_000).await;
 
     from_inputs::quick_send(
         &mut clients.recipient,
@@ -153,33 +126,19 @@ async fn create_200_block_regtest_chain_vectors() {
         .await;
 
     // sync wallets
-    clients.faucet.sync_and_await().await.unwrap();
-    clients.recipient.sync_and_await().await.unwrap();
+    clients.sync_faucet().await;
+    clients.sync_recipient().await;
 
     // create transactions
-    clients
-        .faucet
-        .quick_shield(zip32::AccountId::ZERO)
-        .await
-        .unwrap();
+    clients.shield_faucet().await;
     clients
         .recipient
         .quick_shield(zip32::AccountId::ZERO)
         .await
         .unwrap();
 
-    from_inputs::quick_send(
-        &mut clients.faucet,
-        vec![(recipient_taddr.as_str(), 250_000, None)],
-    )
-    .await
-    .unwrap();
-    from_inputs::quick_send(
-        &mut clients.faucet,
-        vec![(recipient_uaddr.as_str(), 250_000, None)],
-    )
-    .await
-    .unwrap();
+    clients.send_from_faucet(recipient_taddr.as_str(), 250_000).await;
+    clients.send_from_faucet(recipient_uaddr.as_str(), 250_000).await;
 
     from_inputs::quick_send(
         &mut clients.recipient,
@@ -195,8 +154,8 @@ async fn create_200_block_regtest_chain_vectors() {
 
     for _i in 0..48 {
         // sync wallets
-        clients.faucet.sync_and_await().await.unwrap();
-        clients.recipient.sync_and_await().await.unwrap();
+        clients.sync_faucet().await;
+        clients.sync_recipient().await;
 
         tokio::time::sleep(std::time::Duration::from_millis(2000)).await;
         let chain_height = dbg!(state_service_subscriber.chain_height().await.unwrap());
@@ -205,29 +164,15 @@ async fn create_200_block_regtest_chain_vectors() {
         }
 
         // create transactions
-        clients
-            .faucet
-            .quick_shield(zip32::AccountId::ZERO)
-            .await
-            .unwrap();
+        clients.shield_faucet().await;
         clients
             .recipient
             .quick_shield(zip32::AccountId::ZERO)
             .await
             .unwrap();
 
-        from_inputs::quick_send(
-            &mut clients.faucet,
-            vec![(recipient_taddr.as_str(), 250_000, None)],
-        )
-        .await
-        .unwrap();
-        from_inputs::quick_send(
-            &mut clients.faucet,
-            vec![(recipient_uaddr.as_str(), 250_000, None)],
-        )
-        .await
-        .unwrap();
+        clients.send_from_faucet(recipient_taddr.as_str(), 250_000).await;
+        clients.send_from_faucet(recipient_uaddr.as_str(), 250_000).await;
 
         from_inputs::quick_send(
             &mut clients.recipient,
@@ -248,8 +193,8 @@ async fn create_200_block_regtest_chain_vectors() {
             .await;
 
         // sync wallets
-        clients.faucet.sync_and_await().await.unwrap();
-        clients.recipient.sync_and_await().await.unwrap();
+        clients.sync_faucet().await;
+        clients.sync_recipient().await;
 
         tokio::time::sleep(std::time::Duration::from_millis(2000)).await;
         let chain_height = dbg!(state_service_subscriber.chain_height().await.unwrap());
@@ -258,35 +203,16 @@ async fn create_200_block_regtest_chain_vectors() {
         }
 
         // create transactions
-        clients
-            .faucet
-            .quick_shield(zip32::AccountId::ZERO)
-            .await
-            .unwrap();
+        clients.shield_faucet().await;
         clients
             .recipient
             .quick_shield(zip32::AccountId::ZERO)
             .await
             .unwrap();
 
-        from_inputs::quick_send(
-            &mut clients.faucet,
-            vec![(recipient_taddr.as_str(), 250_000, None)],
-        )
-        .await
-        .unwrap();
-        from_inputs::quick_send(
-            &mut clients.faucet,
-            vec![(recipient_saddr.as_str(), 250_000, None)],
-        )
-        .await
-        .unwrap();
-        from_inputs::quick_send(
-            &mut clients.faucet,
-            vec![(recipient_uaddr.as_str(), 250_000, None)],
-        )
-        .await
-        .unwrap();
+        clients.send_from_faucet(recipient_taddr.as_str(), 250_000).await;
+        clients.send_from_faucet(recipient_saddr.as_str(), 250_000).await;
+        clients.send_from_faucet(recipient_uaddr.as_str(), 250_000).await;
 
         from_inputs::quick_send(
             &mut clients.recipient,

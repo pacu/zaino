@@ -59,25 +59,25 @@ async fn setup_chain<V: ValidatorExt>(
     let recipient_taddr = clients.get_recipient_address("transparent").await;
     let faucet_taddr = clients.get_faucet_address("transparent").await;
 
-    clients.faucet.sync_and_await().await.unwrap();
+    clients.sync_faucet().await;
 
     // Generate blocks and perform transaction
     test_manager
         .generate_blocks_and_wait_for_tip(100, &state_service_subscriber)
         .await;
-    clients.faucet.sync_and_await().await.unwrap();
-    clients.faucet.quick_shield(AccountId::ZERO).await.unwrap();
+    clients.sync_faucet().await;
+    clients.shield_faucet().await;
     test_manager
         .generate_blocks_and_wait_for_tip(1, &state_service_subscriber)
         .await;
-    clients.faucet.sync_and_await().await.unwrap();
+    clients.sync_faucet().await;
 
     clients.send_from_faucet(recipient_taddr.as_str(), 250_000).await;
     test_manager
         .generate_blocks_and_wait_for_tip(1, &state_service_subscriber)
         .await;
 
-    clients.recipient.sync_and_await().await.unwrap();
+    clients.sync_recipient().await;
 
     (recipient_taddr, faucet_taddr)
 }

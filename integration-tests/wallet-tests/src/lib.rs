@@ -254,7 +254,6 @@ mod launch_clients {
     use zaino_testutils::{PollableTip, TestManager, TestService, ValidatorExt, ValidatorKind};
     use zainodlib::error::IndexerError;
     use zebra_chain::parameters::NetworkKind;
-    use zip32::AccountId;
 
     /// Shared test bodies for the validator × service backend matrix.
     ///
@@ -317,14 +316,14 @@ mod launch_clients {
             let (mut test_manager, mut clients) = Self::launch_and_build(kind, None, None).await;
 
             if mature_blocks > 0 {
-                clients.faucet.sync_and_await().await.unwrap();
+                clients.sync_faucet().await;
                 dbg!(clients.faucet_balance().await);
                 test_manager
                     .generate_blocks_and_wait_for_tip(mature_blocks, test_manager.subscriber())
                     .await;
             }
 
-            clients.faucet.sync_and_await().await.unwrap();
+            clients.sync_faucet().await;
             dbg!(clients.faucet_balance().await);
 
             assert!(
@@ -344,7 +343,7 @@ mod launch_clients {
             test_manager
                 .generate_blocks_and_wait_for_tip(100, test_manager.subscriber())
                 .await;
-            clients.faucet.sync_and_await().await.unwrap();
+            clients.sync_faucet().await;
             dbg!(clients.faucet_balance().await);
 
             assert!(
@@ -365,11 +364,11 @@ mod launch_clients {
             );
 
             // *Send all transparent funds to own orchard address.
-            clients.faucet.quick_shield(AccountId::ZERO).await.unwrap();
+            clients.shield_faucet().await;
             test_manager
                 .generate_blocks_and_wait_for_tip(1, test_manager.subscriber())
                 .await;
-            clients.faucet.sync_and_await().await.unwrap();
+            clients.sync_faucet().await;
             dbg!(clients.faucet_balance().await);
 
             assert!(
@@ -387,7 +386,7 @@ mod launch_clients {
             test_manager
                 .generate_blocks_and_wait_for_tip(1, test_manager.subscriber())
                 .await;
-            clients.recipient.sync_and_await().await.unwrap();
+            clients.sync_recipient().await;
             dbg!(clients.recipient_balance().await);
 
             assert_eq!(

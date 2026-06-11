@@ -22,18 +22,18 @@ async fn fund_faucet<V, Service>(
     IndexerError: From<<<Service as ZcashService>::Subscriber as ZcashIndexer>::Error>,
     <Service as ZcashService>::Subscriber: zaino_testutils::PollableTip,
 {
-    clients.faucet.sync_and_await().await.unwrap();
+    clients.sync_faucet().await;
 
     if matches!(validator, ValidatorKind::Zebrad) {
         test_manager
             .generate_blocks_and_wait_for_tip(100, test_manager.subscriber())
             .await;
-        clients.faucet.sync_and_await().await.unwrap();
-        clients.faucet.quick_shield(AccountId::ZERO).await.unwrap();
+        clients.sync_faucet().await;
+        clients.shield_faucet().await;
         test_manager
             .generate_blocks_and_wait_for_tip(1, test_manager.subscriber())
             .await;
-        clients.faucet.sync_and_await().await.unwrap();
+        clients.sync_faucet().await;
     }
 }
 
@@ -73,7 +73,7 @@ async fn send_and_assert_received<V, Service>(
     test_manager
         .generate_blocks_and_wait_for_tip(1, test_manager.subscriber())
         .await;
-    clients.recipient.sync_and_await().await.unwrap();
+    clients.sync_recipient().await;
     assert_eq!(
         pool.received_balance(&clients.recipient_balance().await),
         amount
@@ -172,7 +172,7 @@ where
 
     dbg!(finalised_transactions.clone());
 
-    clients.recipient.sync_and_await().await.unwrap();
+    clients.sync_recipient().await;
 
     assert_eq!(
         wallet_tests::Pool::Transparent.received_balance(&clients.recipient_balance().await),
@@ -198,29 +198,29 @@ where
     test_manager
         .generate_blocks_and_wait_for_tip(2, test_manager.subscriber())
         .await;
-    clients.faucet.sync_and_await().await.unwrap();
+    clients.sync_faucet().await;
 
     // "Create" 3 orchard notes in faucet.
     if matches!(validator, ValidatorKind::Zebrad) {
         test_manager
             .generate_blocks_and_wait_for_tip(100, test_manager.subscriber())
             .await;
-        clients.faucet.sync_and_await().await.unwrap();
-        clients.faucet.quick_shield(AccountId::ZERO).await.unwrap();
+        clients.sync_faucet().await;
+        clients.shield_faucet().await;
         test_manager
             .generate_blocks_and_wait_for_tip(100, test_manager.subscriber())
             .await;
-        clients.faucet.sync_and_await().await.unwrap();
-        clients.faucet.quick_shield(AccountId::ZERO).await.unwrap();
+        clients.sync_faucet().await;
+        clients.shield_faucet().await;
         test_manager
             .generate_blocks_and_wait_for_tip(100, test_manager.subscriber())
             .await;
-        clients.faucet.sync_and_await().await.unwrap();
-        clients.faucet.quick_shield(AccountId::ZERO).await.unwrap();
+        clients.sync_faucet().await;
+        clients.shield_faucet().await;
         test_manager
             .generate_blocks_and_wait_for_tip(1, test_manager.subscriber())
             .await;
-        clients.faucet.sync_and_await().await.unwrap();
+        clients.sync_faucet().await;
     };
 
     let recipient_ua = clients.get_recipient_address("unified").await;
@@ -232,7 +232,7 @@ where
     test_manager
         .generate_blocks_and_wait_for_tip(100, test_manager.subscriber())
         .await;
-    clients.recipient.sync_and_await().await.unwrap();
+    clients.sync_recipient().await;
 
     let balance = clients.recipient_balance().await;
     assert_eq!(
@@ -268,7 +268,7 @@ where
     test_manager
         .generate_blocks_and_wait_for_tip(100, test_manager.subscriber())
         .await;
-    clients.recipient.sync_and_await().await.unwrap();
+    clients.sync_recipient().await;
 
     assert_eq!(
         clients
@@ -288,7 +288,7 @@ where
     test_manager
         .generate_blocks_and_wait_for_tip(1, test_manager.subscriber())
         .await;
-    clients.recipient.sync_and_await().await.unwrap();
+    clients.sync_recipient().await;
 
     assert_eq!(
         clients
@@ -316,23 +316,23 @@ where
     test_manager
         .generate_blocks_and_wait_for_tip(1, test_manager.subscriber())
         .await;
-    clients.faucet.sync_and_await().await.unwrap();
+    clients.sync_faucet().await;
 
     if matches!(validator, ValidatorKind::Zebrad) {
         test_manager
             .generate_blocks_and_wait_for_tip(100, test_manager.subscriber())
             .await;
-        clients.faucet.sync_and_await().await.unwrap();
-        clients.faucet.quick_shield(AccountId::ZERO).await.unwrap();
+        clients.sync_faucet().await;
+        clients.shield_faucet().await;
         test_manager
             .generate_blocks_and_wait_for_tip(100, test_manager.subscriber())
             .await;
-        clients.faucet.sync_and_await().await.unwrap();
-        clients.faucet.quick_shield(AccountId::ZERO).await.unwrap();
+        clients.sync_faucet().await;
+        clients.shield_faucet().await;
         test_manager
             .generate_blocks_and_wait_for_tip(1, test_manager.subscriber())
             .await;
-        clients.faucet.sync_and_await().await.unwrap();
+        clients.sync_faucet().await;
     };
 
     let recipient_ua = clients.get_recipient_address("unified").await;
@@ -342,7 +342,7 @@ where
 
     println!("\n\nStarting Mempool!\n");
     clients.recipient.wallet.write().await.clear_all();
-    clients.recipient.sync_and_await().await.unwrap();
+    clients.sync_recipient().await;
 
     // test_manager.local_net.print_stdout();
 
@@ -405,7 +405,7 @@ where
             .await
     );
 
-    clients.recipient.sync_and_await().await.unwrap();
+    clients.sync_recipient().await;
 
     assert_eq!(
         clients
