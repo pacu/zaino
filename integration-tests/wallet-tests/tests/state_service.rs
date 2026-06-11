@@ -176,13 +176,11 @@ async fn best_chaintip_height(fetch_service_subscriber: &FetchServiceSubscriber)
     u32::from(idx.best_chaintip(&snapshot).await.unwrap().height)
 }
 
-/// Generate `blocks` blocks (waiting on both subscribers) and return the
-/// faucet's transparent address. The shared preamble of the
-/// `lightwallet_indexer` tests that query the faucet's coinbase data. Takes the
-/// handles by reference because the owned fetch/state services must stay alive
-/// in the caller.
+/// Get the faucet's transparent address and generate `blocks` blocks (waiting
+/// on both subscribers); returns the address. Takes the handles by reference
+/// because the owned fetch/state services must stay alive in the caller.
 #[allow(deprecated)]
-async fn generate_and_faucet_taddr<V: ValidatorExt>(
+async fn generate_funded_taddr<V: ValidatorExt>(
     test_manager: &TestManager<V, StateService>,
     clients: &wallet_tests::Clients,
     fetch_service_subscriber: &FetchServiceSubscriber,
@@ -198,6 +196,55 @@ async fn generate_and_faucet_taddr<V: ValidatorExt>(
         )
         .await;
     taddr
+}
+
+/// Launch state+fetch services on regtest zebrad, fund the faucet by generating
+/// `blocks` blocks, and build a query request from the faucet's transparent
+/// address via `build_request`. Returns the full handle set and the request —
+/// the shared `create_test_manager_and_services … → let request` preamble of
+/// the `lightwallet_indexer` faucet-query tests, parameterized over the request
+/// type so each test supplies only its own request shape. The owned fetch/state
+/// services are returned because the caller must keep them alive for the
+/// subscribers to work.
+#[allow(deprecated)]
+async fn launch_and_build_faucet_request<R>(
+    blocks: u32,
+    build_request: impl FnOnce(String) -> R,
+) -> (
+    TestManager<Zebrad, StateService>,
+    FetchService,
+    FetchServiceSubscriber,
+    StateService,
+    StateServiceSubscriber,
+    wallet_tests::Clients,
+    R,
+) {
+    let (test_manager, fetch_service, fetch_subscriber, state_service, state_subscriber, clients) =
+        create_test_manager_and_services::<Zebrad>(
+            &ValidatorKind::Zebrad,
+            None,
+            true,
+            Some(NetworkKind::Regtest),
+        )
+        .await;
+    let taddr = generate_funded_taddr(
+        &test_manager,
+        &clients,
+        &fetch_subscriber,
+        &state_subscriber,
+        blocks,
+    )
+    .await;
+    let request = build_request(taddr);
+    (
+        test_manager,
+        fetch_service,
+        fetch_subscriber,
+        state_service,
+        state_subscriber,
+        clients,
+        request,
+    )
 }
 
 #[allow(deprecated)]
@@ -1136,40 +1183,25 @@ mod zebra {
         #[tokio::test(flavor = "multi_thread")]
         async fn get_taddress_txids() {
             let (
-                test_manager,
+                _test_manager,
                 _fetch_service,
                 fetch_service_subscriber,
                 _state_service,
                 state_service_subscriber,
-                clients,
-            ) = create_test_manager_and_services::<Zebrad>(
-                &ValidatorKind::Zebrad,
-                None,
-                true,
-                Some(NetworkKind::Regtest),
-            )
-            .await;
-
-            let taddr = generate_and_faucet_taddr(
-                &test_manager,
-                &clients,
-                &fetch_service_subscriber,
-                &state_service_subscriber,
-                100,
-            )
+                _clients,
+                request,
+            ) = launch_and_build_faucet_request(100, |taddr| {
+                GetAddressTxIdsRequest::new(vec![taddr], Some(2), Some(5))
+            })
             .await;
 
             let state_service_taddress_txids = state_service_subscriber
-                .get_address_tx_ids(GetAddressTxIdsRequest::new(
-                    vec![taddr.clone()],
-                    Some(2),
-                    Some(5),
-                ))
+                .get_address_tx_ids(request.clone())
                 .await
                 .unwrap();
             dbg!(&state_service_taddress_txids);
             let fetch_service_taddress_txids = fetch_service_subscriber
-                .get_address_tx_ids(GetAddressTxIdsRequest::new(vec![taddr], Some(2), Some(5)))
+                .get_address_tx_ids(request)
                 .await
                 .unwrap();
             dbg!(&fetch_service_taddress_txids);
@@ -1179,33 +1211,19 @@ mod zebra {
         #[tokio::test(flavor = "multi_thread")]
         async fn get_address_utxos_stream() {
             let (
-                test_manager,
+                _test_manager,
                 _fetch_service,
                 fetch_service_subscriber,
                 _state_service,
                 state_service_subscriber,
                 mut clients,
-            ) = create_test_manager_and_services::<Zebrad>(
-                &ValidatorKind::Zebrad,
-                None,
-                true,
-                Some(NetworkKind::Regtest),
-            )
-            .await;
-
-            let taddr = generate_and_faucet_taddr(
-                &test_manager,
-                &clients,
-                &fetch_service_subscriber,
-                &state_service_subscriber,
-                5,
-            )
-            .await;
-            let request = GetAddressUtxosArg {
+                request,
+            ) = launch_and_build_faucet_request(5, |taddr| GetAddressUtxosArg {
                 addresses: vec![taddr],
                 start_height: 2,
                 max_entries: 3,
-            };
+            })
+            .await;
             let state_service_address_utxos_streamed = state_service_subscriber
                 .get_address_utxos_stream(request.clone())
                 .await
@@ -1240,33 +1258,19 @@ mod zebra {
         #[tokio::test(flavor = "multi_thread")]
         async fn get_address_utxos() {
             let (
-                test_manager,
+                _test_manager,
                 _fetch_service,
                 fetch_service_subscriber,
                 _state_service,
                 state_service_subscriber,
                 mut clients,
-            ) = create_test_manager_and_services::<Zebrad>(
-                &ValidatorKind::Zebrad,
-                None,
-                true,
-                Some(NetworkKind::Regtest),
-            )
-            .await;
-
-            let taddr = generate_and_faucet_taddr(
-                &test_manager,
-                &clients,
-                &fetch_service_subscriber,
-                &state_service_subscriber,
-                5,
-            )
-            .await;
-            let request = GetAddressUtxosArg {
+                request,
+            ) = launch_and_build_faucet_request(5, |taddr| GetAddressUtxosArg {
                 addresses: vec![taddr],
                 start_height: 2,
                 max_entries: 3,
-            };
+            })
+            .await;
             let state_service_address_utxos = state_service_subscriber
                 .get_address_utxos(request.clone())
                 .await
@@ -1296,39 +1300,24 @@ mod zebra {
         #[tokio::test(flavor = "multi_thread")]
         async fn get_taddress_balance() {
             let (
-                test_manager,
+                _test_manager,
                 _fetch_service,
                 fetch_service_subscriber,
                 _state_service,
                 state_service_subscriber,
-                clients,
-            ) = create_test_manager_and_services::<Zebrad>(
-                &ValidatorKind::Zebrad,
-                None,
-                true,
-                Some(NetworkKind::Regtest),
-            )
-            .await;
-
-            let taddr = generate_and_faucet_taddr(
-                &test_manager,
-                &clients,
-                &fetch_service_subscriber,
-                &state_service_subscriber,
-                5,
-            )
+                _clients,
+                request,
+            ) = launch_and_build_faucet_request(5, |taddr| AddressList {
+                addresses: vec![taddr],
+            })
             .await;
 
             let state_service_taddress_balance = state_service_subscriber
-                .get_taddress_balance(AddressList {
-                    addresses: vec![taddr.clone()],
-                })
+                .get_taddress_balance(request.clone())
                 .await
                 .unwrap();
             let fetch_service_taddress_balance = fetch_service_subscriber
-                .get_taddress_balance(AddressList {
-                    addresses: vec![taddr],
-                })
+                .get_taddress_balance(request)
                 .await
                 .unwrap();
             assert_eq!(
