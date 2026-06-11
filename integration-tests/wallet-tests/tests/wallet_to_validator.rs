@@ -8,7 +8,6 @@ use zaino_testutils::TestManager;
 use zaino_testutils::ValidatorExt;
 use zaino_testutils::ValidatorKind;
 use zainodlib::error::IndexerError;
-use zip32::AccountId;
 
 /// Sync the faucet; on zebrad, mature 100 coinbase blocks and shield so it has
 /// spendable funds (zebrad can't mine directly to orchard in this setup).
@@ -280,11 +279,7 @@ where
         250_000
     );
 
-    clients
-        .recipient
-        .quick_shield(AccountId::ZERO)
-        .await
-        .unwrap();
+    clients.shield_recipient().await;
     test_manager
         .generate_blocks_and_wait_for_tip(1, test_manager.subscriber())
         .await;

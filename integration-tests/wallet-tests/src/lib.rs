@@ -73,25 +73,42 @@ impl Clients {
             .expect("quick_send from faucet")
     }
 
-    /// Shield the faucet's account-0 transparent funds.
-    pub async fn shield_faucet(&mut self) {
-        self.faucet
+    /// Shield `client`'s account-0 transparent funds. Shared by
+    /// [`Clients::shield_faucet`] and [`Clients::shield_recipient`].
+    async fn shield(client: &mut LightClient, who: &str) {
+        client
             .quick_shield(zip32::AccountId::ZERO)
             .await
-            .expect("quick_shield faucet");
+            .unwrap_or_else(|e| panic!("quick_shield {who}: {e:?}"));
+    }
+
+    /// Shield the faucet's account-0 transparent funds.
+    pub async fn shield_faucet(&mut self) {
+        Self::shield(&mut self.faucet, "faucet").await;
+    }
+
+    /// Shield the recipient's account-0 transparent funds.
+    pub async fn shield_recipient(&mut self) {
+        Self::shield(&mut self.recipient, "recipient").await;
+    }
+
+    /// Sync `client`'s wallet to the chain tip. Shared by
+    /// [`Clients::sync_faucet`] and [`Clients::sync_recipient`].
+    async fn sync(client: &mut LightClient, who: &str) {
+        client
+            .sync_and_await()
+            .await
+            .unwrap_or_else(|e| panic!("sync {who}: {e:?}"));
     }
 
     /// Sync the faucet wallet to the chain tip.
     pub async fn sync_faucet(&mut self) {
-        self.faucet.sync_and_await().await.expect("sync faucet");
+        Self::sync(&mut self.faucet, "faucet").await;
     }
 
     /// Sync the recipient wallet to the chain tip.
     pub async fn sync_recipient(&mut self) {
-        self.recipient
-            .sync_and_await()
-            .await
-            .expect("sync recipient");
+        Self::sync(&mut self.recipient, "recipient").await;
     }
 }
 

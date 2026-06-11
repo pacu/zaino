@@ -131,11 +131,7 @@ async fn create_200_block_regtest_chain_vectors() {
 
     // create transactions
     clients.shield_faucet().await;
-    clients
-        .recipient
-        .quick_shield(zip32::AccountId::ZERO)
-        .await
-        .unwrap();
+    clients.shield_recipient().await;
 
     clients.send_from_faucet(recipient_taddr.as_str(), 250_000).await;
     clients.send_from_faucet(recipient_uaddr.as_str(), 250_000).await;
@@ -165,11 +161,7 @@ async fn create_200_block_regtest_chain_vectors() {
 
         // create transactions
         clients.shield_faucet().await;
-        clients
-            .recipient
-            .quick_shield(zip32::AccountId::ZERO)
-            .await
-            .unwrap();
+        clients.shield_recipient().await;
 
         clients.send_from_faucet(recipient_taddr.as_str(), 250_000).await;
         clients.send_from_faucet(recipient_uaddr.as_str(), 250_000).await;
@@ -204,11 +196,7 @@ async fn create_200_block_regtest_chain_vectors() {
 
         // create transactions
         clients.shield_faucet().await;
-        clients
-            .recipient
-            .quick_shield(zip32::AccountId::ZERO)
-            .await
-            .unwrap();
+        clients.shield_recipient().await;
 
         clients.send_from_faucet(recipient_taddr.as_str(), 250_000).await;
         clients.send_from_faucet(recipient_saddr.as_str(), 250_000).await;
