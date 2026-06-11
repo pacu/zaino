@@ -1,6 +1,7 @@
 //! These tests compare the output of `FetchService` with the output of `JsonRpcConnector`.
 
 use futures::StreamExt as _;
+use walletless_tests::rpc::z_validate_address::{run_z_validate_for, SaplingSuite};
 use zaino_fetch::jsonrpsee::connector::JsonRpSeeConnector;
 use zaino_proto::proto::compact_formats::CompactBlock;
 use zaino_proto::proto::service::{BlockId, BlockRange, GetSubtreeRootsArg, PoolType};
@@ -31,30 +32,30 @@ async fn launch_fetch_service<V: ValidatorExt>(
     test_manager.close().await;
 }
 
+/// Fetch block 1 at the given `getblock` verbosity (0 = hex encoded data,
+/// 1 = JSON object).
 #[allow(deprecated)]
-async fn fetch_service_get_block_raw<V: ValidatorExt>(validator: &ValidatorKind) {
+async fn fetch_service_get_block_at_verbosity<V: ValidatorExt>(
+    validator: &ValidatorKind,
+    verbosity: u8,
+) {
     let (mut test_manager, fetch_service_subscriber) =
         zaino_testutils::launch_with_fetch_subscriber::<V>(validator, None).await;
 
     dbg!(fetch_service_subscriber
-        .z_get_block("1".to_string(), Some(0))
+        .z_get_block("1".to_string(), Some(verbosity))
         .await
         .unwrap());
 
     test_manager.close().await;
 }
 
-#[allow(deprecated)]
+async fn fetch_service_get_block_raw<V: ValidatorExt>(validator: &ValidatorKind) {
+    fetch_service_get_block_at_verbosity::<V>(validator, 0).await;
+}
+
 async fn fetch_service_get_block_object<V: ValidatorExt>(validator: &ValidatorKind) {
-    let (mut test_manager, fetch_service_subscriber) =
-        zaino_testutils::launch_with_fetch_subscriber::<V>(validator, None).await;
-
-    dbg!(fetch_service_subscriber
-        .z_get_block("1".to_string(), Some(1))
-        .await
-        .unwrap());
-
-    test_manager.close().await;
+    fetch_service_get_block_at_verbosity::<V>(validator, 1).await;
 }
 
 #[allow(deprecated)]
@@ -218,14 +219,14 @@ async fn fetch_service_get_block_subsidy<V: ValidatorExt>(validator: &ValidatorK
         ValidatorKind::Zebrad => first_halving_height.0 + 10,
     };
 
+    let jsonrpc_client = test_manager.full_node_jsonrpc_connector().await;
+
     for i in 0..block_limit {
         test_manager
             .generate_blocks_and_wait_for_tip(1, &fetch_service_subscriber)
             .await;
         let fetch_service_get_block_subsidy =
             fetch_service_subscriber.get_block_subsidy(i).await.unwrap();
-
-        let jsonrpc_client = test_manager.full_node_jsonrpc_connector().await;
 
         let rpc_block_subsidy_response = jsonrpc_client.get_block_subsidy(i).await.unwrap();
         assert_eq!(fetch_service_get_block_subsidy, rpc_block_subsidy_response);
@@ -268,6 +269,8 @@ async fn fetch_service_get_block_header<V: ValidatorExt>(validator: &ValidatorKi
 
     const BLOCK_LIMIT: u32 = 10;
 
+    let jsonrpc_client = test_manager.full_node_jsonrpc_connector().await;
+
     for i in 0..BLOCK_LIMIT {
         test_manager
             .generate_blocks_and_wait_for_tip(1, &fetch_service_subscriber)
@@ -287,8 +290,6 @@ async fn fetch_service_get_block_header<V: ValidatorExt>(validator: &ValidatorKi
             .get_block_header(block_hash.to_string(), false)
             .await
             .unwrap();
-
-        let jsonrpc_client = test_manager.full_node_jsonrpc_connector().await;
 
         let rpc_block_header_response = jsonrpc_client
             .get_block_header(block_hash.to_string(), false)
@@ -313,14 +314,26 @@ async fn fetch_service_get_block_header<V: ValidatorExt>(validator: &ValidatorKi
     }
 }
 
+/// Launch a fetch-backend manager and mine 5 blocks, leaving the chain tip at
+/// height 7 (a fresh regtest launch starts at height 2).
 #[allow(deprecated)]
-async fn fetch_service_get_best_blockhash<V: ValidatorExt>(validator: &ValidatorKind) {
-    let (mut test_manager, fetch_service_subscriber) =
+async fn launch_and_mine_five_blocks<V: ValidatorExt>(
+    validator: &ValidatorKind,
+) -> (TestManager<V, FetchService>, FetchServiceSubscriber) {
+    let (test_manager, fetch_service_subscriber) =
         zaino_testutils::launch_with_fetch_subscriber::<V>(validator, None).await;
 
     test_manager
         .generate_blocks_and_wait_for_tip(5, &fetch_service_subscriber)
         .await;
+
+    (test_manager, fetch_service_subscriber)
+}
+
+#[allow(deprecated)]
+async fn fetch_service_get_best_blockhash<V: ValidatorExt>(validator: &ValidatorKind) {
+    let (mut test_manager, fetch_service_subscriber) =
+        launch_and_mine_five_blocks::<V>(validator).await;
 
     let inspected_block: GetBlock = fetch_service_subscriber
         // Some(verbosity) : 1 for JSON Object, 2 for tx data as JSON instead of hex
@@ -347,11 +360,7 @@ async fn fetch_service_get_best_blockhash<V: ValidatorExt>(validator: &Validator
 #[allow(deprecated)]
 async fn fetch_service_get_block_count<V: ValidatorExt>(validator: &ValidatorKind) {
     let (mut test_manager, fetch_service_subscriber) =
-        zaino_testutils::launch_with_fetch_subscriber::<V>(validator, None).await;
-
-    test_manager
-        .generate_blocks_and_wait_for_tip(5, &fetch_service_subscriber)
-        .await;
+        launch_and_mine_five_blocks::<V>(validator).await;
 
     let block_id = BlockId {
         height: 7,
@@ -400,6 +409,17 @@ async fn fetch_service_validate_address<V: ValidatorExt>(validator: &ValidatorKi
         fetch_service_validate_address_script,
         expected_validation_script
     );
+
+    test_manager.close().await;
+}
+
+/// Launch a fetch-backend manager and run the shared `z_validate_address`
+/// suite against its subscriber.
+async fn z_validate<V: ValidatorExt>(validator: &ValidatorKind, suite: SaplingSuite) {
+    let (mut test_manager, fetch_service_subscriber) =
+        zaino_testutils::launch_with_fetch_subscriber::<V>(validator, None).await;
+
+    run_z_validate_for(&fetch_service_subscriber, suite).await;
 
     test_manager.close().await;
 }
@@ -495,12 +515,10 @@ async fn fetch_service_get_tree_state<V: ValidatorExt>(validator: &ValidatorKind
         hash: Vec::new(),
     };
 
-    let fetch_service_get_tree_state = dbg!(fetch_service_subscriber
-        .get_tree_state(block_id.clone())
+    dbg!(fetch_service_subscriber
+        .get_tree_state(block_id)
         .await
         .unwrap());
-
-    dbg!(fetch_service_get_tree_state);
 
     test_manager.close().await;
 }
@@ -569,12 +587,8 @@ async fn assert_fetch_service_getnetworksols_matches_rpc<V: ValidatorExt>(
 
 #[allow(deprecated)]
 async fn fetch_service_get_block_deltas<V: ValidatorExt>(validator: &ValidatorKind) {
-    let mut test_manager =
-        TestManager::<V, FetchService>::launch(validator, None, None, None, true, false, false)
-            .await
-            .unwrap();
-
-    let fetch_service_subscriber = test_manager.service_subscriber.take().unwrap();
+    let (test_manager, fetch_service_subscriber) =
+        zaino_testutils::launch_with_fetch_subscriber::<V>(validator, None).await;
 
     let current_block = fetch_service_subscriber.get_latest_block().await.unwrap();
 
@@ -633,23 +647,9 @@ mod zcashd {
             fetch_service_validate_address::<Zcashd>(&ValidatorKind::Zcashd).await;
         }
 
-        #[allow(deprecated)]
         #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
         pub(crate) async fn z_validate_address() {
-            let (mut test_manager, fetch_service_subscriber) =
-                zaino_testutils::launch_with_fetch_subscriber::<Zcashd>(
-                    &ValidatorKind::Zcashd,
-                    None,
-                )
-                .await;
-
-            walletless_tests::rpc::z_validate_address::run_z_validate_for(
-                &fetch_service_subscriber,
-                walletless_tests::rpc::z_validate_address::SaplingSuite::Standard,
-            )
-            .await;
-
-            test_manager.close().await;
+            z_validate::<Zcashd>(&ValidatorKind::Zcashd, SaplingSuite::Standard).await;
         }
     }
 
@@ -718,23 +718,13 @@ mod zebrad {
             fetch_service_validate_address::<Zebrad>(&ValidatorKind::Zebrad).await;
         }
 
-        #[allow(deprecated)]
         #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
         pub(crate) async fn z_validate_address() {
-            let (mut test_manager, fetch_service_subscriber) =
-                zaino_testutils::launch_with_fetch_subscriber::<Zebrad>(
-                    &ValidatorKind::Zebrad,
-                    None,
-                )
-                .await;
-
-            walletless_tests::rpc::z_validate_address::run_z_validate_for(
-                &fetch_service_subscriber,
-                walletless_tests::rpc::z_validate_address::SaplingSuite::ZebradPassthroughFetchService,
+            z_validate::<Zebrad>(
+                &ValidatorKind::Zebrad,
+                SaplingSuite::ZebradPassthroughFetchService,
             )
             .await;
-
-            test_manager.close().await;
         }
     }
 
