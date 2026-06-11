@@ -36,7 +36,7 @@ pub use zcash_local_net as services;
 use zcash_local_net::validator::zebrad::{Zebrad, ZebradConfig};
 pub use zcash_local_net::validator::Validator;
 use zcash_local_net::validator::ValidatorConfig as _;
-use zcash_local_net::PoolType;
+pub use zcash_local_net::PoolType;
 use zcash_local_net::{
     error::LaunchError,
     validator::zcashd::{Zcashd, ZcashdConfig},
@@ -436,6 +436,16 @@ impl ValidatorExt for Zcashd {
     }
 }
 
+/// The pool regtest validators mine to unless a test pins one via
+/// [`TestManager::launch_mining_to`]. Mining to a shielded pool gives the
+/// faucet wallet directly spendable coinbase once it matures, with no
+/// shield-transparent-coinbase ritual; tests whose subject *is* the miner's
+/// transparent footprint pin [`PoolType::Transparent`] instead.
+///
+/// This constant is the single upgrade point for the default: when the next
+/// shielded pool (ironwood) becomes minable, only this value changes.
+pub const DEFAULT_MINING_POOL: PoolType = PoolType::ORCHARD;
+
 impl<C, Service> TestManager<C, Service>
 where
     C: ValidatorExt,
@@ -468,9 +478,43 @@ where
             .unwrap()
     }
 
-    /// Launches zcash-local-net<Empty, Validator>.
+    /// Launches zcash-local-net<Empty, Validator> mining to
+    /// [`DEFAULT_MINING_POOL`]. See [`Self::launch_mining_to`], which this
+    /// delegates to, for the parameter contract; tests that must control the
+    /// miner's pool (e.g. those asserting on the miner taddr's coinbase
+    /// footprint) call that method directly.
+    pub async fn launch(
+        validator: &ValidatorKind,
+        network: Option<NetworkKind>,
+        activation_heights: Option<ActivationHeights>,
+        chain_cache: Option<PathBuf>,
+        enable_zaino: bool,
+        enable_zaino_jsonrpc_server: bool,
+        enable_clients: bool,
+    ) -> Result<Self, std::io::Error> {
+        Self::launch_mining_to(
+            DEFAULT_MINING_POOL,
+            validator,
+            network,
+            activation_heights,
+            chain_cache,
+            enable_zaino,
+            enable_zaino_jsonrpc_server,
+            enable_clients,
+        )
+        .await
+    }
+
+    /// Launches zcash-local-net<Empty, Validator> with coinbase paid to
+    /// `mine_to_pool`'s regtest miner address.
     ///
     /// Possible validators: Zcashd, Zebrad.
+    ///
+    /// On zebrad a shielded `mine_to_pool` maps to a unified miner address
+    /// whose receivers zebra tries in order orchard → sapling → transparent
+    /// per block, so with the default regtest activation heights (NU5 at
+    /// height 2) block 1's coinbase lands in the sapling receiver and later
+    /// blocks in the orchard receiver.
     ///
     /// If chain_cache is given a path the chain will be loaded.
     ///
@@ -484,9 +528,10 @@ where
     #[instrument(
         name = "TestManager::launch",
         skip(activation_heights, chain_cache),
-        fields(validator = ?validator, network = ?network, enable_zaino, enable_clients)
+        fields(validator = ?validator, network = ?network, mine_to_pool = ?mine_to_pool, enable_zaino, enable_clients)
     )]
-    pub async fn launch(
+    pub async fn launch_mining_to(
+        mine_to_pool: PoolType,
         validator: &ValidatorKind,
         network: Option<NetworkKind>,
         activation_heights: Option<ActivationHeights>,
@@ -519,15 +564,7 @@ where
         // Launch LocalNet:
 
         let mut config = C::Config::default();
-        config.set_test_parameters(
-            if validator == &ValidatorKind::Zebrad {
-                PoolType::Transparent
-            } else {
-                PoolType::ORCHARD
-            },
-            activation_heights.into(),
-            chain_cache.clone(),
-        );
+        config.set_test_parameters(mine_to_pool, activation_heights.into(), chain_cache.clone());
 
         debug!("[TEST] Launching validator");
         let (local_net, validator_settings) = C::launch_validator_and_return_config(config)
@@ -803,7 +840,35 @@ pub async fn launch_state_and_fetch_services<V: ValidatorExt>(
     StateService,
     StateServiceSubscriber,
 ) {
-    let test_manager = TestManager::<V, StateService>::launch(
+    launch_state_and_fetch_services_mining_to(
+        DEFAULT_MINING_POOL,
+        validator,
+        chain_cache,
+        enable_zaino,
+        network,
+    )
+    .await
+}
+
+/// [`launch_state_and_fetch_services`] with the miner's pool pinned to
+/// `mine_to_pool` instead of [`DEFAULT_MINING_POOL`]. For tests whose subject
+/// is the miner's coinbase footprint in a specific pool.
+#[allow(deprecated)]
+pub async fn launch_state_and_fetch_services_mining_to<V: ValidatorExt>(
+    mine_to_pool: PoolType,
+    validator: &ValidatorKind,
+    chain_cache: Option<PathBuf>,
+    enable_zaino: bool,
+    network: Option<NetworkKind>,
+) -> (
+    TestManager<V, StateService>,
+    FetchService,
+    FetchServiceSubscriber,
+    StateService,
+    StateServiceSubscriber,
+) {
+    let test_manager = TestManager::<V, StateService>::launch_mining_to(
+        mine_to_pool,
         validator,
         network,
         None,

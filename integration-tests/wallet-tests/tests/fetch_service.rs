@@ -37,17 +37,16 @@ async fn create_test_manager_and_fetch_service<V: ValidatorExt>(
     (test_manager, fetch_service_subscriber, clients)
 }
 
-/// Sync the faucet; on zebrad, run `shield_rounds` rounds of "mature 100
-/// coinbase blocks, sync, shield" (zebrad can't mine directly to orchard in
-/// this setup), then mine one more block and sync so the shielded funds are
-/// spendable. `shield_rounds` of 1 funds a single send; 2 funds two.
+/// Sync the faucet; on zebrad, mine `100·coinbase_batches + 1` blocks and sync
+/// so at least `coinbase_batches` shielded coinbase notes are mature and
+/// spendable. `coinbase_batches` of 1 funds a single send; 2 funds two.
 #[allow(deprecated)]
 async fn fund_faucet<V: ValidatorExt>(
     test_manager: &TestManager<V, FetchService>,
     clients: &mut wallet_tests::Clients,
     validator: &ValidatorKind,
     fetch_service_subscriber: &FetchServiceSubscriber,
-    shield_rounds: u32,
+    coinbase_batches: u32,
 ) {
     wallet_tests::fund_faucet_dual(
         test_manager,
@@ -55,7 +54,7 @@ async fn fund_faucet<V: ValidatorExt>(
         validator,
         fetch_service_subscriber,
         fetch_service_subscriber,
-        shield_rounds,
+        coinbase_batches,
     )
     .await;
 }
@@ -98,29 +97,23 @@ async fn block_range_fixture<V: ValidatorExt>(
 
     clients.sync_faucet().await;
 
-    if matches!(validator, ValidatorKind::Zebrad) {
-        // Mature one coinbase batch, then spread three shields over
-        // consecutive blocks.
-        wallet_tests::shield_faucet_rounds(
-            &test_manager,
-            &mut clients,
-            &fetch_service_subscriber,
-            &fetch_service_subscriber,
-            &[100, 1, 1],
-            1,
-        )
-        .await;
+    // zebrad: 103 blocks leaves at least three mature coinbase notes (one per
+    // send below) and preserves the chain height of the legacy
+    // mature-then-shield ritual it replaces. zcashd's launch reward is already
+    // spendable; it mines 14 to match the heights its assertions expect.
+    let blocks = if matches!(validator, ValidatorKind::Zebrad) {
+        103
     } else {
-        // zcashd
-        wallet_tests::mine_and_sync_faucet(
-            &test_manager,
-            &mut clients,
-            &fetch_service_subscriber,
-            &fetch_service_subscriber,
-            14,
-        )
-        .await;
-    }
+        14
+    };
+    wallet_tests::mine_and_sync_faucet(
+        &test_manager,
+        &mut clients,
+        &fetch_service_subscriber,
+        &fetch_service_subscriber,
+        blocks,
+    )
+    .await;
 
     let recipient_transparent = clients.get_recipient_address("transparent").await;
     let deshielding_txid = clients

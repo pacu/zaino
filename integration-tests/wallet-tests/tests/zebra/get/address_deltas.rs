@@ -59,13 +59,17 @@ async fn setup_chain<V: ValidatorExt>(
     let recipient_taddr = clients.get_recipient_address("transparent").await;
     let faucet_taddr = clients.get_faucet_address("transparent").await;
 
-    // Generate blocks and perform transaction
-    wallet_tests::fund_faucet_dual(
+    // Mature the faucet's transparent coinbase and shield it (block 101): the
+    // shield's debit on the faucet taddr is part of the deltas under test, so
+    // the legacy ritual stays even though funding-only tests now mine straight
+    // to a shielded pool.
+    clients.sync_faucet().await;
+    wallet_tests::shield_faucet_rounds(
         test_manager,
         clients,
-        &ValidatorKind::Zebrad,
         &state_service_subscriber,
         &state_service_subscriber,
+        &[100],
         1,
     )
     .await;
@@ -237,8 +241,16 @@ pub(super) async fn main() {
         _state_service,
         state_service_subscriber,
         mut clients,
-    ) = super::create_test_manager_and_services::<Zebrad>(&ValidatorKind::Zebrad, None, true, None)
-        .await;
+    ) = super::create_test_manager_and_services_mining_to::<Zebrad>(
+        // The deltas under test are the faucet taddr's coinbase credits and
+        // the shield's debit — coinbase must land on the miner taddr.
+        zaino_testutils::PoolType::Transparent,
+        &ValidatorKind::Zebrad,
+        None,
+        true,
+        None,
+    )
+    .await;
 
     let (recipient_taddr, faucet_taddr) = setup_chain(&mut test_manager, &mut clients).await;
 

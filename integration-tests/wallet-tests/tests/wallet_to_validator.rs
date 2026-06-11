@@ -9,8 +9,8 @@ use zaino_testutils::ValidatorExt;
 use zaino_testutils::ValidatorKind;
 use zainodlib::error::IndexerError;
 
-/// Sync the faucet; on zebrad, mature 100 coinbase blocks and shield so it has
-/// spendable funds (zebrad can't mine directly to orchard in this setup).
+/// Sync the faucet; on zebrad, mine 101 blocks so a mature shielded coinbase
+/// note is spendable (zcashd's launch reward already is).
 async fn fund_faucet<V, Service>(
     test_manager: &TestManager<V, Service>,
     clients: &mut wallet_tests::Clients,

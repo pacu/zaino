@@ -227,7 +227,9 @@ pub fn default_heights(validator: &ValidatorKind) -> ActivationHeights {
 
 /// Launch a `TestManager<C, Service>` and build faucet/recipient lightclients
 /// whose view matches the launched chain — the shared "launch + build_clients"
-/// step used by both the smoke tests and the wallet_to_validator tests.
+/// step used by both the smoke tests and the wallet_to_validator tests. Mines
+/// to [`zaino_testutils::DEFAULT_MINING_POOL`]; tests that assert on the
+/// miner's pool-specific footprint use [`launch_and_build_mining_to`].
 pub async fn launch_and_build<C, Service>(
     validator: &ValidatorKind,
     network: Option<NetworkKind>,
@@ -239,7 +241,31 @@ where
     IndexerError: From<<<Service as ZcashService>::Subscriber as ZcashIndexer>::Error>,
     <Service as ZcashService>::Subscriber: PollableTip,
 {
-    let test_manager = TestManager::<C, Service>::launch(
+    launch_and_build_mining_to::<C, Service>(
+        zaino_testutils::DEFAULT_MINING_POOL,
+        validator,
+        network,
+        chain_cache,
+    )
+    .await
+}
+
+/// [`launch_and_build`] with the miner's pool pinned to `mine_to_pool` instead
+/// of [`zaino_testutils::DEFAULT_MINING_POOL`].
+pub async fn launch_and_build_mining_to<C, Service>(
+    mine_to_pool: zaino_testutils::PoolType,
+    validator: &ValidatorKind,
+    network: Option<NetworkKind>,
+    chain_cache: Option<PathBuf>,
+) -> (TestManager<C, Service>, Clients)
+where
+    C: ValidatorExt,
+    Service: TestService,
+    IndexerError: From<<<Service as ZcashService>::Subscriber as ZcashIndexer>::Error>,
+    <Service as ZcashService>::Subscriber: PollableTip,
+{
+    let test_manager = TestManager::<C, Service>::launch_mining_to(
+        mine_to_pool,
         validator,
         network,
         None,
@@ -292,6 +318,12 @@ pub async fn mine_and_sync_faucet<C, Service, A, B>(
 /// `final_blocks` and sync so the last shield is spendable. `&[100; n]` matures
 /// a fresh coinbase batch before every shield; `&[100, 1, 1]` matures once and
 /// spreads three shields over consecutive blocks.
+///
+/// Presumes the manager was launched mining to `PoolType::Transparent` (via a
+/// `*_mining_to` launch variant) — the shield is what moves transparent
+/// coinbase into orchard. Funding-only callers don't need this ritual: under
+/// the default shielded mining pool, matured coinbase is directly spendable
+/// (see [`fund_faucet_dual`]).
 #[allow(deprecated)]
 pub async fn shield_faucet_rounds<C, Service, A, B>(
     test_manager: &TestManager<C, Service>,
@@ -315,11 +347,16 @@ pub async fn shield_faucet_rounds<C, Service, A, B>(
     mine_and_sync_faucet(test_manager, clients, mined_against, then_synced, final_blocks).await;
 }
 
-/// Sync the faucet and, on zebrad, run `shield_rounds` rounds of "mature 100
-/// coinbase blocks, sync, shield", then mine one block and sync — waiting on
-/// both subscribers each time. The dual-subscriber funding preamble shared by
-/// the state_service and json_server tests; zcashd needs no shield, so the
-/// zebrad-only branch is skipped there.
+/// Sync the faucet and, on zebrad, mine `100·coinbase_batches + 1` blocks and
+/// sync — waiting on both subscribers — so at least `coinbase_batches` shielded
+/// coinbase notes are mature and spendable (coinbase matures at 100
+/// confirmations). The dual-subscriber funding preamble shared by the
+/// state_service and json_server tests; zcashd's launch reward is already
+/// spendable, so it mines nothing.
+///
+/// The block count matches the legacy mature-then-shield ritual
+/// (`shield_faucet_rounds(&[100; n], 1)`), so height-sensitive expectations
+/// downstream of existing callers are unmoved.
 #[allow(deprecated)]
 pub async fn fund_faucet_dual<C, Service, A, B>(
     test_manager: &TestManager<C, Service>,
@@ -327,7 +364,7 @@ pub async fn fund_faucet_dual<C, Service, A, B>(
     validator: &ValidatorKind,
     mined_against: &A,
     then_synced: &B,
-    shield_rounds: u32,
+    coinbase_batches: u32,
 ) where
     C: ValidatorExt,
     Service: TestService,
@@ -338,13 +375,12 @@ pub async fn fund_faucet_dual<C, Service, A, B>(
 {
     clients.sync_faucet().await;
     if matches!(validator, ValidatorKind::Zebrad) {
-        shield_faucet_rounds(
+        mine_and_sync_faucet(
             test_manager,
             clients,
             mined_against,
             then_synced,
-            &vec![100; shield_rounds as usize],
-            1,
+            100 * coinbase_batches + 1,
         )
         .await;
     }
@@ -362,7 +398,7 @@ pub async fn fund_and_send_dual<C, Service, A, B>(
     validator: &ValidatorKind,
     mined_against: &A,
     then_synced: &B,
-    shield_rounds: u32,
+    coinbase_batches: u32,
     send: Option<Pool>,
 ) -> (String, String, Option<NonEmpty<TxId>>)
 where
@@ -379,7 +415,7 @@ where
         validator,
         mined_against,
         then_synced,
-        shield_rounds,
+        coinbase_batches,
     )
     .await;
     let recipient_taddr = clients.get_recipient_address("transparent").await;
@@ -495,7 +531,17 @@ mod launch_clients {
         }
 
         async fn check_received_mining_reward_and_send(kind: &ValidatorKind) {
-            let (mut test_manager, mut clients) = Self::launch_and_build(kind, None, None).await;
+            // The test subject is the miner's transparent coinbase footprint
+            // (mature it, assert the transparent balance, shield, send), so
+            // coinbase must land on the miner taddr regardless of the default
+            // mining pool.
+            let (mut test_manager, mut clients) = super::launch_and_build_mining_to::<C, Service>(
+                zaino_testutils::PoolType::Transparent,
+                kind,
+                None,
+                None,
+            )
+            .await;
 
             super::mine_and_sync_faucet(
                 &test_manager,

@@ -34,8 +34,37 @@ async fn create_test_manager_and_services<V: ValidatorExt>(
     StateServiceSubscriber,
     wallet_tests::Clients,
 ) {
+    create_test_manager_and_services_mining_to::<V>(
+        zaino_testutils::DEFAULT_MINING_POOL,
+        validator,
+        chain_cache,
+        enable_zaino,
+        network,
+    )
+    .await
+}
+
+/// [`create_test_manager_and_services`] with the miner's pool pinned to
+/// `mine_to_pool` instead of the default. For tests whose subject is the
+/// miner's coinbase footprint in a specific pool.
+#[allow(deprecated)]
+async fn create_test_manager_and_services_mining_to<V: ValidatorExt>(
+    mine_to_pool: zaino_testutils::PoolType,
+    validator: &ValidatorKind,
+    chain_cache: Option<std::path::PathBuf>,
+    enable_zaino: bool,
+    network: Option<NetworkKind>,
+) -> (
+    TestManager<V, StateService>,
+    FetchService,
+    FetchServiceSubscriber,
+    StateService,
+    StateServiceSubscriber,
+    wallet_tests::Clients,
+) {
     let (test_manager, fetch_service, fetch_subscriber, state_service, state_subscriber) =
-        zaino_testutils::launch_state_and_fetch_services(
+        zaino_testutils::launch_state_and_fetch_services_mining_to(
+            mine_to_pool,
             validator,
             chain_cache,
             enable_zaino,
@@ -61,11 +90,11 @@ async fn create_test_manager_and_services<V: ValidatorExt>(
     )
 }
 
-/// Sync the faucet; on zebrad, run `shield_rounds` rounds of "mature 100
-/// coinbase blocks, sync, shield", then mine one more block and sync — waiting
-/// on both the fetch and state subscribers. The state_service analogue of the
-/// fetch_service `fund_faucet` (dual-subscriber). `shield_rounds` of 1 funds a
-/// single send; 2 funds two.
+/// Sync the faucet; on zebrad, mine `100·coinbase_batches + 1` blocks and sync
+/// so at least `coinbase_batches` shielded coinbase notes are mature and
+/// spendable — waiting on both the fetch and state subscribers. The
+/// state_service analogue of the fetch_service `fund_faucet`
+/// (dual-subscriber). `coinbase_batches` of 1 funds a single send; 2 funds two.
 #[allow(deprecated)]
 async fn fund_faucet<V: ValidatorExt>(
     test_manager: &TestManager<V, StateService>,
@@ -73,7 +102,7 @@ async fn fund_faucet<V: ValidatorExt>(
     validator: &ValidatorKind,
     fetch_service_subscriber: &FetchServiceSubscriber,
     state_service_subscriber: &StateServiceSubscriber,
-    shield_rounds: u32,
+    coinbase_batches: u32,
 ) {
     wallet_tests::fund_faucet_dual(
         test_manager,
@@ -81,7 +110,7 @@ async fn fund_faucet<V: ValidatorExt>(
         validator,
         fetch_service_subscriber,
         state_service_subscriber,
-        shield_rounds,
+        coinbase_batches,
     )
     .await;
 }
@@ -208,8 +237,11 @@ async fn launch_and_build_faucet_request<R>(
     wallet_tests::Clients,
     R,
 ) {
+    // These tests query the faucet taddr, which only coinbase funds — mining
+    // must stay transparent or the queries compare empty against empty.
     let (test_manager, fetch_service, fetch_subscriber, state_service, state_subscriber, clients) =
-        create_test_manager_and_services::<Zebrad>(
+        create_test_manager_and_services_mining_to::<Zebrad>(
+            zaino_testutils::PoolType::Transparent,
             &ValidatorKind::Zebrad,
             None,
             true,
@@ -444,15 +476,15 @@ async fn state_service_get_block_range_returns_all_pools<V: ValidatorExt>(
     clients.sync_faucet().await;
 
     if matches!(validator, ValidatorKind::Zebrad) {
-        // Mature one coinbase batch, then spread three shields over
-        // consecutive blocks.
-        wallet_tests::shield_faucet_rounds(
+        // 103 blocks leaves at least three mature coinbase notes (one per send
+        // below) and preserves the chain height of the legacy
+        // mature-then-shield ritual it replaces.
+        wallet_tests::mine_and_sync_faucet(
             &test_manager,
             &mut clients,
             &fetch_service_subscriber,
             &state_service_subscriber,
-            &[100, 1, 1],
-            1,
+            103,
         )
         .await;
     };
@@ -1094,7 +1126,7 @@ mod zebra {
                 fetch_service_subscriber,
                 _state_service,
                 state_service_subscriber,
-                mut clients,
+                _clients,
             ) = create_test_manager_and_services::<Zebrad>(
                 &ValidatorKind::Zebrad,
                 None,
@@ -1102,15 +1134,16 @@ mod zebra {
                 Some(NetworkKind::Regtest),
             )
             .await;
-            wallet_tests::shield_faucet_rounds(
-                &test_manager,
-                &mut clients,
-                &fetch_service_subscriber,
-                &state_service_subscriber,
-                &[100],
-                2,
-            )
-            .await;
+            // This test only inspects a coinbase transaction; it needs the
+            // chain at height 103 (102 blocks atop the activation block), not
+            // funded wallets.
+            test_manager
+                .generate_blocks_and_wait_for_tips(
+                    102,
+                    &fetch_service_subscriber,
+                    &state_service_subscriber,
+                )
+                .await;
 
             let block = BlockId {
                 height: 103,
