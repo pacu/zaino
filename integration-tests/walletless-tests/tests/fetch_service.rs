@@ -587,6 +587,38 @@ async fn assert_fetch_service_getnetworksols_matches_rpc<V: ValidatorExt>(
     .await;
 }
 
+#[allow(deprecated)]
+async fn fetch_service_get_block_deltas<V: ValidatorExt>(validator: &ValidatorKind) {
+    let mut test_manager =
+        TestManager::<V, FetchService>::launch(validator, None, None, None, true, false, false)
+            .await
+            .unwrap();
+
+    let fetch_service_subscriber = test_manager.service_subscriber.take().unwrap();
+
+    let current_block = fetch_service_subscriber.get_latest_block().await.unwrap();
+
+    let block_hash_bytes: [u8; 32] = current_block.hash.as_slice().try_into().unwrap();
+
+    let block_hash = zebra_chain::block::Hash::from(block_hash_bytes);
+
+    // Note: we need an 'expected' block hash in order to query its deltas.
+    // Having a predictable or test vector chain is the way to go here.
+    let fetch_service_block_deltas = fetch_service_subscriber
+        .get_block_deltas(block_hash.to_string())
+        .await
+        .unwrap();
+
+    let jsonrpc_client = test_manager.full_node_jsonrpc_connector().await;
+
+    let rpc_block_deltas = jsonrpc_client
+        .get_block_deltas(block_hash.to_string())
+        .await
+        .unwrap();
+
+    assert_eq!(fetch_service_block_deltas, rpc_block_deltas);
+}
+
 mod zcashd {
 
     use super::*;
@@ -644,149 +676,33 @@ mod zcashd {
     }
 
     mod get {
-
         use super::*;
 
-        #[tokio::test(flavor = "multi_thread")]
-        pub(crate) async fn block_raw() {
-            fetch_service_get_block_raw::<Zcashd>(&ValidatorKind::Zcashd).await;
-        }
-
-        #[tokio::test(flavor = "multi_thread")]
-        pub(crate) async fn block_object() {
-            fetch_service_get_block_object::<Zcashd>(&ValidatorKind::Zcashd).await;
-        }
-
-        #[tokio::test(flavor = "multi_thread")]
-        pub(crate) async fn latest_block() {
-            fetch_service_get_latest_block::<Zcashd>(&ValidatorKind::Zcashd).await;
-        }
-
-        #[tokio::test(flavor = "multi_thread")]
-        pub(crate) async fn block() {
-            fetch_service_get_block::<Zcashd>(&ValidatorKind::Zcashd).await;
-        }
-
-        #[tokio::test(flavor = "multi_thread")]
-        pub(crate) async fn block_header() {
-            fetch_service_get_block_header::<Zcashd>(&ValidatorKind::Zcashd).await;
-        }
-
-        #[tokio::test(flavor = "multi_thread")]
-        pub(crate) async fn difficulty() {
-            assert_fetch_service_difficulty_matches_rpc::<Zcashd>(&ValidatorKind::Zcashd).await;
-        }
-
-        #[allow(deprecated)]
-        #[tokio::test(flavor = "multi_thread")]
-        pub(crate) async fn block_deltas() {
-            let mut test_manager = TestManager::<Zcashd, FetchService>::launch(
-                &ValidatorKind::Zcashd,
-                None,
-                None,
-                None,
-                true,
-                false,
-                false,
-            )
-            .await
-            .unwrap();
-
-            let fetch_service_subscriber = test_manager.service_subscriber.take().unwrap();
-
-            let current_block = fetch_service_subscriber.get_latest_block().await.unwrap();
-
-            let block_hash_bytes: [u8; 32] = current_block.hash.as_slice().try_into().unwrap();
-
-            let block_hash = zebra_chain::block::Hash::from(block_hash_bytes);
-
-            // Note: we need an 'expected' block hash in order to query its deltas.
-            // Having a predictable or test vector chain is the way to go here.
-            let fetch_service_block_deltas = fetch_service_subscriber
-                .get_block_deltas(block_hash.to_string())
-                .await
-                .unwrap();
-
-            let jsonrpc_client = test_manager.full_node_jsonrpc_connector().await;
-
-            let rpc_block_deltas = jsonrpc_client
-                .get_block_deltas(block_hash.to_string())
-                .await
-                .unwrap();
-
-            assert_eq!(fetch_service_block_deltas, rpc_block_deltas);
-        }
-
-        #[tokio::test(flavor = "multi_thread")]
-        pub(crate) async fn mining_info() {
-            assert_fetch_service_mininginfo_matches_rpc::<Zcashd>(&ValidatorKind::Zcashd).await;
-        }
-
-        #[tokio::test(flavor = "multi_thread")]
-        pub(crate) async fn peer_info() {
-            assert_fetch_service_peerinfo_matches_rpc::<Zcashd>(&ValidatorKind::Zcashd).await;
-        }
-
-        #[tokio::test(flavor = "multi_thread")]
-        pub(crate) async fn block_subsidy() {
-            fetch_service_get_block_subsidy::<Zcashd>(&ValidatorKind::Zcashd).await;
-        }
-
-        #[tokio::test(flavor = "multi_thread")]
-        pub(crate) async fn best_blockhash() {
-            fetch_service_get_best_blockhash::<Zcashd>(&ValidatorKind::Zcashd).await;
-        }
-
-        #[tokio::test(flavor = "multi_thread")]
-        pub(crate) async fn block_count() {
-            fetch_service_get_block_count::<Zcashd>(&ValidatorKind::Zcashd).await;
-        }
-
-        #[tokio::test(flavor = "multi_thread")]
-        pub(crate) async fn block_nullifiers() {
-            fetch_service_get_block_nullifiers::<Zcashd>(&ValidatorKind::Zcashd).await;
-        }
-
-        #[tokio::test(flavor = "multi_thread")]
-        pub(crate) async fn block_range() {
-            fetch_service_get_block_range::<Zcashd>(&ValidatorKind::Zcashd).await;
-        }
-
-        #[tokio::test(flavor = "multi_thread")]
-        pub(crate) async fn block_range_nullifiers() {
-            fetch_service_get_block_range_nullifiers::<Zcashd>(&ValidatorKind::Zcashd).await;
-        }
-
-        #[tokio::test(flavor = "multi_thread")]
-        pub(crate) async fn tree_state() {
-            fetch_service_get_tree_state::<Zcashd>(&ValidatorKind::Zcashd).await;
-        }
-
-        #[tokio::test(flavor = "multi_thread")]
-        pub(crate) async fn latest_tree_state() {
-            fetch_service_get_latest_tree_state::<Zcashd>(&ValidatorKind::Zcashd).await;
-        }
-
-        #[tokio::test(flavor = "multi_thread")]
-        pub(crate) async fn subtree_roots() {
-            fetch_service_get_subtree_roots::<Zcashd>(&ValidatorKind::Zcashd).await;
-        }
-
-        #[tokio::test(flavor = "multi_thread")]
-        pub(crate) async fn lightd_info() {
-            fetch_service_get_lightd_info::<Zcashd>(&ValidatorKind::Zcashd).await;
-        }
-
-        #[tokio::test(flavor = "multi_thread")]
-        pub(crate) async fn get_network_sol_ps() {
-            assert_fetch_service_getnetworksols_matches_rpc::<Zcashd>(&ValidatorKind::Zcashd).await;
-        }
-
-        #[tokio::test(flavor = "multi_thread")]
-        pub(crate) async fn get_tx_out_set_info() {
-            assert_fetch_service_gettxoutsetinfo_matches_rpc::<Zcashd>(&ValidatorKind::Zcashd)
-                .await;
-        }
+        zaino_testutils::validator_tests!(
+            Zcashd,
+            ValidatorKind::Zcashd,
+            block_raw => fetch_service_get_block_raw,
+            block_object => fetch_service_get_block_object,
+            latest_block => fetch_service_get_latest_block,
+            block => fetch_service_get_block,
+            block_header => fetch_service_get_block_header,
+            difficulty => assert_fetch_service_difficulty_matches_rpc,
+            block_deltas => fetch_service_get_block_deltas,
+            mining_info => assert_fetch_service_mininginfo_matches_rpc,
+            peer_info => assert_fetch_service_peerinfo_matches_rpc,
+            block_subsidy => fetch_service_get_block_subsidy,
+            best_blockhash => fetch_service_get_best_blockhash,
+            block_count => fetch_service_get_block_count,
+            block_nullifiers => fetch_service_get_block_nullifiers,
+            block_range => fetch_service_get_block_range,
+            block_range_nullifiers => fetch_service_get_block_range_nullifiers,
+            tree_state => fetch_service_get_tree_state,
+            latest_tree_state => fetch_service_get_latest_tree_state,
+            subtree_roots => fetch_service_get_subtree_roots,
+            lightd_info => fetch_service_get_lightd_info,
+            get_network_sol_ps => assert_fetch_service_getnetworksols_matches_rpc,
+            get_tx_out_set_info => assert_fetch_service_gettxoutsetinfo_matches_rpc,
+        );
     }
 }
 
@@ -847,97 +763,30 @@ mod zebrad {
     }
 
     mod get {
-
         use super::*;
 
-        #[tokio::test(flavor = "multi_thread")]
-        pub(crate) async fn block_raw() {
-            fetch_service_get_block_raw::<Zebrad>(&ValidatorKind::Zebrad).await;
-        }
-
-        #[tokio::test(flavor = "multi_thread")]
-        pub(crate) async fn block_object() {
-            fetch_service_get_block_object::<Zebrad>(&ValidatorKind::Zebrad).await;
-        }
-
-        #[tokio::test(flavor = "multi_thread")]
-        pub(crate) async fn latest_block() {
-            fetch_service_get_latest_block::<Zebrad>(&ValidatorKind::Zebrad).await;
-        }
-
-        #[tokio::test(flavor = "multi_thread")]
-        pub(crate) async fn block() {
-            fetch_service_get_block::<Zebrad>(&ValidatorKind::Zebrad).await;
-        }
-
-        #[tokio::test(flavor = "multi_thread")]
-        pub(crate) async fn block_header() {
-            fetch_service_get_block_header::<Zebrad>(&ValidatorKind::Zebrad).await;
-        }
-
-        #[tokio::test(flavor = "multi_thread")]
-        pub(crate) async fn difficulty() {
-            assert_fetch_service_difficulty_matches_rpc::<Zebrad>(&ValidatorKind::Zebrad).await;
-        }
-
-        #[tokio::test(flavor = "multi_thread")]
-        pub(crate) async fn mining_info() {
-            assert_fetch_service_mininginfo_matches_rpc::<Zebrad>(&ValidatorKind::Zebrad).await;
-        }
-
-        #[tokio::test(flavor = "multi_thread")]
-        pub(crate) async fn peer_info() {
-            assert_fetch_service_peerinfo_matches_rpc::<Zebrad>(&ValidatorKind::Zebrad).await;
-        }
-
-        #[tokio::test(flavor = "multi_thread")]
-        pub(crate) async fn block_subsidy() {
-            fetch_service_get_block_subsidy::<Zebrad>(&ValidatorKind::Zebrad).await;
-        }
-
-        #[tokio::test(flavor = "multi_thread")]
-        pub(crate) async fn best_blockhash() {
-            fetch_service_get_best_blockhash::<Zebrad>(&ValidatorKind::Zebrad).await;
-        }
-
-        #[tokio::test(flavor = "multi_thread")]
-        pub(crate) async fn block_count() {
-            fetch_service_get_block_count::<Zebrad>(&ValidatorKind::Zebrad).await;
-        }
-
-        #[tokio::test(flavor = "multi_thread")]
-        pub(crate) async fn block_nullifiers() {
-            fetch_service_get_block_nullifiers::<Zebrad>(&ValidatorKind::Zebrad).await;
-        }
-
-        #[tokio::test(flavor = "multi_thread")]
-        pub(crate) async fn block_range_nullifiers() {
-            fetch_service_get_block_range_nullifiers::<Zebrad>(&ValidatorKind::Zebrad).await;
-        }
-
-        #[tokio::test(flavor = "multi_thread")]
-        pub(crate) async fn tree_state() {
-            fetch_service_get_tree_state::<Zebrad>(&ValidatorKind::Zebrad).await;
-        }
-
-        #[tokio::test(flavor = "multi_thread")]
-        pub(crate) async fn latest_tree_state() {
-            fetch_service_get_latest_tree_state::<Zebrad>(&ValidatorKind::Zebrad).await;
-        }
-
-        #[tokio::test(flavor = "multi_thread")]
-        pub(crate) async fn subtree_roots() {
-            fetch_service_get_subtree_roots::<Zebrad>(&ValidatorKind::Zebrad).await;
-        }
-
-        #[tokio::test(flavor = "multi_thread")]
-        pub(crate) async fn lightd_info() {
-            fetch_service_get_lightd_info::<Zebrad>(&ValidatorKind::Zebrad).await;
-        }
-
-        #[tokio::test(flavor = "multi_thread")]
-        pub(crate) async fn get_network_sol_ps() {
-            assert_fetch_service_getnetworksols_matches_rpc::<Zebrad>(&ValidatorKind::Zebrad).await;
-        }
+        zaino_testutils::validator_tests!(
+            Zebrad,
+            ValidatorKind::Zebrad,
+            block_raw => fetch_service_get_block_raw,
+            block_object => fetch_service_get_block_object,
+            latest_block => fetch_service_get_latest_block,
+            block => fetch_service_get_block,
+            block_header => fetch_service_get_block_header,
+            difficulty => assert_fetch_service_difficulty_matches_rpc,
+            mining_info => assert_fetch_service_mininginfo_matches_rpc,
+            peer_info => assert_fetch_service_peerinfo_matches_rpc,
+            block_subsidy => fetch_service_get_block_subsidy,
+            best_blockhash => fetch_service_get_best_blockhash,
+            block_count => fetch_service_get_block_count,
+            block_nullifiers => fetch_service_get_block_nullifiers,
+            block_range => fetch_service_get_block_range,
+            block_range_nullifiers => fetch_service_get_block_range_nullifiers,
+            tree_state => fetch_service_get_tree_state,
+            latest_tree_state => fetch_service_get_latest_tree_state,
+            subtree_roots => fetch_service_get_subtree_roots,
+            lightd_info => fetch_service_get_lightd_info,
+            get_network_sol_ps => assert_fetch_service_getnetworksols_matches_rpc,
+        );
     }
 }

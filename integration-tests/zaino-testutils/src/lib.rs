@@ -45,6 +45,25 @@ use zebra_rpc::methods::GetInfo;
 #[cfg(test)]
 use zaino_proto::proto::service::compact_tx_streamer_client::CompactTxStreamerClient;
 
+/// Generates one `#[tokio::test(flavor = "multi_thread")]` wrapper per
+/// `name => helper` pair, each calling `helper::<$validator>(&$kind).await`.
+///
+/// Collapses the per-validator boilerplate in the `fetch_service` /
+/// `state_service` test modules: invoke once per validator inside the relevant
+/// `mod`, supplying that validator's test list. A macro (not a fn) because each
+/// wrapper must be a discoverable `#[tokio::test]` item.
+#[macro_export]
+macro_rules! validator_tests {
+    ($validator:ty, $kind:expr, $( $name:ident => $helper:ident ),* $(,)?) => {
+        $(
+            #[tokio::test(flavor = "multi_thread")]
+            pub(crate) async fn $name() {
+                $helper::<$validator>(&$kind).await;
+            }
+        )*
+    };
+}
+
 /// Helper to get the test binary path from the TEST_BINARIES_DIR env var.
 fn binary_path(binary_name: &str) -> Option<PathBuf> {
     std::env::var("TEST_BINARIES_DIR")

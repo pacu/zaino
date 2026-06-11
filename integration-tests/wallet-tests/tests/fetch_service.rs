@@ -896,101 +896,38 @@ macro_rules! fetch_service_tests {
             mod get {
                 use super::*;
 
-                #[tokio::test(flavor = "multi_thread")]
-                pub(crate) async fn address_balance() {
-                    fetch_service_get_address_balance::<$validator>(&$kind).await;
-                }
-
-                #[tokio::test(flavor = "multi_thread")]
-                pub(crate) async fn raw_mempool() {
-                    fetch_service_get_raw_mempool::<$validator>(&$kind).await;
-                }
-
-                #[tokio::test(flavor = "multi_thread")]
-                pub(crate) async fn mempool_info() {
-                    test_get_mempool_info::<$validator>(&$kind).await;
-                }
+                zaino_testutils::validator_tests!(
+                    $validator,
+                    $kind,
+                    address_balance => fetch_service_get_address_balance,
+                    raw_mempool => fetch_service_get_raw_mempool,
+                    mempool_info => test_get_mempool_info,
+                    raw_transaction => fetch_service_get_raw_transaction,
+                    address_tx_ids => fetch_service_get_address_tx_ids,
+                    address_utxos => fetch_service_get_address_utxos,
+                    block_range_no_pool_type_returns_sapling_orchard
+                        => fetch_service_get_block_range_no_pools_returns_sapling_orchard,
+                    block_range_returns_all_pools_when_requested
+                        => fetch_service_get_block_range_returns_all_pools,
+                    transaction_mined => fetch_service_get_transaction_mined,
+                    transaction_mempool => fetch_service_get_transaction_mempool,
+                    taddress_txids => fetch_service_get_taddress_txids,
+                    taddress_balance => fetch_service_get_taddress_balance,
+                    mempool_tx => fetch_service_get_mempool_tx,
+                    mempool_stream => fetch_service_get_mempool_stream,
+                    taddress_utxos => fetch_service_get_taddress_utxos,
+                    taddress_utxos_stream => fetch_service_get_taddress_utxos_stream,
+                );
 
                 mod z {
                     use super::*;
 
-                    #[tokio::test(flavor = "multi_thread")]
-                    pub(crate) async fn treestate() {
-                        fetch_service_z_get_treestate::<$validator>(&$kind).await;
-                    }
-
-                    #[tokio::test(flavor = "multi_thread")]
-                    pub(crate) async fn subtrees_by_index() {
-                        fetch_service_z_get_subtrees_by_index::<$validator>(&$kind).await;
-                    }
-                }
-
-                #[tokio::test(flavor = "multi_thread")]
-                pub(crate) async fn raw_transaction() {
-                    fetch_service_get_raw_transaction::<$validator>(&$kind).await;
-                }
-
-                #[tokio::test(flavor = "multi_thread")]
-                pub(crate) async fn address_tx_ids() {
-                    fetch_service_get_address_tx_ids::<$validator>(&$kind).await;
-                }
-
-                #[tokio::test(flavor = "multi_thread")]
-                pub(crate) async fn address_utxos() {
-                    fetch_service_get_address_utxos::<$validator>(&$kind).await;
-                }
-
-                #[tokio::test(flavor = "multi_thread")]
-                pub(crate) async fn block_range_no_pool_type_returns_sapling_orchard() {
-                    fetch_service_get_block_range_no_pools_returns_sapling_orchard::<$validator>(
-                        &$kind,
-                    )
-                    .await;
-                }
-
-                #[tokio::test(flavor = "multi_thread")]
-                pub(crate) async fn block_range_returns_all_pools_when_requested() {
-                    fetch_service_get_block_range_returns_all_pools::<$validator>(&$kind).await;
-                }
-
-                #[tokio::test(flavor = "multi_thread")]
-                pub(crate) async fn transaction_mined() {
-                    fetch_service_get_transaction_mined::<$validator>(&$kind).await;
-                }
-
-                #[tokio::test(flavor = "multi_thread")]
-                pub(crate) async fn transaction_mempool() {
-                    fetch_service_get_transaction_mempool::<$validator>(&$kind).await;
-                }
-
-                #[tokio::test(flavor = "multi_thread")]
-                pub(crate) async fn taddress_txids() {
-                    fetch_service_get_taddress_txids::<$validator>(&$kind).await;
-                }
-
-                #[tokio::test(flavor = "multi_thread")]
-                pub(crate) async fn taddress_balance() {
-                    fetch_service_get_taddress_balance::<$validator>(&$kind).await;
-                }
-
-                #[tokio::test(flavor = "multi_thread")]
-                pub(crate) async fn mempool_tx() {
-                    fetch_service_get_mempool_tx::<$validator>(&$kind).await;
-                }
-
-                #[tokio::test(flavor = "multi_thread")]
-                pub(crate) async fn mempool_stream() {
-                    fetch_service_get_mempool_stream::<$validator>(&$kind).await;
-                }
-
-                #[tokio::test(flavor = "multi_thread")]
-                pub(crate) async fn taddress_utxos() {
-                    fetch_service_get_taddress_utxos::<$validator>(&$kind).await;
-                }
-
-                #[tokio::test(flavor = "multi_thread")]
-                pub(crate) async fn taddress_utxos_stream() {
-                    fetch_service_get_taddress_utxos_stream::<$validator>(&$kind).await;
+                    zaino_testutils::validator_tests!(
+                        $validator,
+                        $kind,
+                        treestate => fetch_service_z_get_treestate,
+                        subtrees_by_index => fetch_service_z_get_subtrees_by_index,
+                    );
                 }
             }
         }
