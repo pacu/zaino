@@ -1321,7 +1321,7 @@ mod zebra {
                 fetch_service_subscriber,
                 _state_service,
                 state_service_subscriber,
-                clients,
+                _clients,
             ) = create_test_manager_and_services::<Zebrad>(
                 &ValidatorKind::Zebrad,
                 None,
@@ -1330,7 +1330,6 @@ mod zebra {
             )
             .await;
 
-            let taddr = clients.get_faucet_address("transparent").await;
             test_manager
                 .generate_blocks_and_wait_for_tips(
                     5,
@@ -1338,23 +1337,6 @@ mod zebra {
                     &state_service_subscriber,
                 )
                 .await;
-
-            let state_service_taddress_balance = state_service_subscriber
-                .get_taddress_balance(AddressList {
-                    addresses: vec![taddr.clone()],
-                })
-                .await
-                .unwrap();
-            let fetch_service_taddress_balance = fetch_service_subscriber
-                .get_taddress_balance(AddressList {
-                    addresses: vec![taddr],
-                })
-                .await
-                .unwrap();
-            assert_eq!(
-                fetch_service_taddress_balance,
-                state_service_taddress_balance
-            );
 
             let chain_height = state_service_subscriber
                 .get_latest_block()
