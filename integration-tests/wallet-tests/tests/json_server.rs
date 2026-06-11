@@ -6,6 +6,8 @@ use zaino_testutils::{TestManager, ValidatorKind};
 use zcash_local_net::logs::LogsToStdoutAndStderr as _;
 use zcash_local_net::validator::zcashd::Zcashd;
 use zebra_chain::subtree::NoteCommitmentSubtreeIndex;
+use nonempty::NonEmpty;
+use zcash_primitives::transaction::TxId;
 use zebra_rpc::client::GetAddressBalanceRequest;
 use zebra_rpc::methods::GetAddressTxIdsRequest;
 
@@ -43,6 +45,36 @@ async fn create_zcashd_test_manager_and_fetch_services() -> (
     )
 }
 
+/// Sync the faucet, fetch the recipient's transparent and unified addresses,
+/// and mine one block on both subscribers; if `send` is `Some(pool)`, also send
+/// 250_000 to that pool's recipient address (mined in by that block) and return
+/// its txid. Returns `(transparent_addr, unified_addr, sent_txid)`. The shared
+/// preamble of the json_server `_inner` tests: the send-and-mine tests pass
+/// `Some(pool)`; the mempool tests pass `None` and broadcast (unmined)
+/// themselves afterward.
+#[allow(deprecated)]
+async fn jsonrpc_fund(
+    test_manager: &TestManager<Zcashd, FetchService>,
+    clients: &mut wallet_tests::Clients,
+    zaino_subscriber: &FetchServiceSubscriber,
+    zcashd_subscriber: &FetchServiceSubscriber,
+    send: Option<wallet_tests::Pool>,
+) -> (String, String, Option<NonEmpty<TxId>>) {
+    clients.sync_faucet().await;
+    let recipient_taddr = clients.get_recipient_address("transparent").await;
+    let recipient_ua = clients.get_recipient_address("unified").await;
+    let txid = if let Some(pool) = send {
+        let addr = clients.get_recipient_address(pool.address_kind()).await;
+        Some(clients.send_from_faucet(&addr, 250_000).await)
+    } else {
+        None
+    };
+    test_manager
+        .generate_blocks_and_wait_for_tips(1, zaino_subscriber, zcashd_subscriber)
+        .await;
+    (recipient_taddr, recipient_ua, txid)
+}
+
 #[allow(deprecated)]
 async fn z_get_address_balance_inner() {
     let (
@@ -54,14 +86,14 @@ async fn z_get_address_balance_inner() {
         mut clients,
     ) = create_zcashd_test_manager_and_fetch_services().await;
 
-    let recipient_taddr = clients.get_recipient_address("transparent").await;
-
-    clients.sync_faucet().await;
-
-    clients.send_from_faucet(recipient_taddr.as_str(), 250_000).await;
-    test_manager
-        .generate_blocks_and_wait_for_tips(1, &zaino_subscriber, &zcashd_subscriber)
-        .await;
+    let (recipient_taddr, _recipient_ua, _txid) = jsonrpc_fund(
+        &test_manager,
+        &mut clients,
+        &zaino_subscriber,
+        &zcashd_subscriber,
+        Some(wallet_tests::Pool::Transparent),
+    )
+    .await;
 
     clients.sync_recipient().await;
     let recipient_balance = clients.recipient_balance().await;
@@ -103,16 +135,16 @@ async fn get_raw_mempool_inner() {
         mut clients,
     ) = create_zcashd_test_manager_and_fetch_services().await;
 
-    test_manager
-        .generate_blocks_and_wait_for_tips(1, &zaino_subscriber, &zcashd_subscriber)
-        .await;
-
-    clients.sync_faucet().await;
-
-    let recipient_ua = &clients.get_recipient_address("unified").await;
-    let recipient_taddr = &clients.get_recipient_address("transparent").await;
-    clients.send_from_faucet(recipient_taddr, 250_000).await;
-    clients.send_from_faucet(recipient_ua, 250_000).await;
+    let (recipient_taddr, recipient_ua, _txid) = jsonrpc_fund(
+        &test_manager,
+        &mut clients,
+        &zaino_subscriber,
+        &zcashd_subscriber,
+        None,
+    )
+    .await;
+    clients.send_from_faucet(&recipient_taddr, 250_000).await;
+    clients.send_from_faucet(&recipient_ua, 250_000).await;
 
     tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
 
@@ -140,16 +172,16 @@ async fn get_mempool_info_inner() {
         mut clients,
     ) = create_zcashd_test_manager_and_fetch_services().await;
 
-    test_manager
-        .generate_blocks_and_wait_for_tips(1, &zaino_subscriber, &zcashd_subscriber)
-        .await;
-
-    clients.sync_faucet().await;
-
-    let recipient_ua = &clients.get_recipient_address("unified").await;
-    let recipient_taddr = &clients.get_recipient_address("transparent").await;
-    clients.send_from_faucet(recipient_taddr, 250_000).await;
-    clients.send_from_faucet(recipient_ua, 250_000).await;
+    let (recipient_taddr, recipient_ua, _txid) = jsonrpc_fund(
+        &test_manager,
+        &mut clients,
+        &zaino_subscriber,
+        &zcashd_subscriber,
+        None,
+    )
+    .await;
+    clients.send_from_faucet(&recipient_taddr, 250_000).await;
+    clients.send_from_faucet(&recipient_ua, 250_000).await;
 
     tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
 
@@ -174,14 +206,14 @@ async fn z_get_treestate_inner() {
         mut clients,
     ) = create_zcashd_test_manager_and_fetch_services().await;
 
-    clients.sync_faucet().await;
-
-    let recipient_ua = &clients.get_recipient_address("unified").await;
-    clients.send_from_faucet(recipient_ua, 250_000).await;
-
-    test_manager
-        .generate_blocks_and_wait_for_tips(1, &zaino_subscriber, &zcashd_subscriber)
-        .await;
+    jsonrpc_fund(
+        &test_manager,
+        &mut clients,
+        &zaino_subscriber,
+        &zcashd_subscriber,
+        Some(wallet_tests::Pool::Orchard),
+    )
+    .await;
 
     let chain_height = dbg!(zaino_subscriber.chain_height().await.unwrap()).0;
 
@@ -210,14 +242,14 @@ async fn z_get_subtrees_by_index_inner() {
         mut clients,
     ) = create_zcashd_test_manager_and_fetch_services().await;
 
-    clients.sync_faucet().await;
-
-    let recipient_ua = &clients.get_recipient_address("unified").await;
-    clients.send_from_faucet(recipient_ua, 250_000).await;
-
-    test_manager
-        .generate_blocks_and_wait_for_tips(1, &zaino_subscriber, &zcashd_subscriber)
-        .await;
+    jsonrpc_fund(
+        &test_manager,
+        &mut clients,
+        &zaino_subscriber,
+        &zcashd_subscriber,
+        Some(wallet_tests::Pool::Orchard),
+    )
+    .await;
 
     let zcashd_subtrees = dbg!(zcashd_subscriber
         .z_get_subtrees_by_index("orchard".to_string(), NoteCommitmentSubtreeIndex(0), None)
@@ -244,14 +276,15 @@ async fn get_raw_transaction_inner() {
         mut clients,
     ) = create_zcashd_test_manager_and_fetch_services().await;
 
-    clients.sync_faucet().await;
-
-    let recipient_ua = &clients.get_recipient_address("unified").await;
-    let tx = clients.send_from_faucet(recipient_ua, 250_000).await;
-
-    test_manager
-        .generate_blocks_and_wait_for_tips(1, &zaino_subscriber, &zcashd_subscriber)
-        .await;
+    let (_recipient_taddr, _recipient_ua, tx) = jsonrpc_fund(
+        &test_manager,
+        &mut clients,
+        &zaino_subscriber,
+        &zcashd_subscriber,
+        Some(wallet_tests::Pool::Orchard),
+    )
+    .await;
+    let tx = tx.expect("jsonrpc_fund sends a tx when given Some(pool)");
 
     test_manager.local_net.print_stdout();
 
@@ -280,14 +313,14 @@ async fn get_tx_out_inner() {
         mut clients,
     ) = create_zcashd_test_manager_and_fetch_services().await;
 
-    let recipient_taddr = clients.get_recipient_address("transparent").await;
-
-    clients.sync_faucet().await;
-
-    clients.send_from_faucet(recipient_taddr.as_str(), 250_000).await;
-    test_manager
-        .generate_blocks_and_wait_for_tips(1, &zaino_subscriber, &zcashd_subscriber)
-        .await;
+    let (recipient_taddr, _recipient_ua, _txid) = jsonrpc_fund(
+        &test_manager,
+        &mut clients,
+        &zaino_subscriber,
+        &zcashd_subscriber,
+        Some(wallet_tests::Pool::Transparent),
+    )
+    .await;
 
     let zcashd_utxos = zcashd_subscriber
         .z_get_address_utxos(GetAddressBalanceRequest::new(vec![recipient_taddr.clone()]))
@@ -330,14 +363,15 @@ async fn get_address_tx_ids_inner() {
         mut clients,
     ) = create_zcashd_test_manager_and_fetch_services().await;
 
-    let recipient_taddr = clients.get_recipient_address("transparent").await;
-
-    clients.sync_faucet().await;
-
-    let tx = clients.send_from_faucet(recipient_taddr.as_str(), 250_000).await;
-    test_manager
-        .generate_blocks_and_wait_for_tips(1, &zaino_subscriber, &zcashd_subscriber)
-        .await;
+    let (recipient_taddr, _recipient_ua, tx) = jsonrpc_fund(
+        &test_manager,
+        &mut clients,
+        &zaino_subscriber,
+        &zcashd_subscriber,
+        Some(wallet_tests::Pool::Transparent),
+    )
+    .await;
+    let tx = tx.expect("jsonrpc_fund sends a tx when given Some(pool)");
 
     let chain_height: u32 = {
         let idx = &zcashd_subscriber.indexer;
@@ -384,14 +418,15 @@ async fn z_get_address_utxos_inner() {
         mut clients,
     ) = create_zcashd_test_manager_and_fetch_services().await;
 
-    let recipient_taddr = clients.get_recipient_address("transparent").await;
-
-    clients.sync_faucet().await;
-
-    let txid_1 = clients.send_from_faucet(recipient_taddr.as_str(), 250_000).await;
-    test_manager
-        .generate_blocks_and_wait_for_tips(1, &zaino_subscriber, &zcashd_subscriber)
-        .await;
+    let (recipient_taddr, _recipient_ua, txid_1) = jsonrpc_fund(
+        &test_manager,
+        &mut clients,
+        &zaino_subscriber,
+        &zcashd_subscriber,
+        Some(wallet_tests::Pool::Transparent),
+    )
+    .await;
+    let txid_1 = txid_1.expect("jsonrpc_fund sends a tx when given Some(pool)");
 
     clients.sync_faucet().await;
 
