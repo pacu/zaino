@@ -153,7 +153,11 @@ where
 
     dbg!(unfinalised_transactions.clone());
     test_manager
-        .generate_blocks_and_wait_for_tip(99, test_manager.subscriber())
+        .generate_blocks_bulk_and_wait_for_tips(
+            99,
+            test_manager.subscriber(),
+            test_manager.subscriber(),
+        )
         .await;
 
     println!("\n\nFetching Tx From Finalized Chain!\n");
@@ -223,7 +227,11 @@ where
     clients.send_from_faucet(&recipient_zaddr, 250_000).await;
     clients.send_from_faucet(&recipient_taddr, 250_000).await;
     test_manager
-        .generate_blocks_and_wait_for_tip(100, test_manager.subscriber())
+        .generate_blocks_bulk_and_wait_for_tips(
+            100,
+            test_manager.subscriber(),
+            test_manager.subscriber(),
+        )
         .await;
     clients.sync_recipient().await;
 

@@ -811,6 +811,28 @@ where
         self.generate_blocks_and_wait_for_tip(0, then_synced).await;
     }
 
+    /// Generate `n` blocks in a single validator call, then wait once for
+    /// each pollable to catch up to the new tip. For large runs where no
+    /// test logic observes intermediate tips (coinbase maturation,
+    /// finalization depth): [`Self::generate_blocks_and_wait_for_tips`]
+    /// costs at least one indexer poll interval per block, this costs one
+    /// per run. The trade: the indexer ingests the run as a burst, and a
+    /// wedged indexer surfaces as a stalled tail wait rather than a
+    /// per-block liveness panic naming the missing height.
+    pub async fn generate_blocks_bulk_and_wait_for_tips<A: PollableTip, B: PollableTip>(
+        &self,
+        n: u32,
+        mined_against: &A,
+        then_synced: &B,
+    ) {
+        self.local_net
+            .generate_blocks(n)
+            .await
+            .expect("validator failed to generate blocks");
+        self.generate_blocks_and_wait_for_tips(0, mined_against, then_synced)
+            .await;
+    }
+
     /// Mine `n` blocks one at a time and, after each block (once both
     /// pollables observe the new tip), run `check(i)` with the iteration
     /// index `i` in `0..n`. The shared loop shape of the "compare

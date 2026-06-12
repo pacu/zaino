@@ -288,12 +288,16 @@ where
     (test_manager, clients)
 }
 
-/// Mine `blocks` and sync the faucet to the new tip, waiting on
+/// Mine `blocks` in bulk and sync the faucet to the new tip, waiting on
 /// `mined_against` and then `then_synced`. One half of the faucet funding
 /// step; the other half is [`Clients::shield_faucet`]. Callers with a single
-/// subscriber pass it as both `mined_against` and `then_synced`
-/// ([`TestManager::generate_blocks_and_wait_for_tips`] waits on each in turn,
-/// so the repeated wait is a no-op).
+/// subscriber pass it as both `mined_against` and `then_synced` (the
+/// repeated tail wait is a no-op).
+///
+/// Mining is one validator call with a single catch-up wait
+/// ([`TestManager::generate_blocks_bulk_and_wait_for_tips`]) — no funding
+/// caller observes intermediate tips, and per-block settling costs at least
+/// one indexer poll interval per block.
 #[allow(deprecated)]
 pub async fn mine_and_sync_faucet<C, Service, A, B>(
     test_manager: &TestManager<C, Service>,
@@ -310,7 +314,7 @@ pub async fn mine_and_sync_faucet<C, Service, A, B>(
     B: PollableTip,
 {
     test_manager
-        .generate_blocks_and_wait_for_tips(blocks, mined_against, then_synced)
+        .generate_blocks_bulk_and_wait_for_tips(blocks, mined_against, then_synced)
         .await;
     clients.sync_faucet().await;
 }
@@ -393,9 +397,13 @@ pub async fn fund_faucet_dual<C, Service, A, B>(
 }
 
 /// The legacy transparent-coinbase funding ritual: sync the faucet and, on
-/// zebrad, run `shield_rounds` rounds of "mature 100 coinbase blocks, sync,
-/// shield", then mine one block and sync. For tests that pin zebrad's miner
-/// to `PoolType::Transparent` (because a large non-funding mine or a
+/// zebrad, mature one coinbase batch (100 blocks) and shield it, then for
+/// each remaining round mine 1 block — which matures exactly one more
+/// coinbase — and shield that; then mine one block and sync. Leaves
+/// `shield_rounds` spendable orchard notes for `100 + shield_rounds` blocks
+/// (rounds past the first yield single-block-reward notes — still orders of
+/// magnitude above what tests spend). For tests that pin zebrad's miner to
+/// `PoolType::Transparent` (because a large non-funding mine or a
 /// taddr-footprint assertion makes shielded mining a net loss) yet still need
 /// spendable shielded funds. Funding-pool sessions use the much cheaper
 /// [`fund_faucet_dual`].
@@ -417,12 +425,15 @@ pub async fn fund_faucet_dual_via_shield<C, Service, A, B>(
 {
     clients.sync_faucet().await;
     if matches!(validator, ValidatorKind::Zebrad) {
+        let round_blocks: Vec<u32> = (0..shield_rounds)
+            .map(|round| if round == 0 { 100 } else { 1 })
+            .collect();
         shield_faucet_rounds(
             test_manager,
             clients,
             mined_against,
             then_synced,
-            &vec![100; shield_rounds as usize],
+            &round_blocks,
             1,
         )
         .await;
