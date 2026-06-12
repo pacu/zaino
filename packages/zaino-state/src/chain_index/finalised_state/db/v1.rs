@@ -698,6 +698,16 @@ impl DbV1 {
         self.txids
     }
 
+    /// Provides access to the transparent DB table, required for Migration1_1_0To1_2_0 Stage B to
+    /// read stored block transparent data directly. Reading the table raw (rather than via the
+    /// `BlockTransparentExt` accessor) deliberately bypasses `validate_block_blocking`: the
+    /// migration backfills from already-on-disk, already-trusted data, so per-height block
+    /// re-validation (merkle-root recompute + full-payload checksums) is redundant cost. The
+    /// background validator started at spawn is responsible for validating the on-disk chain.
+    pub(crate) fn transparent_db(&self) -> Database {
+        self.transparent
+    }
+
     /// **Temporary 0.4.0-alpha.1 cache compatibility.**
     ///
     /// The 0.4.0-alpha.1 build shipped a v1.1.0 → v1.2.0 migration (and write path) that did not

@@ -321,6 +321,15 @@ impl DbBackend {
         }
     }
 
+    /// Provides access to the transparent DB table, required for Migration1_1_0To1_2_0 Stage B to
+    /// read block transparent data directly (bypassing per-height block re-validation).
+    pub(crate) fn transparent_db(&self) -> Result<Database, FinalisedStateError> {
+        match self {
+            Self::V1(db) => Ok(db.transparent_db()),
+            Self::V0(_) => Err(FinalisedStateError::FeatureUnavailable("v1 transparent db")),
+        }
+    }
+
     /// Provides access to the finalised txout-set accumulator DB table.
     pub(crate) fn tx_out_set_info_accumulator_db(&self) -> Result<Database, FinalisedStateError> {
         match self {

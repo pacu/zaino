@@ -186,7 +186,7 @@ use super::{
 use crate::{
     chain_index::{
         finalised_state::{
-            capability::{BlockTransparentExt as _, CapabilityRequest, DbMetadata},
+            capability::{CapabilityRequest, DbMetadata},
             db::v1::{DB_VERSION_V1, TX_OUT_SET_INFO_ACCUMULATOR_KEY},
             entry::{StoredEntryFixed, StoredEntryVar},
         },
@@ -196,7 +196,8 @@ use crate::{
     config::BlockCacheConfig,
     error::FinalisedStateError,
     BlockHash, BlockMetadata, BlockWithMetadata, ChainWork, Height, IndexedBlock, Outpoint,
-    TransactionHash, TransparentCompactTx, TxLocation, TxidList, ZainoVersionedSerde as _,
+    TransactionHash, TransparentCompactTx, TransparentTxList, TxLocation, TxidList,
+    ZainoVersionedSerde as _,
 };
 
 use lmdb::{Transaction, WriteFlags};
@@ -694,6 +695,7 @@ impl<T: BlockchainSource> Migration<T> for Migration1_1_0To1_2_0 {
         let env = backend.env();
         let metadata_db = backend.metadata_db()?;
         let txids_db = backend.txids_db()?;
+        let transparent_db = backend.transparent_db()?;
         let spent_db = backend.spent_db()?;
         let txid_location_db = backend.txid_location_db()?;
         let tx_out_set_info_accumulator_db = backend.tx_out_set_info_accumulator_db()?;
@@ -911,11 +913,32 @@ impl<T: BlockchainSource> Migration<T> for Migration1_1_0To1_2_0 {
             while next_height_to_migrate <= db_tip {
                 let height = Height::try_from(next_height_to_migrate)
                     .map_err(|error| FinalisedStateError::Custom(error.to_string()))?;
+                let height_bytes = height.to_bytes()?;
 
-                let transparent_tx_list = router
-                    .backend(CapabilityRequest::BlockTransparentExt)?
-                    .get_block_transparent(height)
-                    .await?;
+                // Read the stored transparent list directly from the table. This intentionally
+                // bypasses the `BlockTransparentExt` accessor, which routes through
+                // `resolve_validated_hash_or_height` → `validate_block_blocking` (merkle-root
+                // recompute + full-payload checksum verification) for every height above
+                // `validated_tip`. During migration `validated_tip` is still climbing on the
+                // background validator, so that path would re-validate the whole chain inside the
+                // backfill loop — pure redundant CPU. The data here is already on disk and trusted;
+                // Stage A reads `txids` the same raw way.
+                let transparent_tx_list = {
+                    let txn = env.begin_ro_txn()?;
+                    let raw = txn
+                        .get(transparent_db, &height_bytes)
+                        .map_err(FinalisedStateError::LmdbError)?;
+                    let entry =
+                        StoredEntryVar::<TransparentTxList>::from_bytes(raw).map_err(|error| {
+                            FinalisedStateError::Custom(format!("transparent corrupt data: {error}"))
+                        })?;
+                    if !entry.verify(&height_bytes) {
+                        return Err(FinalisedStateError::Custom(
+                            "transparent checksum mismatch".to_string(),
+                        ));
+                    }
+                    entry.inner().clone()
+                };
 
                 let txids = {
                     let mut txids = Vec::with_capacity(transparent_tx_list.tx().len());
