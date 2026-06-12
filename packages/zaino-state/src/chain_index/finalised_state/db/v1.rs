@@ -143,6 +143,19 @@ pub(crate) const TX_OUT_SET_INFO_ACCUMULATOR_DATABASE_NAME: &str =
 /// Singleton key for the finalised txout-set accumulator table.
 pub(crate) const TX_OUT_SET_INFO_ACCUMULATOR_KEY: &[u8] = b"tx_out_set_info_accumulator";
 
+/// Number of committed block writes / migration heights between explicit
+/// `env.sync(true)` durability checkpoints.
+///
+/// The LMDB environment is opened with `MDB_NOSYNC` (see [`DbV1::spawn`]), so an individual
+/// `txn.commit()` is *not* flushed to disk. Because the environment does not use `WRITE_MAP`,
+/// LMDB still guarantees ACI on crash — only durability (D) is lost: a crash rolls the database
+/// back to the last on-disk-consistent transaction, it never corrupts it (copy-on-write + dual
+/// meta pages always leave a recoverable committed snapshot). Forcing a sync every
+/// `SYNC_CHECKPOINT_INTERVAL` writes bounds how much committed-but-unflushed tail a crash can
+/// discard. The tail is always safe to re-do: clean sync resumes from the on-disk tip and
+/// re-fetches the missing blocks, and migrations resume idempotently from their progress keys.
+pub(crate) const SYNC_CHECKPOINT_INTERVAL: u32 = 1000;
+
 /// [`DbCore`] capability implementation for [`DbV1`].
 ///
 /// This trait exposes lifecycle operations and a high-level status indicator.
@@ -330,11 +343,23 @@ impl DbV1 {
             .expect("max_readers was clamped to fit in u32");
 
         // Open LMDB environment and set environmental details.
+        //
+        // `NO_SYNC`: commits are not fsynced. The core write path now does many random-key
+        // inserts per block (the `spent` and `txid_location` B-trees are keyed by 32-byte
+        // hashes), which made per-commit fsync the dominant sync cost once those trees outgrew
+        // the page cache. Under `NO_SYNC` the OS batches that write-back; we force durability at
+        // explicit checkpoints (`SYNC_CHECKPOINT_INTERVAL`) and on graceful shutdown instead.
+        // `WRITE_MAP` is unset, so a crash never corrupts the database — it only discards the
+        // unflushed tail of recent commits, which clean sync and migrations safely re-do.
         let env = Environment::new()
             .set_max_dbs(15)
             .set_map_size(db_size_bytes)
             .set_max_readers(max_readers)
-            .set_flags(EnvironmentFlags::NO_TLS | EnvironmentFlags::NO_READAHEAD)
+            .set_flags(
+                EnvironmentFlags::NO_TLS
+                    | EnvironmentFlags::NO_READAHEAD
+                    | EnvironmentFlags::NO_SYNC,
+            )
             .open(&db_path)?;
 
         // Open individual LMDB DBs.
@@ -873,11 +898,23 @@ impl DbV1 {
             .expect("max_readers was clamped to fit in u32");
 
         // Open LMDB environment and set environmental details.
+        //
+        // `NO_SYNC`: commits are not fsynced. The core write path now does many random-key
+        // inserts per block (the `spent` and `txid_location` B-trees are keyed by 32-byte
+        // hashes), which made per-commit fsync the dominant sync cost once those trees outgrew
+        // the page cache. Under `NO_SYNC` the OS batches that write-back; we force durability at
+        // explicit checkpoints (`SYNC_CHECKPOINT_INTERVAL`) and on graceful shutdown instead.
+        // `WRITE_MAP` is unset, so a crash never corrupts the database — it only discards the
+        // unflushed tail of recent commits, which clean sync and migrations safely re-do.
         let env = Environment::new()
             .set_max_dbs(15)
             .set_map_size(db_size_bytes)
             .set_max_readers(max_readers)
-            .set_flags(EnvironmentFlags::NO_TLS | EnvironmentFlags::NO_READAHEAD)
+            .set_flags(
+                EnvironmentFlags::NO_TLS
+                    | EnvironmentFlags::NO_READAHEAD
+                    | EnvironmentFlags::NO_SYNC,
+            )
             .open(&db_path)?;
 
         // Open individual LMDB DBs.

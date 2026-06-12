@@ -662,6 +662,18 @@ impl ZainoDB {
         // Await the reporter to ensure clean shutdown; ignore errors if it panicked/was aborted.
         let _ = reporter_handle.await;
 
+        // The env is opened with `NO_SYNC`, so the blocks written above are committed but may not
+        // be on disk yet. Force a durability checkpoint at the end of a completed batch: a
+        // `sync_to_height` that returns `Ok` is then guaranteed durable, so a later crash can only
+        // roll back to this height, never lose a range already reported as synced. On the error
+        // path the partial progress stays committed and is flushed by the next checkpoint /
+        // shutdown, so we leave the original error unmasked.
+        if result.is_ok() {
+            let env = self.db.backend(CapabilityRequest::WriteCore)?.env();
+            tokio::task::block_in_place(|| env.sync(true))
+                .map_err(FinalisedStateError::LmdbError)?;
+        }
+
         result
     }
 

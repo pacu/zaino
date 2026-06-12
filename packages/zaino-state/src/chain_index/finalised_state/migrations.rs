@@ -187,7 +187,7 @@ use crate::{
     chain_index::{
         finalised_state::{
             capability::{CapabilityRequest, DbMetadata},
-            db::v1::{DB_VERSION_V1, TX_OUT_SET_INFO_ACCUMULATOR_KEY},
+            db::v1::{DB_VERSION_V1, SYNC_CHECKPOINT_INTERVAL, TX_OUT_SET_INFO_ACCUMULATOR_KEY},
             entry::{StoredEntryFixed, StoredEntryVar},
         },
         source::BlockchainSource,
@@ -576,6 +576,12 @@ impl<T: BlockchainSource> Migration<T> for Migration0To1 {
 
         info!("promoting v1 database to primary.");
 
+        // The migrated v1 data is about to become primary and v0 is wiped below. Under `NO_SYNC`
+        // the shadow's tail blocks and its `Complete` status may not be on disk yet; force them
+        // durable now so a crash during or after promotion can never lose migrated blocks that
+        // exist only in v1 (v0 is removed and cannot serve as a fallback).
+        shadow.env().sync(true)?;
+
         // Promote V1 to primary
         let db_v0 = router.promote_shadow()?;
 
@@ -844,6 +850,13 @@ impl<T: BlockchainSource> Migration<T> for Migration1_1_0To1_2_0 {
                     txn.commit()?;
                 }
 
+                // Durability checkpoint (the env is opened with `NO_SYNC`): bound how much
+                // backfill a crash can discard. The lost tail is re-done idempotently from the
+                // Stage A progress key on resume.
+                if next_height % SYNC_CHECKPOINT_INTERVAL == 0 {
+                    env.sync(true)?;
+                }
+
                 if next_height % 50_000 == 0 {
                     info!(
                         height = next_height,
@@ -855,6 +868,10 @@ impl<T: BlockchainSource> Migration<T> for Migration1_1_0To1_2_0 {
 
                 next_height = height.0 + 1;
             }
+
+            // Make the completed `txid_location` index a durable boundary so a crash during
+            // Stage B never has to re-run Stage A.
+            env.sync(true)?;
 
             info!(
                 db_tip,
@@ -1097,6 +1114,13 @@ impl<T: BlockchainSource> Migration<T> for Migration1_1_0To1_2_0 {
                     txn.commit()?;
                 }
 
+                // Durability checkpoint (the env is opened with `NO_SYNC`): bound how much
+                // backfill a crash can discard. The lost tail is re-done idempotently from the
+                // Stage B progress key on resume.
+                if next_height_to_migrate % SYNC_CHECKPOINT_INTERVAL == 0 {
+                    env.sync(true)?;
+                }
+
                 if next_height_to_migrate % 10_000 == 0 {
                     info!(
                         height = next_height_to_migrate,
@@ -1116,7 +1140,28 @@ impl<T: BlockchainSource> Migration<T> for Migration1_1_0To1_2_0 {
             );
         }
 
-        // ===== Finalise: remove both progress keys and advance metadata to v1.2.0. =====
+        // ===== Finalise: advance metadata to v1.2.0, then remove the progress keys. =====
+        //
+        // Ordering matters under `NO_SYNC`. The recorded version is the migration's completion
+        // gate, so it must become durable *before* the progress keys are removed:
+        //
+        // 1. Flush all backfilled `spent` / accumulator work so the version we are about to
+        //    record truthfully reflects on-disk state.
+        // 2. Record version v1.2.0 and force it durable. A crash before this leaves the version
+        //    < v1.2.0 with the progress keys intact, so the migration is re-selected and resumes
+        //    cheaply (the stages skip past `db_tip`, then re-finalise).
+        // 3. Only now remove the progress keys: the version gate is durably set, so they are
+        //    dead metadata. Removing them last guarantees a crash never leaves "keys deleted but
+        //    version still v1.1.0", which would force a full, wasteful re-migration.
+        env.sync(true)?;
+
+        let mut metadata: DbMetadata = router.get_metadata().await?;
+        metadata.version = <Self as Migration<T>>::TO_VERSION;
+        metadata.schema_hash = crate::chain_index::finalised_state::db::v1::DB_SCHEMA_V1_HASH;
+        metadata.migration_status = MigrationStatus::Empty;
+        router.update_metadata(metadata).await?;
+        env.sync(true)?;
+
         {
             let mut txn = env.begin_rw_txn()?;
 
@@ -1132,12 +1177,7 @@ impl<T: BlockchainSource> Migration<T> for Migration1_1_0To1_2_0 {
 
             txn.commit()?;
         }
-
-        let mut metadata: DbMetadata = router.get_metadata().await?;
-        metadata.version = <Self as Migration<T>>::TO_VERSION;
-        metadata.schema_hash = crate::chain_index::finalised_state::db::v1::DB_SCHEMA_V1_HASH;
-        metadata.migration_status = MigrationStatus::Empty;
-        router.update_metadata(metadata).await?;
+        env.sync(true)?;
 
         // Turn transparent history extension back on now the indices are built.
         router.extend_primary_caps(Capability::TRANSPARENT_HIST_EXT);

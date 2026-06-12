@@ -536,9 +536,10 @@ impl DbV1 {
                 }
             }
 
-            // `txn.commit()` is durable: the LMDB env is opened without NO_SYNC, so commit
-            // fsyncs the data and meta pages. Validation below is read-only and observes the
-            // committed state without any further sync, so no explicit `env.sync` is needed here.
+            // `txn.commit()` makes the block visible to subsequent readers (LMDB MVCC), but the
+            // env is opened with `NO_SYNC`, so it is *not* fsynced here. Durability is forced at
+            // `SYNC_CHECKPOINT_INTERVAL` boundaries below and on graceful shutdown. Validation
+            // is read-only and observes the just-committed state from the map regardless of sync.
             txn.commit()?;
 
             zaino_db.validate_block_blocking(block_height, block_hash)?;
@@ -565,9 +566,17 @@ impl DbV1 {
 
         match post_result {
             Ok(_) => {
-                // The block (and its `txid_location` entries) were durably committed inside the
-                // blocking task above; validation succeeded and wrote nothing, so no extra sync.
+                // The block was committed inside the blocking task above. Under `NO_SYNC` that
+                // commit is not yet on disk; force a durability checkpoint every
+                // `SYNC_CHECKPOINT_INTERVAL` blocks so a crash can only lose a bounded tail (which
+                // the syncer re-fetches from the on-disk tip). Genesis is checkpointed too so a
+                // brand-new cache has a durable root.
                 self.status.store(StatusType::Ready);
+                if block_height.0 % SYNC_CHECKPOINT_INTERVAL == 0 {
+                    tokio::task::block_in_place(|| self.env.sync(true)).map_err(|e| {
+                        FinalisedStateError::Custom(format!("LMDB checkpoint sync failed: {e}"))
+                    })?;
+                }
                 if block.context.index.height.0 % 100 == 0 {
                     info!(
                         "Successfully committed block {} at height {} to ZainoDB.",
