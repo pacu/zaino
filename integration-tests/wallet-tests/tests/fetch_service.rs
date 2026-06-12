@@ -11,7 +11,7 @@ use zaino_state::ChainIndex;
 use zaino_state::FetchServiceSubscriber;
 #[allow(deprecated)]
 use zaino_state::{FetchService, LightWalletIndexer, ZcashIndexer};
-use zaino_testutils::{TestManager, ValidatorExt, ValidatorKind};
+use zaino_testutils::{PollableTip, TestManager, ValidatorExt, ValidatorKind};
 use zcash_primitives::transaction::TxId;
 use zebra_chain::subtree::NoteCommitmentSubtreeIndex;
 use zebra_rpc::methods::{GetAddressBalanceRequest, GetAddressTxIdsRequest};
@@ -25,8 +25,12 @@ async fn create_test_manager_and_fetch_service<V: ValidatorExt>(
     FetchServiceSubscriber,
     wallet_tests::Clients,
 ) {
-    let (test_manager, fetch_service_subscriber) =
-        zaino_testutils::launch_with_fetch_subscriber(validator, chain_cache).await;
+    let (test_manager, fetch_service_subscriber) = zaino_testutils::launch_with_fetch_subscriber_mining_to(
+        zaino_testutils::SHIELDED_FUNDING_POOL,
+        validator,
+        chain_cache,
+    )
+    .await;
     let clients = wallet_tests::build_clients(
         test_manager
             .zaino_grpc_listen_address
@@ -37,9 +41,9 @@ async fn create_test_manager_and_fetch_service<V: ValidatorExt>(
     (test_manager, fetch_service_subscriber, clients)
 }
 
-/// Sync the faucet; on zebrad, mine `100·coinbase_batches + 1` blocks and sync
-/// so at least `coinbase_batches` shielded coinbase notes are mature and
-/// spendable. `coinbase_batches` of 1 funds a single send; 2 funds two.
+/// Sync the faucet; on zebrad, mine `coinbase_batches` blocks and sync so the
+/// faucet holds one spendable shielded-coinbase note per batch.
+/// `coinbase_batches` of 1 funds a single send; 2 funds two.
 #[allow(deprecated)]
 async fn fund_faucet<V: ValidatorExt>(
     test_manager: &TestManager<V, FetchService>,
@@ -97,12 +101,11 @@ async fn block_range_fixture<V: ValidatorExt>(
 
     clients.sync_faucet().await;
 
-    // zebrad: 103 blocks leaves at least three mature coinbase notes (one per
-    // send below) and preserves the chain height of the legacy
-    // mature-then-shield ritual it replaces. zcashd's launch reward is already
-    // spendable; it mines 14 to match the heights its assertions expect.
+    // zebrad: 3 blocks yields 3 spendable orchard coinbase notes (one per
+    // send below); shielded coinbase carries no maturity rule. zcashd's
+    // launch reward is already spendable; its historical 14 is unchanged.
     let blocks = if matches!(validator, ValidatorKind::Zebrad) {
-        103
+        3
     } else {
         14
     };
@@ -420,16 +423,9 @@ async fn fetch_service_get_block_range_returns_all_pools<V: ValidatorExt>(
         orchard_txid,
     ) = block_range_fixture::<V>(validator).await;
 
-    let start_height: u64 = if matches!(validator, ValidatorKind::Zebrad) {
-        100
-    } else {
-        1
-    };
-    let end_height: u64 = if matches!(validator, ValidatorKind::Zebrad) {
-        106
-    } else {
-        17
-    };
+    let start_height: u64 = 1;
+    // The fixture's sends land in the block it mines last — the chain tip.
+    let end_height: u64 = fetch_service_subscriber.tip_height().await;
 
     let fetch_service_get_block_range = zaino_testutils::collect_block_range(
         &fetch_service_subscriber,
@@ -475,16 +471,9 @@ async fn fetch_service_get_block_range_no_pools_returns_sapling_orchard<V: Valid
         orchard_txid,
     ) = block_range_fixture::<V>(validator).await;
 
-    let start_height: u64 = if matches!(validator, ValidatorKind::Zebrad) {
-        100
-    } else {
-        10
-    };
-    let end_height: u64 = if matches!(validator, ValidatorKind::Zebrad) {
-        106
-    } else {
-        17
-    };
+    let start_height: u64 = 1;
+    // The fixture's sends land in the block it mines last — the chain tip.
+    let end_height: u64 = fetch_service_subscriber.tip_height().await;
 
     let fetch_service_get_block_range = zaino_testutils::collect_block_range(
         &fetch_service_subscriber,
@@ -498,12 +487,9 @@ async fn fetch_service_get_block_range_no_pools_returns_sapling_orchard<V: Valid
 
     assert_eq!(compact_block.height, end_height);
 
-    let expected_tx_count = if matches!(validator, ValidatorKind::Zebrad) {
-        3
-    } else {
-        4 // zcashd shields coinbase and tx count will be one more than zebra's
-    };
-    assert_eq!(compact_block.vtx.len(), expected_tx_count);
+    // Both validators mine shielded coinbase, so the pool-filtered block
+    // shows the 3 sends plus the coinbase tx.
+    assert_eq!(compact_block.vtx.len(), 4);
 
     // No pools requested: transparent data is omitted, sapling/orchard default in.
     wallet_tests::assert_pool_absent(

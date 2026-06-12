@@ -9,8 +9,8 @@ use zaino_testutils::ValidatorExt;
 use zaino_testutils::ValidatorKind;
 use zainodlib::error::IndexerError;
 
-/// Sync the faucet; on zebrad, mine 101 blocks so a mature shielded coinbase
-/// note is spendable (zcashd's launch reward already is).
+/// Sync the faucet; on zebrad, mine 1 block so a spendable shielded coinbase
+/// note exists (zcashd's launch reward already is spendable).
 async fn fund_faucet<V, Service>(
     test_manager: &TestManager<V, Service>,
     clients: &mut wallet_tests::Clients,
@@ -120,10 +120,27 @@ where
     IndexerError: From<<<Service as ZcashService>::Subscriber as ZcashIndexer>::Error>,
     <Service as ZcashService>::Subscriber: zaino_testutils::PollableTip,
 {
-    let (mut test_manager, mut clients) =
-        wallet_tests::launch_and_build::<V, Service>(validator, None, None).await;
+    // This test mines 99 blocks after the send to push it into the finalized
+    // chain — under a shielded miner address those blocks would each cost a
+    // halo2 proof, a net loss over the legacy shield-ritual funding. Keep the
+    // validator's default (cheap) pool and fund via the ritual.
+    let (mut test_manager, mut clients) = wallet_tests::launch_and_build_mining_to::<V, Service>(
+        zaino_testutils::default_mining_pool(validator),
+        validator,
+        None,
+        None,
+    )
+    .await;
 
-    fund_faucet(&test_manager, &mut clients, validator).await;
+    wallet_tests::fund_faucet_dual_via_shield(
+        &test_manager,
+        &mut clients,
+        validator,
+        test_manager.subscriber(),
+        test_manager.subscriber(),
+        1,
+    )
+    .await;
 
     let recipient_taddr = clients.get_recipient_address("transparent").await;
     clients.send_from_faucet(&recipient_taddr, 250_000).await;
@@ -187,15 +204,24 @@ where
     IndexerError: From<<<Service as ZcashService>::Subscriber as ZcashIndexer>::Error>,
     <Service as ZcashService>::Subscriber: zaino_testutils::PollableTip,
 {
-    let (mut test_manager, mut clients) =
-        wallet_tests::launch_and_build::<V, Service>(validator, None, None).await;
+    // This test mines 100 blocks after its sends — under a shielded miner
+    // address those blocks would each cost a halo2 proof, a net loss over the
+    // legacy shield-ritual funding. Keep the validator's default (cheap) pool
+    // and fund via the ritual.
+    let (mut test_manager, mut clients) = wallet_tests::launch_and_build_mining_to::<V, Service>(
+        zaino_testutils::default_mining_pool(validator),
+        validator,
+        None,
+        None,
+    )
+    .await;
 
     test_manager
         .generate_blocks_and_wait_for_tip(2, test_manager.subscriber())
         .await;
 
     // "Create" 3 orchard notes in faucet.
-    wallet_tests::fund_faucet_dual(
+    wallet_tests::fund_faucet_dual_via_shield(
         &test_manager,
         &mut clients,
         validator,
@@ -247,8 +273,11 @@ where
 
     let recipient_taddr = clients.get_recipient_address("transparent").await;
     clients.send_from_faucet(&recipient_taddr, 250_000).await;
+    // One block confirms the send: the recipient's transparent funds are a
+    // regular tx output, not coinbase, so no maturity applies before the
+    // shield below.
     test_manager
-        .generate_blocks_and_wait_for_tip(100, test_manager.subscriber())
+        .generate_blocks_and_wait_for_tip(1, test_manager.subscriber())
         .await;
     clients.sync_recipient().await;
 

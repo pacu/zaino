@@ -436,15 +436,33 @@ impl ValidatorExt for Zcashd {
     }
 }
 
-/// The pool regtest validators mine to unless a test pins one via
-/// [`TestManager::launch_mining_to`]. Mining to a shielded pool gives the
-/// faucet wallet directly spendable coinbase once it matures, with no
-/// shield-transparent-coinbase ritual; tests whose subject *is* the miner's
-/// transparent footprint pin [`PoolType::Transparent`] instead.
+/// The pool that sessions funding wallets from coinbase mine to. Shielded
+/// coinbase carries no 100-confirmation maturity rule (that rule covers only
+/// transparent coinbase outputs), so a test that needs shielded start funds
+/// mines one block per note it will spend instead of running the legacy
+/// "mature 100 transparent blocks, then shield" ritual.
 ///
-/// This constant is the single upgrade point for the default: when the next
-/// shielded pool (ironwood) becomes minable, only this value changes.
-pub const DEFAULT_MINING_POOL: PoolType = PoolType::ORCHARD;
+/// Only sessions that profit from that trade opt in (wallet funding
+/// fixtures): a shielded miner address costs a halo2 proof per block
+/// template (~1–2 s/block), so sessions that fund nothing — or that mine
+/// many blocks for other reasons — stay on [`default_mining_pool`].
+///
+/// This constant is the single upgrade point for shielded funding: when the
+/// next shielded pool (ironwood) becomes minable, only this value changes.
+pub const SHIELDED_FUNDING_POOL: PoolType = PoolType::ORCHARD;
+
+/// The pool a validator mines to when the session doesn't opt into
+/// [`SHIELDED_FUNDING_POOL`]: transparent for zebrad (cheapest block
+/// templates — a shielded miner address would cost a halo2 proof per block),
+/// ORCHARD for zcashd (its historical setting; the cached launch reward
+/// funds wallets without extra mining).
+pub fn default_mining_pool(validator: &ValidatorKind) -> PoolType {
+    if validator == &ValidatorKind::Zebrad {
+        PoolType::Transparent
+    } else {
+        PoolType::ORCHARD
+    }
+}
 
 impl<C, Service> TestManager<C, Service>
 where
@@ -479,10 +497,11 @@ where
     }
 
     /// Launches zcash-local-net<Empty, Validator> mining to
-    /// [`DEFAULT_MINING_POOL`]. See [`Self::launch_mining_to`], which this
-    /// delegates to, for the parameter contract; tests that must control the
-    /// miner's pool (e.g. those asserting on the miner taddr's coinbase
-    /// footprint) call that method directly.
+    /// [`default_mining_pool`] for the validator. See
+    /// [`Self::launch_mining_to`], which this delegates to, for the parameter
+    /// contract; sessions that fund wallets from coinbase pass
+    /// [`SHIELDED_FUNDING_POOL`] to that method instead, and tests asserting
+    /// on a specific pool's coinbase footprint pin that pool.
     pub async fn launch(
         validator: &ValidatorKind,
         network: Option<NetworkKind>,
@@ -493,7 +512,7 @@ where
         enable_clients: bool,
     ) -> Result<Self, std::io::Error> {
         Self::launch_mining_to(
-            DEFAULT_MINING_POOL,
+            default_mining_pool(validator),
             validator,
             network,
             activation_heights,
@@ -841,7 +860,7 @@ pub async fn launch_state_and_fetch_services<V: ValidatorExt>(
     StateServiceSubscriber,
 ) {
     launch_state_and_fetch_services_mining_to(
-        DEFAULT_MINING_POOL,
+        default_mining_pool(validator),
         validator,
         chain_cache,
         enable_zaino,
@@ -850,9 +869,10 @@ pub async fn launch_state_and_fetch_services<V: ValidatorExt>(
     .await
 }
 
-/// [`launch_state_and_fetch_services`] with the miner's pool pinned to
-/// `mine_to_pool` instead of [`DEFAULT_MINING_POOL`]. For tests whose subject
-/// is the miner's coinbase footprint in a specific pool.
+/// [`launch_state_and_fetch_services`] with the miner's pool chosen by the
+/// caller instead of [`default_mining_pool`]: [`SHIELDED_FUNDING_POOL`] for
+/// sessions funding wallets from coinbase, or a pinned pool for tests whose
+/// subject is the miner's coinbase footprint.
 #[allow(deprecated)]
 pub async fn launch_state_and_fetch_services_mining_to<V: ValidatorExt>(
     mine_to_pool: PoolType,
@@ -1123,7 +1143,22 @@ pub async fn launch_with_fetch_subscriber<V: ValidatorExt>(
     validator: &ValidatorKind,
     chain_cache: Option<PathBuf>,
 ) -> (TestManager<V, FetchService>, FetchServiceSubscriber) {
-    let mut test_manager = TestManager::<V, FetchService>::launch(
+    launch_with_fetch_subscriber_mining_to::<V>(default_mining_pool(validator), validator, chain_cache)
+        .await
+}
+
+/// [`launch_with_fetch_subscriber`] with the miner's pool chosen by the
+/// caller instead of [`default_mining_pool`]: [`SHIELDED_FUNDING_POOL`] for
+/// sessions funding wallets from coinbase, or a pinned pool for tests whose
+/// subject is the miner's coinbase footprint.
+#[allow(deprecated)]
+pub async fn launch_with_fetch_subscriber_mining_to<V: ValidatorExt>(
+    mine_to_pool: PoolType,
+    validator: &ValidatorKind,
+    chain_cache: Option<PathBuf>,
+) -> (TestManager<V, FetchService>, FetchServiceSubscriber) {
+    let mut test_manager = TestManager::<V, FetchService>::launch_mining_to(
+        mine_to_pool,
         validator,
         None,
         None,

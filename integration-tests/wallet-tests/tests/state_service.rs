@@ -35,7 +35,7 @@ async fn create_test_manager_and_services<V: ValidatorExt>(
     wallet_tests::Clients,
 ) {
     create_test_manager_and_services_mining_to::<V>(
-        zaino_testutils::DEFAULT_MINING_POOL,
+        zaino_testutils::SHIELDED_FUNDING_POOL,
         validator,
         chain_cache,
         enable_zaino,
@@ -44,9 +44,11 @@ async fn create_test_manager_and_services<V: ValidatorExt>(
     .await
 }
 
-/// [`create_test_manager_and_services`] with the miner's pool pinned to
-/// `mine_to_pool` instead of the default. For tests whose subject is the
-/// miner's coinbase footprint in a specific pool.
+/// [`create_test_manager_and_services`] with the miner's pool chosen by the
+/// caller instead of [`zaino_testutils::SHIELDED_FUNDING_POOL`]. For tests
+/// whose subject is the miner's coinbase footprint in a specific pool, or
+/// whose large non-funding mines must stay on cheap transparent block
+/// templates.
 #[allow(deprecated)]
 async fn create_test_manager_and_services_mining_to<V: ValidatorExt>(
     mine_to_pool: zaino_testutils::PoolType,
@@ -90,11 +92,11 @@ async fn create_test_manager_and_services_mining_to<V: ValidatorExt>(
     )
 }
 
-/// Sync the faucet; on zebrad, mine `100·coinbase_batches + 1` blocks and sync
-/// so at least `coinbase_batches` shielded coinbase notes are mature and
-/// spendable — waiting on both the fetch and state subscribers. The
-/// state_service analogue of the fetch_service `fund_faucet`
-/// (dual-subscriber). `coinbase_batches` of 1 funds a single send; 2 funds two.
+/// Sync the faucet; on zebrad, mine `coinbase_batches` blocks and sync so the
+/// faucet holds one spendable shielded-coinbase note per batch — waiting on
+/// both the fetch and state subscribers. The state_service analogue of the
+/// fetch_service `fund_faucet` (dual-subscriber). `coinbase_batches` of 1
+/// funds a single send; 2 funds two.
 #[allow(deprecated)]
 async fn fund_faucet<V: ValidatorExt>(
     test_manager: &TestManager<V, StateService>,
@@ -389,8 +391,9 @@ async fn state_service_get_block_range_returns_default_pools<V: ValidatorExt>(
     )
     .await;
 
-    let start_height: u64 = 100;
-    let end_height: u64 = 103;
+    let start_height: u64 = 1;
+    // fund_and_send mines the send into the block at the chain tip.
+    let end_height: u64 = best_chaintip_height(&fetch_service_subscriber).await as u64;
 
     let fetch_service_get_block_range = zaino_testutils::collect_block_range(
         &fetch_service_subscriber,
@@ -441,22 +444,25 @@ async fn state_service_get_block_range_returns_default_pools<V: ValidatorExt>(
 
     assert_eq!(compact_block.height, end_height);
 
-    // the compact block has 1 transactions
-    assert_eq!(compact_block.vtx.len(), 1);
+    // The block holds the shielded coinbase (the miner address is a shielded
+    // pool, so the coinbase appears in pool-filtered ranges) and the send.
+    assert_eq!(compact_block.vtx.len(), 2);
 
-    let shielded_tx = compact_block.vtx.first().unwrap();
-    assert_eq!(shielded_tx.index, 1);
+    let sent_tx = compact_block.vtx.last().unwrap();
+    assert_eq!(sent_tx.index, 1);
     // tranparent data should not be present when no pool types are requested
-    assert_eq!(
-        shielded_tx.vin,
-        vec![],
-        "transparent data should not be present when no pool types are specified in the request."
-    );
-    assert_eq!(
-        shielded_tx.vout,
-        vec![],
-        "transparent data should not be present when no pool types are specified in the request."
-    );
+    for tx in &compact_block.vtx {
+        assert_eq!(
+            tx.vin,
+            vec![],
+            "transparent data should not be present when no pool types are specified in the request."
+        );
+        assert_eq!(
+            tx.vout,
+            vec![],
+            "transparent data should not be present when no pool types are specified in the request."
+        );
+    }
     test_manager.close().await;
 }
 
@@ -476,15 +482,14 @@ async fn state_service_get_block_range_returns_all_pools<V: ValidatorExt>(
     clients.sync_faucet().await;
 
     if matches!(validator, ValidatorKind::Zebrad) {
-        // 103 blocks leaves at least three mature coinbase notes (one per send
-        // below) and preserves the chain height of the legacy
-        // mature-then-shield ritual it replaces.
+        // 3 blocks yields 3 spendable orchard coinbase notes (one per send
+        // below); shielded coinbase carries no maturity rule.
         wallet_tests::mine_and_sync_faucet(
             &test_manager,
             &mut clients,
             &fetch_service_subscriber,
             &state_service_subscriber,
-            103,
+            3,
         )
         .await;
     };
@@ -508,8 +513,9 @@ async fn state_service_get_block_range_returns_all_pools<V: ValidatorExt>(
         .generate_blocks_and_wait_for_tips(1, &fetch_service_subscriber, &state_service_subscriber)
         .await;
 
-    let start_height: u64 = 100;
-    let end_height: u64 = 106;
+    let start_height: u64 = 1;
+    // The sends above land in the block mined last — the chain tip.
+    let end_height: u64 = best_chaintip_height(&fetch_service_subscriber).await as u64;
     let all_pools = vec![
         PoolType::Transparent as i32,
         PoolType::Sapling as i32,
@@ -565,7 +571,17 @@ async fn state_service_get_block_range_out_of_range_test_upper_bound<V: Validato
         _state_service,
         state_service_subscriber,
         mut clients,
-    ) = create_test_manager_and_services::<V>(validator, None, true, None).await;
+    ) = create_test_manager_and_services_mining_to::<V>(
+        // This test mines ~100 blocks purely for a known tip and spends
+        // nothing — shielded coinbase would cost a halo2 proof per block for
+        // no benefit, so keep cheap transparent block templates.
+        zaino_testutils::PoolType::Transparent,
+        validator,
+        None,
+        true,
+        None,
+    )
+    .await;
 
     generate_up_to_height_100(
         &test_manager,
@@ -626,7 +642,17 @@ async fn state_service_get_block_range_out_of_range_test_lower_bound<V: Validato
         _state_service,
         state_service_subscriber,
         mut clients,
-    ) = create_test_manager_and_services::<V>(validator, None, true, None).await;
+    ) = create_test_manager_and_services_mining_to::<V>(
+        // This test mines ~100 blocks purely for a known tip and spends
+        // nothing — shielded coinbase would cost a halo2 proof per block for
+        // no benefit, so keep cheap transparent block templates.
+        zaino_testutils::PoolType::Transparent,
+        validator,
+        None,
+        true,
+        None,
+    )
+    .await;
 
     generate_up_to_height_100(
         &test_manager,
@@ -1134,19 +1160,19 @@ mod zebra {
                 Some(NetworkKind::Regtest),
             )
             .await;
-            // This test only inspects a coinbase transaction; it needs the
-            // chain at height 103 (102 blocks atop the activation block), not
-            // funded wallets.
+            // This test only inspects a coinbase transaction — any mined
+            // block supplies one; it needs no funded wallets and no
+            // particular height.
             test_manager
                 .generate_blocks_and_wait_for_tips(
-                    102,
+                    1,
                     &fetch_service_subscriber,
                     &state_service_subscriber,
                 )
                 .await;
 
             let block = BlockId {
-                height: 103,
+                height: best_chaintip_height(&fetch_service_subscriber).await as u64,
                 hash: vec![],
             };
             let state_service_block_by_height = state_service_subscriber
