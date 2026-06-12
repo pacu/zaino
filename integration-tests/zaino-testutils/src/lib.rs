@@ -811,6 +811,25 @@ where
         self.generate_blocks_and_wait_for_tip(0, then_synced).await;
     }
 
+    /// Mine `n` blocks one at a time and, after each block (once both
+    /// pollables observe the new tip), run `check(i)` with the iteration
+    /// index `i` in `0..n`. The shared loop shape of the "compare
+    /// subscribers after every block" tests; callers with a single
+    /// subscriber pass it as both `mined_against` and `then_synced`.
+    pub async fn generate_blocks_and_check_each<A: PollableTip, B: PollableTip>(
+        &self,
+        n: u32,
+        mined_against: &A,
+        then_synced: &B,
+        mut check: impl AsyncFnMut(u32),
+    ) {
+        for i in 0..n {
+            self.generate_blocks_and_wait_for_tips(1, mined_against, then_synced)
+                .await;
+            check(i).await;
+        }
+    }
+
     /// Build a JSON-RPC connector to the backing validator's RPC port, using
     /// the regtest test cookie credentials. For tests that compare Zaino's
     /// output against the validator's own JSON-RPC.

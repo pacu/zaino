@@ -269,47 +269,50 @@ async fn fetch_service_get_block_header<V: ValidatorExt>(validator: &ValidatorKi
 
     let jsonrpc_client = test_manager.full_node_jsonrpc_connector().await;
 
-    for i in 0..BLOCK_LIMIT {
-        test_manager
-            .generate_blocks_and_wait_for_tip(1, &fetch_service_subscriber)
-            .await;
+    test_manager
+        .generate_blocks_and_check_each(
+            BLOCK_LIMIT,
+            &fetch_service_subscriber,
+            &fetch_service_subscriber,
+            async |i| {
+                let block = fetch_service_subscriber
+                    .z_get_block(i.to_string(), Some(1))
+                    .await
+                    .unwrap();
 
-        let block = fetch_service_subscriber
-            .z_get_block(i.to_string(), Some(1))
-            .await
-            .unwrap();
+                let block_hash = match block {
+                    GetBlock::Object(block) => block.hash(),
+                    GetBlock::Raw(_) => panic!("Expected block object"),
+                };
 
-        let block_hash = match block {
-            GetBlock::Object(block) => block.hash(),
-            GetBlock::Raw(_) => panic!("Expected block object"),
-        };
+                let fetch_service_get_block_header = fetch_service_subscriber
+                    .get_block_header(block_hash.to_string(), false)
+                    .await
+                    .unwrap();
 
-        let fetch_service_get_block_header = fetch_service_subscriber
-            .get_block_header(block_hash.to_string(), false)
-            .await
-            .unwrap();
+                let rpc_block_header_response = jsonrpc_client
+                    .get_block_header(block_hash.to_string(), false)
+                    .await
+                    .unwrap();
 
-        let rpc_block_header_response = jsonrpc_client
-            .get_block_header(block_hash.to_string(), false)
-            .await
-            .unwrap();
+                let fetch_service_get_block_header_verbose = fetch_service_subscriber
+                    .get_block_header(block_hash.to_string(), true)
+                    .await
+                    .unwrap();
 
-        let fetch_service_get_block_header_verbose = fetch_service_subscriber
-            .get_block_header(block_hash.to_string(), true)
-            .await
-            .unwrap();
+                let rpc_block_header_response_verbose = jsonrpc_client
+                    .get_block_header(block_hash.to_string(), true)
+                    .await
+                    .unwrap();
 
-        let rpc_block_header_response_verbose = jsonrpc_client
-            .get_block_header(block_hash.to_string(), true)
-            .await
-            .unwrap();
-
-        assert_eq!(fetch_service_get_block_header, rpc_block_header_response);
-        assert_eq!(
-            fetch_service_get_block_header_verbose,
-            rpc_block_header_response_verbose
-        );
-    }
+                assert_eq!(fetch_service_get_block_header, rpc_block_header_response);
+                assert_eq!(
+                    fetch_service_get_block_header_verbose,
+                    rpc_block_header_response_verbose
+                );
+            },
+        )
+        .await;
 }
 
 /// Launch a fetch-backend manager and mine 5 blocks, leaving the chain tip at

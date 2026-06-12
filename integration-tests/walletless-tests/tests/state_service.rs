@@ -3,7 +3,7 @@ use zaino_fetch::jsonrpsee::response::address_deltas::GetAddressDeltasParams;
 use zaino_state::{LightWalletIndexer, ZcashIndexer};
 use zaino_testutils::ValidatorExt;
 use zaino_testutils::{ValidatorKind, ZEBRAD_TESTNET_CACHE_DIR};
-use zcash_local_net::validator::{zebrad::Zebrad, Validator};
+use zcash_local_net::validator::zebrad::Zebrad;
 use zebra_chain::parameters::NetworkKind;
 use zebra_rpc::methods::{GetAddressBalanceRequest, GetAddressTxIdsRequest};
 
@@ -542,26 +542,26 @@ mod zebra {
             )
             .await;
             let mut chaintip_subscriber = state_service_subscriber.chaintip_update_subscriber();
-            for _ in 0..5 {
-                test_manager
-                    .generate_blocks_and_wait_for_tips(
-                        1,
-                        &fetch_service_subscriber,
-                        &state_service_subscriber,
-                    )
-                    .await;
-                assert_eq!(
-                    chaintip_subscriber.next_tip_hash().await.unwrap().0,
-                    <[u8; 32]>::try_from(
-                        state_service_subscriber
-                            .get_latest_block()
-                            .await
+            test_manager
+                .generate_blocks_and_check_each(
+                    5,
+                    &fetch_service_subscriber,
+                    &state_service_subscriber,
+                    async |_| {
+                        assert_eq!(
+                            chaintip_subscriber.next_tip_hash().await.unwrap().0,
+                            <[u8; 32]>::try_from(
+                                state_service_subscriber
+                                    .get_latest_block()
+                                    .await
+                                    .unwrap()
+                                    .hash
+                            )
                             .unwrap()
-                            .hash
-                    )
-                    .unwrap()
+                        )
+                    },
                 )
-            }
+                .await;
         }
 
         #[tokio::test(flavor = "multi_thread")]
@@ -1035,39 +1035,38 @@ mod zebra {
 
             const BLOCK_LIMIT: u32 = 10;
 
-            for i in 0..BLOCK_LIMIT {
-                test_manager
-                    .generate_blocks_and_wait_for_tips(
-                        1,
-                        &fetch_service_subscriber,
-                        &state_service_subscriber,
-                    )
-                    .await;
+            test_manager
+                .generate_blocks_and_check_each(
+                    BLOCK_LIMIT,
+                    &fetch_service_subscriber,
+                    &state_service_subscriber,
+                    async |i| {
+                        let block = fetch_service_subscriber
+                            .z_get_block(i.to_string(), Some(1))
+                            .await
+                            .unwrap();
 
-                let block = fetch_service_subscriber
-                    .z_get_block(i.to_string(), Some(1))
-                    .await
-                    .unwrap();
+                        let block_hash = match block {
+                            GetBlock::Object(block) => block.hash(),
+                            GetBlock::Raw(_) => panic!("Expected block object"),
+                        };
 
-                let block_hash = match block {
-                    GetBlock::Object(block) => block.hash(),
-                    GetBlock::Raw(_) => panic!("Expected block object"),
-                };
+                        let fetch_service_get_block_header = fetch_service_subscriber
+                            .get_block_header(block_hash.to_string(), false)
+                            .await
+                            .unwrap();
 
-                let fetch_service_get_block_header = fetch_service_subscriber
-                    .get_block_header(block_hash.to_string(), false)
-                    .await
-                    .unwrap();
-
-                let state_service_block_header_response = state_service_subscriber
-                    .get_block_header(block_hash.to_string(), false)
-                    .await
-                    .unwrap();
-                assert_eq!(
-                    fetch_service_get_block_header,
-                    state_service_block_header_response
-                );
-            }
+                        let state_service_block_header_response = state_service_subscriber
+                            .get_block_header(block_hash.to_string(), false)
+                            .await
+                            .unwrap();
+                        assert_eq!(
+                            fetch_service_get_block_header,
+                            state_service_block_header_response
+                        );
+                    },
+                )
+                .await;
         }
 
         #[tokio::test(flavor = "multi_thread")]

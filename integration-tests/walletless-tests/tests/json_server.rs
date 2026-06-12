@@ -4,7 +4,6 @@
 use zaino_state::{FetchService, FetchServiceSubscriber, ZcashIndexer};
 use zaino_testutils::TestManager;
 use zcash_local_net::validator::zcashd::Zcashd;
-use zcash_local_net::validator::Validator as _;
 
 /// Assert that `query` returns the same value from the zcashd-backed and
 /// zaino-backed subscribers. `query` takes the subscriber by value (subscribers
@@ -458,32 +457,35 @@ mod zcashd {
 
             const BLOCK_LIMIT: u32 = 10;
 
-            for i in 0..BLOCK_LIMIT {
-                test_manager
-                    .generate_blocks_and_wait_for_tips(1, &zaino_subscriber, &zcashd_subscriber)
-                    .await;
+            test_manager
+                .generate_blocks_and_check_each(
+                    BLOCK_LIMIT,
+                    &zaino_subscriber,
+                    &zcashd_subscriber,
+                    async |i| {
+                        let block = zcashd_subscriber
+                            .z_get_block(i.to_string(), Some(1))
+                            .await
+                            .unwrap();
 
-                let block = zcashd_subscriber
-                    .z_get_block(i.to_string(), Some(1))
-                    .await
-                    .unwrap();
+                        let block_hash = match block {
+                            GetBlock::Object(block) => block.hash(),
+                            GetBlock::Raw(_) => panic!("Expected block object"),
+                        };
 
-                let block_hash = match block {
-                    GetBlock::Object(block) => block.hash(),
-                    GetBlock::Raw(_) => panic!("Expected block object"),
-                };
+                        let zcashd_get_block_header = zcashd_subscriber
+                            .get_block_header(block_hash.to_string(), false)
+                            .await
+                            .unwrap();
 
-                let zcashd_get_block_header = zcashd_subscriber
-                    .get_block_header(block_hash.to_string(), false)
-                    .await
-                    .unwrap();
-
-                let zainod_block_header_response = zaino_subscriber
-                    .get_block_header(block_hash.to_string(), false)
-                    .await
-                    .unwrap();
-                assert_eq!(zcashd_get_block_header, zainod_block_header_response);
-            }
+                        let zainod_block_header_response = zaino_subscriber
+                            .get_block_header(block_hash.to_string(), false)
+                            .await
+                            .unwrap();
+                        assert_eq!(zcashd_get_block_header, zainod_block_header_response);
+                    },
+                )
+                .await;
         }
     }
 }
