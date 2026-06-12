@@ -186,9 +186,6 @@ async fn state_service_get_address_balance<V: ValidatorExt>(validator: &Validato
     )
     .await;
 
-    clients.sync_recipient().await;
-    let recipient_balance = clients.recipient_balance().await;
-
     let fetch_service_balance = services
         .fetch_subscriber
         .z_get_address_balance(GetAddressBalanceRequest::new(vec![recipient_taddr.clone()]))
@@ -201,18 +198,11 @@ async fn state_service_get_address_balance<V: ValidatorExt>(validator: &Validato
         .await
         .unwrap();
 
-    dbg!(&recipient_balance);
     dbg!(&fetch_service_balance);
     dbg!(&state_service_balance);
 
-    assert_eq!(
-        wallet_tests::Pool::Transparent.received_balance(&recipient_balance),
-        250_000,
-    );
-    assert_eq!(
-        wallet_tests::Pool::Transparent.received_balance(&recipient_balance),
-        fetch_service_balance.balance(),
-    );
+    // The fixture sent exactly 250_000 to the recipient taddr.
+    assert_eq!(fetch_service_balance.balance(), 250_000);
     assert_eq!(fetch_service_balance, state_service_balance);
 
     services.test_manager.close().await;

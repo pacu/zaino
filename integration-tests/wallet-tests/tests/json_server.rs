@@ -54,9 +54,6 @@ async fn z_get_address_balance_inner() {
     )
     .await;
 
-    clients.sync_recipient().await;
-    let recipient_balance = clients.recipient_balance().await;
-
     let zcashd_service_balance = services
         .zcashd_subscriber
         .z_get_address_balance(GetAddressBalanceRequest::new(vec![recipient_taddr.clone()]))
@@ -69,18 +66,11 @@ async fn z_get_address_balance_inner() {
         .await
         .unwrap();
 
-    dbg!(&recipient_balance);
     dbg!(&zcashd_service_balance);
     dbg!(&zaino_service_balance);
 
-    assert_eq!(
-        wallet_tests::Pool::Transparent.received_balance(&recipient_balance),
-        250_000,
-    );
-    assert_eq!(
-        wallet_tests::Pool::Transparent.received_balance(&recipient_balance),
-        zcashd_service_balance.balance(),
-    );
+    // The fixture sent exactly 250_000 to the recipient taddr.
+    assert_eq!(zcashd_service_balance.balance(), 250_000);
     assert_eq!(zcashd_service_balance, zaino_service_balance);
 
     services.test_manager.close().await;

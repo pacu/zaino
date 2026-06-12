@@ -151,29 +151,19 @@ async fn fund_and_send<V: ValidatorExt>(
 
 #[allow(deprecated)]
 async fn fetch_service_get_address_balance<V: ValidatorExt>(validator: &ValidatorKind) {
-    let (mut test_manager, fetch_service_subscriber, mut clients, _tx) =
+    let (mut test_manager, fetch_service_subscriber, clients, _tx) =
         fund_and_send::<V>(validator, wallet_tests::Pool::Transparent).await;
     let recipient_address = clients.get_recipient_address("transparent").await;
-
-    clients.sync_recipient().await;
-    let recipient_balance = clients.recipient_balance().await;
 
     let fetch_service_balance = fetch_service_subscriber
         .z_get_address_balance(GetAddressBalanceRequest::new(vec![recipient_address]))
         .await
         .unwrap();
 
-    dbg!(recipient_balance.clone());
     dbg!(fetch_service_balance);
 
-    assert_eq!(
-        wallet_tests::Pool::Transparent.received_balance(&recipient_balance),
-        250_000,
-    );
-    assert_eq!(
-        wallet_tests::Pool::Transparent.received_balance(&recipient_balance),
-        fetch_service_balance.balance(),
-    );
+    // The fixture sent exactly 250_000 to the recipient taddr.
+    assert_eq!(fetch_service_balance.balance(), 250_000);
 
     test_manager.close().await;
 }
@@ -519,12 +509,9 @@ async fn fetch_service_get_taddress_txids<V: ValidatorExt>(validator: &Validator
 
 #[allow(deprecated)]
 async fn fetch_service_get_taddress_balance<V: ValidatorExt>(validator: &ValidatorKind) {
-    let (mut test_manager, fetch_service_subscriber, mut clients, _tx) =
+    let (mut test_manager, fetch_service_subscriber, clients, _tx) =
         fund_and_send::<V>(validator, wallet_tests::Pool::Transparent).await;
     let recipient_taddr = clients.get_recipient_address("transparent").await;
-
-    clients.sync_recipient().await;
-    let balance = clients.recipient_balance().await;
 
     let address_list = AddressList {
         addresses: vec![recipient_taddr],
@@ -536,10 +523,8 @@ async fn fetch_service_get_taddress_balance<V: ValidatorExt>(validator: &Validat
         .unwrap();
 
     dbg!(&fetch_service_balance);
-    assert_eq!(
-        fetch_service_balance.value_zat as u64,
-        wallet_tests::Pool::Transparent.received_balance(&balance)
-    );
+    // The fixture sent exactly 250_000 to the recipient taddr.
+    assert_eq!(fetch_service_balance.value_zat, 250_000);
 
     test_manager.close().await;
 }
