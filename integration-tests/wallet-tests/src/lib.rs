@@ -23,8 +23,7 @@ use zingolib::lightclient::LightClient;
 use zingolib::wallet::balance::AccountBalance;
 use zingolib_testutils::scenarios::ClientBuilder;
 
-/// Re-export so relocated tests keep their original call sites.
-pub use zingolib::testutils::lightclient::from_inputs;
+use zingolib::testutils::lightclient::from_inputs;
 
 /// Holds zingo lightclients along with the lightclient builder for
 /// wallet-to-validator tests.
@@ -69,12 +68,36 @@ impl Clients {
             .expect("recipient account_balance")
     }
 
+    /// Send `amount` zatoshis from `client` to `address`. Shared by
+    /// [`Clients::send_from_faucet`] and [`Clients::send_from_recipient`].
+    async fn send(
+        client: &mut LightClient,
+        who: &str,
+        address: &str,
+        amount: u64,
+    ) -> NonEmpty<TxId> {
+        from_inputs::quick_send(client, vec![(address, amount, None)])
+            .await
+            .unwrap_or_else(|e| panic!("quick_send from {who}: {e:?}"))
+    }
+
     /// Send `amount` zatoshis from the faucet to `address`, returning the
     /// transaction id(s).
     pub async fn send_from_faucet(&mut self, address: &str, amount: u64) -> NonEmpty<TxId> {
-        from_inputs::quick_send(&mut self.faucet, vec![(address, amount, None)])
-            .await
-            .expect("quick_send from faucet")
+        Self::send(&mut self.faucet, "faucet", address, amount).await
+    }
+
+    /// Send `amount` zatoshis from the recipient to `address`, returning the
+    /// transaction id(s).
+    pub async fn send_from_recipient(&mut self, address: &str, amount: u64) -> NonEmpty<TxId> {
+        Self::send(&mut self.recipient, "recipient", address, amount).await
+    }
+
+    /// Forget all of the recipient wallet's state, then sync from scratch —
+    /// re-discovering funds from the chain and the mempool.
+    pub async fn rescan_recipient(&mut self) {
+        self.recipient.wallet.write().await.clear_all();
+        self.sync_recipient().await;
     }
 
     /// Shield `client`'s account-0 transparent funds. Shared by
@@ -572,7 +595,7 @@ where
 /// wrapper that supplies the concrete `C`/`Service` by turbofish.
 #[cfg(test)]
 mod launch_clients {
-    use super::{from_inputs, Clients};
+    use super::Clients;
     use std::path::PathBuf;
     use zaino_state::{ZcashIndexer, ZcashService};
     use zaino_testutils::{PollableTip, TestManager, TestService, ValidatorExt, ValidatorKind};
@@ -723,10 +746,8 @@ mod launch_clients {
                 clients.faucet_balance().await.confirmed_transparent_balance.unwrap().into_u64()
             );
 
-            let recipient_zaddr = clients.get_recipient_address("sapling").await.to_string();
-            from_inputs::quick_send(&mut clients.faucet, vec![(&recipient_zaddr, 250_000, None)])
-                .await
-                .unwrap();
+            let recipient_zaddr = clients.get_recipient_address("sapling").await;
+            clients.send_from_faucet(&recipient_zaddr, 250_000).await;
 
             test_manager
                 .generate_blocks_and_wait_for_tip(1, test_manager.subscriber())

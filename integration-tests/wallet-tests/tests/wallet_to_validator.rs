@@ -346,8 +346,7 @@ where
     let txid_2 = clients.send_from_faucet(&recipient_zaddr, 250_000).await;
 
     println!("\n\nStarting Mempool!\n");
-    clients.recipient.wallet.write().await.clear_all();
-    clients.sync_recipient().await;
+    clients.rescan_recipient().await;
 
     // test_manager.local_net.print_stdout();
 

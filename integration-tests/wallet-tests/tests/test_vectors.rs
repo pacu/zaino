@@ -9,7 +9,6 @@ use std::io::BufWriter;
 use std::path::Path;
 use std::sync::Arc;
 use tower::{Service, ServiceExt as _};
-use wallet_tests::from_inputs;
 use zaino_state::read_u32_le;
 use zaino_state::read_u64_le;
 use zaino_state::write_u32_le;
@@ -109,12 +108,7 @@ async fn create_200_block_regtest_chain_vectors() {
         .send_from_faucet(recipient_uaddr.as_str(), 250_000)
         .await;
 
-    from_inputs::quick_send(
-        &mut clients.recipient,
-        vec![(faucet_taddr.as_str(), 200_000, None)],
-    )
-    .await
-    .unwrap();
+    clients.send_from_recipient(faucet_taddr.as_str(), 200_000).await;
 
     // Generate block
     test_manager
@@ -136,12 +130,7 @@ async fn create_200_block_regtest_chain_vectors() {
         .send_from_faucet(recipient_uaddr.as_str(), 250_000)
         .await;
 
-    from_inputs::quick_send(
-        &mut clients.recipient,
-        vec![(faucet_taddr.as_str(), 250_000, None)],
-    )
-    .await
-    .unwrap();
+    clients.send_from_recipient(faucet_taddr.as_str(), 250_000).await;
 
     // Generate block
     test_manager
@@ -170,18 +159,8 @@ async fn create_200_block_regtest_chain_vectors() {
             .send_from_faucet(recipient_uaddr.as_str(), 250_000)
             .await;
 
-        from_inputs::quick_send(
-            &mut clients.recipient,
-            vec![(faucet_taddr.as_str(), 200_000, None)],
-        )
-        .await
-        .unwrap();
-        from_inputs::quick_send(
-            &mut clients.recipient,
-            vec![(faucet_uaddr.as_str(), 200_000, None)],
-        )
-        .await
-        .unwrap();
+        clients.send_from_recipient(faucet_taddr.as_str(), 200_000).await;
+        clients.send_from_recipient(faucet_uaddr.as_str(), 200_000).await;
 
         // Generate block
         test_manager
@@ -212,18 +191,8 @@ async fn create_200_block_regtest_chain_vectors() {
             .send_from_faucet(recipient_uaddr.as_str(), 250_000)
             .await;
 
-        from_inputs::quick_send(
-            &mut clients.recipient,
-            vec![(faucet_taddr.as_str(), 250_000, None)],
-        )
-        .await
-        .unwrap();
-        from_inputs::quick_send(
-            &mut clients.recipient,
-            vec![(faucet_saddr.as_str(), 250_000, None)],
-        )
-        .await
-        .unwrap();
+        clients.send_from_recipient(faucet_taddr.as_str(), 250_000).await;
+        clients.send_from_recipient(faucet_saddr.as_str(), 250_000).await;
 
         // Generate block
         test_manager
