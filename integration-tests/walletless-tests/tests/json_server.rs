@@ -342,7 +342,9 @@ mod zcashd {
 
                 assert_eq!(zcashd_deltas, zaino_deltas);
 
-                test_manager.local_net.generate_blocks(1).await.unwrap();
+                test_manager
+                    .generate_blocks_and_wait_for_tips(1, &zaino_subscriber, &zcashd_subscriber)
+                    .await;
             }
 
             test_manager.close().await;

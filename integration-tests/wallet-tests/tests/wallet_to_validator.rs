@@ -9,29 +9,6 @@ use zaino_testutils::ValidatorExt;
 use zaino_testutils::ValidatorKind;
 use zainodlib::error::IndexerError;
 
-/// Sync the faucet; on zebrad, mine 1 block so a spendable shielded coinbase
-/// note exists (zcashd's launch reward already is spendable).
-async fn fund_faucet<V, Service>(
-    test_manager: &TestManager<V, Service>,
-    clients: &mut wallet_tests::Clients,
-    validator: &ValidatorKind,
-) where
-    V: ValidatorExt,
-    Service: zaino_testutils::TestService,
-    IndexerError: From<<<Service as ZcashService>::Subscriber as ZcashIndexer>::Error>,
-    <Service as ZcashService>::Subscriber: zaino_testutils::PollableTip,
-{
-    wallet_tests::fund_faucet_dual(
-        test_manager,
-        clients,
-        validator,
-        test_manager.subscriber(),
-        test_manager.subscriber(),
-        1,
-    )
-    .await;
-}
-
 async fn connect_to_node_get_info_for_validator<V, Service>(validator: &ValidatorKind)
 where
     V: ValidatorExt,
@@ -88,7 +65,15 @@ async fn assert_send_to_pool<V, Service>(
 {
     let (mut test_manager, mut clients) =
         wallet_tests::launch_and_build::<V, Service>(validator, None, None).await;
-    fund_faucet(&test_manager, &mut clients, validator).await;
+    wallet_tests::fund_faucet_dual(
+        &test_manager,
+        &mut clients,
+        validator,
+        test_manager.subscriber(),
+        test_manager.subscriber(),
+        1,
+    )
+    .await;
     send_and_assert_received(&test_manager, &mut clients, pool, amount).await;
     test_manager.close().await;
 }
@@ -269,7 +254,15 @@ where
     let (mut test_manager, mut clients) =
         wallet_tests::launch_and_build::<V, Service>(validator, None, None).await;
 
-    fund_faucet(&test_manager, &mut clients, validator).await;
+    wallet_tests::fund_faucet_dual(
+        &test_manager,
+        &mut clients,
+        validator,
+        test_manager.subscriber(),
+        test_manager.subscriber(),
+        1,
+    )
+    .await;
 
     let recipient_taddr = clients.get_recipient_address("transparent").await;
     clients.send_from_faucet(&recipient_taddr, 250_000).await;

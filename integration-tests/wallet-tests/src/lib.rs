@@ -475,6 +475,61 @@ where
     (recipient_taddr, recipient_ua, txid)
 }
 
+/// Fund the faucet and send 250_000 to the recipient's transparent, sapling,
+/// and unified addresses (one tx each), then mine the sends in — waiting on
+/// both subscribers — so the block at the chain tip holds all three. Returns
+/// `(transparent_txid, sapling_txid, orchard_txid)`. The shared scenario of
+/// the fetch_service and state_service `get_block_range` pool-filter tests.
+#[allow(deprecated)]
+pub async fn fund_and_send_to_all_pools<C, Service, A, B>(
+    test_manager: &TestManager<C, Service>,
+    clients: &mut Clients,
+    validator: &ValidatorKind,
+    mined_against: &A,
+    then_synced: &B,
+) -> (TxId, TxId, TxId)
+where
+    C: ValidatorExt,
+    Service: TestService,
+    IndexerError: From<<<Service as ZcashService>::Subscriber as ZcashIndexer>::Error>,
+    <Service as ZcashService>::Subscriber: PollableTip,
+    A: PollableTip,
+    B: PollableTip,
+{
+    clients.sync_faucet().await;
+
+    // zebrad: 3 blocks yields 3 spendable orchard coinbase notes (one per
+    // send below); shielded coinbase carries no maturity rule. zcashd's
+    // launch reward is already spendable; its historical 14 is unchanged.
+    let blocks = if matches!(validator, ValidatorKind::Zebrad) {
+        3
+    } else {
+        14
+    };
+    mine_and_sync_faucet(test_manager, clients, mined_against, then_synced, blocks).await;
+
+    let recipient_transparent = clients.get_recipient_address("transparent").await;
+    let transparent_txid = clients
+        .send_from_faucet(&recipient_transparent, 250_000)
+        .await
+        .head;
+
+    let recipient_sapling = clients.get_recipient_address("sapling").await;
+    let sapling_txid = clients
+        .send_from_faucet(&recipient_sapling, 250_000)
+        .await
+        .head;
+
+    let recipient_ua = clients.get_recipient_address("unified").await;
+    let orchard_txid = clients.send_from_faucet(&recipient_ua, 250_000).await.head;
+
+    test_manager
+        .generate_blocks_and_wait_for_tips(1, mined_against, then_synced)
+        .await;
+
+    (transparent_txid, sapling_txid, orchard_txid)
+}
+
 /// Smoke tests relocated from `zaino-testutils`: launch a validator + Zaino,
 /// build wallet clients against it, and exercise mining-reward receipt and
 /// sends. Organised by validator / service backend.

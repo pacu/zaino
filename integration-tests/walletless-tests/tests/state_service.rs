@@ -697,8 +697,13 @@ mod zebra {
                 initial_state_service_mining_info
             );
 
-            test_manager.local_net.generate_blocks(2).await.unwrap();
-            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            test_manager
+                .generate_blocks_and_wait_for_tips(
+                    2,
+                    &fetch_service_subscriber,
+                    &state_service_subscriber,
+                )
+                .await;
 
             let final_fetch_service_mining_info =
                 fetch_service_subscriber.get_mining_info().await.unwrap();

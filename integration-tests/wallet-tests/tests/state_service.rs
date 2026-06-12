@@ -92,31 +92,6 @@ async fn create_test_manager_and_services_mining_to<V: ValidatorExt>(
     )
 }
 
-/// Sync the faucet; on zebrad, mine `coinbase_batches` blocks and sync so the
-/// faucet holds one spendable shielded-coinbase note per batch — waiting on
-/// both the fetch and state subscribers. The state_service analogue of the
-/// fetch_service `fund_faucet` (dual-subscriber). `coinbase_batches` of 1
-/// funds a single send; 2 funds two.
-#[allow(deprecated)]
-async fn fund_faucet<V: ValidatorExt>(
-    test_manager: &TestManager<V, StateService>,
-    clients: &mut wallet_tests::Clients,
-    validator: &ValidatorKind,
-    fetch_service_subscriber: &FetchServiceSubscriber,
-    state_service_subscriber: &StateServiceSubscriber,
-    coinbase_batches: u32,
-) {
-    wallet_tests::fund_faucet_dual(
-        test_manager,
-        clients,
-        validator,
-        fetch_service_subscriber,
-        state_service_subscriber,
-        coinbase_batches,
-    )
-    .await;
-}
-
 /// Sync the faucet and, on zebrad, generate blocks up to height 100 (computing
 /// how many are still needed from the current tip). Shared setup for the
 /// out-of-range block_range tests, which need a known tip but no funding.
@@ -335,7 +310,7 @@ async fn state_service_get_raw_mempool<V: ValidatorExt>(validator: &ValidatorKin
         .generate_blocks_and_wait_for_tips(1, &fetch_service_subscriber, &state_service_subscriber)
         .await;
 
-    fund_faucet(
+    wallet_tests::fund_faucet_dual(
         &test_manager,
         &mut clients,
         validator,
@@ -479,39 +454,14 @@ async fn state_service_get_block_range_returns_all_pools<V: ValidatorExt>(
         mut clients,
     ) = create_test_manager_and_services::<V>(validator, None, true, None).await;
 
-    clients.sync_faucet().await;
-
-    if matches!(validator, ValidatorKind::Zebrad) {
-        // 3 blocks yields 3 spendable orchard coinbase notes (one per send
-        // below); shielded coinbase carries no maturity rule.
-        wallet_tests::mine_and_sync_faucet(
-            &test_manager,
-            &mut clients,
-            &fetch_service_subscriber,
-            &state_service_subscriber,
-            3,
-        )
-        .await;
-    };
-
-    let recipient_transparent = clients.get_recipient_address("transparent").await;
-    let deshielding_txid = clients
-        .send_from_faucet(&recipient_transparent, 250_000)
-        .await
-        .head;
-
-    let recipient_sapling = clients.get_recipient_address("sapling").await;
-    let sapling_txid = clients
-        .send_from_faucet(&recipient_sapling, 250_000)
-        .await
-        .head;
-
-    let recipient_ua = clients.get_recipient_address("unified").await;
-    let orchard_txid = clients.send_from_faucet(&recipient_ua, 250_000).await.head;
-
-    test_manager
-        .generate_blocks_and_wait_for_tips(1, &fetch_service_subscriber, &state_service_subscriber)
-        .await;
+    let (deshielding_txid, sapling_txid, orchard_txid) = wallet_tests::fund_and_send_to_all_pools(
+        &test_manager,
+        &mut clients,
+        validator,
+        &fetch_service_subscriber,
+        &state_service_subscriber,
+    )
+    .await;
 
     let start_height: u64 = 1;
     // The sends above land in the block mined last — the chain tip.
@@ -821,7 +771,7 @@ async fn state_service_get_address_transactions_regtest<V: ValidatorExt>(
     ) = create_test_manager_and_services::<V>(validator, None, true, None).await;
 
     let recipient_taddr = clients.get_recipient_address("transparent").await;
-    fund_faucet(
+    wallet_tests::fund_faucet_dual(
         &test_manager,
         &mut clients,
         validator,
@@ -834,8 +784,9 @@ async fn state_service_get_address_transactions_regtest<V: ValidatorExt>(
     let tx = clients
         .send_from_faucet(recipient_taddr.as_str(), 250_000)
         .await;
-    test_manager.local_net.generate_blocks(1).await.unwrap();
-    tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+    test_manager
+        .generate_blocks_and_wait_for_tips(1, &fetch_service_subscriber, &state_service_subscriber)
+        .await;
 
     let chain_height = best_chaintip_height(&fetch_service_subscriber).await;
     dbg!(&chain_height);
@@ -1068,7 +1019,7 @@ mod zebra {
 
             let recipient_taddr = clients.get_recipient_address("transparent").await;
 
-            fund_faucet(
+            wallet_tests::fund_faucet_dual(
                 &test_manager,
                 &mut clients,
                 &ValidatorKind::Zebrad,
