@@ -28,13 +28,7 @@ async fn create_zcashd_test_manager_and_fetch_services() -> (
         zaino_subscriber,
     ) = zaino_testutils::launch_zcashd_dual_fetch_services().await;
 
-    let clients = wallet_tests::build_clients(
-        test_manager
-            .zaino_grpc_listen_address
-            .expect("zaino enabled")
-            .port(),
-        wallet_tests::default_heights(&ValidatorKind::Zcashd),
-    );
+    let clients = wallet_tests::build_clients_for(&test_manager, &ValidatorKind::Zcashd);
     (
         test_manager,
         zcashd_fetch_service,

@@ -4,7 +4,7 @@ use futures::StreamExt as _;
 use hex::ToHex as _;
 use nonempty::NonEmpty;
 use zaino_proto::proto::service::{
-    AddressList, BlockId, BlockRange, GetAddressUtxosArg, GetMempoolTxRequest, PoolType,
+    AddressList, BlockId, BlockRange, GetAddressUtxosArg, GetMempoolTxRequest,
     TransparentAddressBlockFilter, TxFilter,
 };
 use zaino_state::ChainIndex;
@@ -31,13 +31,7 @@ async fn create_test_manager_and_fetch_service<V: ValidatorExt>(
         chain_cache,
     )
     .await;
-    let clients = wallet_tests::build_clients(
-        test_manager
-            .zaino_grpc_listen_address
-            .expect("zaino enabled")
-            .port(),
-        wallet_tests::default_heights(validator),
-    );
+    let clients = wallet_tests::build_clients_for(&test_manager, validator);
     (test_manager, fetch_service_subscriber, clients)
 }
 
@@ -357,11 +351,7 @@ async fn fetch_service_get_block_range_returns_all_pools<V: ValidatorExt>(
         &fetch_service_subscriber,
         start_height,
         end_height,
-        vec![
-            PoolType::Transparent as i32,
-            PoolType::Sapling as i32,
-            PoolType::Orchard as i32,
-        ],
+        zaino_testutils::all_pools_i32(),
     )
     .await;
 
@@ -505,11 +495,7 @@ async fn fetch_service_get_taddress_txids<V: ValidatorExt>(validator: &Validator
                 height: chain_height as u64,
                 hash: Vec::new(),
             }),
-            pool_types: vec![
-                PoolType::Transparent as i32,
-                PoolType::Sapling as i32,
-                PoolType::Orchard as i32,
-            ],
+            pool_types: zaino_testutils::all_pools_i32(),
         }),
     };
 

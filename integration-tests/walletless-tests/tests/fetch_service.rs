@@ -4,7 +4,7 @@ use futures::StreamExt as _;
 use walletless_tests::rpc::z_validate_address::{run_z_validate_for, SaplingSuite};
 use zaino_fetch::jsonrpsee::connector::JsonRpSeeConnector;
 use zaino_proto::proto::compact_formats::CompactBlock;
-use zaino_proto::proto::service::{BlockId, BlockRange, GetSubtreeRootsArg, PoolType};
+use zaino_proto::proto::service::{BlockId, BlockRange, GetSubtreeRootsArg};
 #[allow(deprecated)]
 use zaino_state::{
     FetchService, FetchServiceSubscriber, LightWalletIndexer, Status, StatusType, ZcashIndexer,
@@ -481,11 +481,7 @@ async fn fetch_service_get_block_range_nullifiers<V: ValidatorExt>(validator: &V
             height: 10,
             hash: Vec::new(),
         }),
-        pool_types: vec![
-            PoolType::Transparent as i32,
-            PoolType::Sapling as i32,
-            PoolType::Orchard as i32,
-        ],
+        pool_types: zaino_testutils::all_pools_i32(),
     };
 
     let fetch_service_stream = fetch_service_subscriber

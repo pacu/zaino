@@ -98,6 +98,29 @@ where
     assert_send_to_pool::<V, Service>(validator, wallet_tests::Pool::Sapling, 250_000).await;
 }
 
+/// Launch with the validator's default (cheap) mining pool and build clients.
+/// For tests that mine ~100 post-send blocks (finalization depth): under a
+/// shielded miner address each of those blocks would cost a halo2 proof — a
+/// net loss over funding via the legacy shield ritual
+/// ([`wallet_tests::fund_faucet_dual_via_shield`]).
+async fn launch_for_heavy_mining<V, Service>(
+    validator: &ValidatorKind,
+) -> (TestManager<V, Service>, wallet_tests::Clients)
+where
+    V: ValidatorExt,
+    Service: zaino_testutils::TestService,
+    IndexerError: From<<<Service as ZcashService>::Subscriber as ZcashIndexer>::Error>,
+    <Service as ZcashService>::Subscriber: zaino_testutils::PollableTip,
+{
+    wallet_tests::launch_and_build_mining_to::<V, Service>(
+        zaino_testutils::default_mining_pool(validator),
+        validator,
+        None,
+        None,
+    )
+    .await
+}
+
 async fn send_to_transparent<V, Service>(validator: &ValidatorKind)
 where
     V: ValidatorExt,
@@ -105,17 +128,8 @@ where
     IndexerError: From<<<Service as ZcashService>::Subscriber as ZcashIndexer>::Error>,
     <Service as ZcashService>::Subscriber: zaino_testutils::PollableTip,
 {
-    // This test mines 99 blocks after the send to push it into the finalized
-    // chain — under a shielded miner address those blocks would each cost a
-    // halo2 proof, a net loss over the legacy shield-ritual funding. Keep the
-    // validator's default (cheap) pool and fund via the ritual.
-    let (mut test_manager, mut clients) = wallet_tests::launch_and_build_mining_to::<V, Service>(
-        zaino_testutils::default_mining_pool(validator),
-        validator,
-        None,
-        None,
-    )
-    .await;
+    // Heavy mine: 99 blocks after the send push it into the finalized chain.
+    let (mut test_manager, mut clients) = launch_for_heavy_mining::<V, Service>(validator).await;
 
     wallet_tests::fund_faucet_dual_via_shield(
         &test_manager,
@@ -193,17 +207,8 @@ where
     IndexerError: From<<<Service as ZcashService>::Subscriber as ZcashIndexer>::Error>,
     <Service as ZcashService>::Subscriber: zaino_testutils::PollableTip,
 {
-    // This test mines 100 blocks after its sends — under a shielded miner
-    // address those blocks would each cost a halo2 proof, a net loss over the
-    // legacy shield-ritual funding. Keep the validator's default (cheap) pool
-    // and fund via the ritual.
-    let (mut test_manager, mut clients) = wallet_tests::launch_and_build_mining_to::<V, Service>(
-        zaino_testutils::default_mining_pool(validator),
-        validator,
-        None,
-        None,
-    )
-    .await;
+    // Heavy mine: 100 blocks after the sends.
+    let (mut test_manager, mut clients) = launch_for_heavy_mining::<V, Service>(validator).await;
 
     test_manager
         .generate_blocks_and_wait_for_tip(2, test_manager.subscriber())

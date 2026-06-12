@@ -932,7 +932,7 @@ mod zebra {
 
     pub(crate) mod lightwallet_indexer {
         use futures::StreamExt as _;
-        use zaino_proto::proto::service::{BlockId, BlockRange, GetSubtreeRootsArg, PoolType};
+        use zaino_proto::proto::service::{BlockId, BlockRange, GetSubtreeRootsArg};
         use zebra_rpc::methods::GetBlock;
 
         use super::*;
@@ -1229,11 +1229,7 @@ mod zebra {
             let request = BlockRange {
                 start,
                 end,
-                pool_types: vec![
-                    PoolType::Transparent as i32,
-                    PoolType::Sapling as i32,
-                    PoolType::Orchard as i32,
-                ],
+                pool_types: zaino_testutils::all_pools_i32(),
             };
             if nullifiers_only {
                 // TODO(#1088): replace deprecated nullifier-range client usage.
@@ -1256,11 +1252,7 @@ mod zebra {
                     assert_eq!(fetch_service_get_block_range, state_service_get_block_range);
                 }
             } else {
-                let pools = vec![
-                    PoolType::Transparent as i32,
-                    PoolType::Sapling as i32,
-                    PoolType::Orchard as i32,
-                ];
+                let pools = zaino_testutils::all_pools_i32();
                 let fetch_service_get_block_range = zaino_testutils::collect_block_range(
                     &fetch_service_subscriber,
                     start_height,

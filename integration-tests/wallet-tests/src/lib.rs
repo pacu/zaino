@@ -225,6 +225,27 @@ pub fn default_heights(validator: &ValidatorKind) -> ActivationHeights {
     }
 }
 
+/// Build faucet/recipient lightclients pointed at `test_manager`'s gRPC
+/// listener (which must have been launched with zaino enabled), using
+/// `validator`'s default activation heights — the shared postlude of every
+/// wallet launch fixture.
+pub fn build_clients_for<C, Service>(
+    test_manager: &TestManager<C, Service>,
+    validator: &ValidatorKind,
+) -> Clients
+where
+    C: ValidatorExt,
+    Service: TestService,
+{
+    build_clients(
+        test_manager
+            .zaino_grpc_listen_address
+            .expect("zaino enabled")
+            .port(),
+        default_heights(validator),
+    )
+}
+
 /// Launch a `TestManager<C, Service>` and build faucet/recipient lightclients
 /// whose view matches the launched chain — the shared "launch + build_clients"
 /// step used by both the smoke tests and the wallet_to_validator tests. Mines
@@ -278,13 +299,7 @@ where
     )
     .await
     .expect("launch TestManager");
-    let clients = build_clients(
-        test_manager
-            .zaino_grpc_listen_address
-            .expect("zaino enabled")
-            .port(),
-        default_heights(validator),
-    );
+    let clients = build_clients_for(&test_manager, validator);
     (test_manager, clients)
 }
 

@@ -67,6 +67,24 @@ macro_rules! validator_tests {
     };
 }
 
+/// All three value pools as the `i32`s a `get_block_range` request carries —
+/// the "request everything" pool filter.
+pub fn all_pools_i32() -> Vec<i32> {
+    use zaino_proto::proto::service::PoolType;
+    vec![
+        PoolType::Transparent as i32,
+        PoolType::Sapling as i32,
+        PoolType::Orchard as i32,
+    ]
+}
+
+/// The shielded pools as request `i32`s — what `get_block_range` defaults to
+/// when a request names no pools.
+pub fn shielded_pools_i32() -> Vec<i32> {
+    use zaino_proto::proto::service::PoolType;
+    vec![PoolType::Sapling as i32, PoolType::Orchard as i32]
+}
+
 /// Collect a `get_block_range` query over heights `[start, end]` for the given
 /// proto `pool_types` into a vector of compact blocks. Generic over the
 /// lightwallet subscriber, so it serves both `FetchServiceSubscriber` and

@@ -1,6 +1,6 @@
 use futures::StreamExt;
 use zaino_fetch::jsonrpsee::response::address_deltas::GetAddressDeltasParams;
-use zaino_proto::proto::service::{BlockId, BlockRange, PoolType, TransparentAddressBlockFilter};
+use zaino_proto::proto::service::{BlockId, BlockRange, TransparentAddressBlockFilter};
 use zaino_state::ChainIndex as _;
 
 use nonempty::NonEmpty;
@@ -74,13 +74,7 @@ async fn create_test_manager_and_services_mining_to<V: ValidatorExt>(
         )
         .await;
 
-    let clients = wallet_tests::build_clients(
-        test_manager
-            .zaino_grpc_listen_address
-            .expect("zaino enabled")
-            .port(),
-        wallet_tests::default_heights(validator),
-    );
+    let clients = wallet_tests::build_clients_for(&test_manager, validator);
 
     (
         test_manager,
@@ -382,7 +376,7 @@ async fn state_service_get_block_range_returns_default_pools<V: ValidatorExt>(
         &fetch_service_subscriber,
         start_height,
         end_height,
-        vec![PoolType::Sapling as i32, PoolType::Orchard as i32],
+        zaino_testutils::shielded_pools_i32(),
     )
     .await;
 
@@ -395,7 +389,7 @@ async fn state_service_get_block_range_returns_default_pools<V: ValidatorExt>(
         &state_service_subscriber,
         start_height,
         end_height,
-        vec![PoolType::Sapling as i32, PoolType::Orchard as i32],
+        zaino_testutils::shielded_pools_i32(),
     )
     .await;
 
@@ -466,11 +460,7 @@ async fn state_service_get_block_range_returns_all_pools<V: ValidatorExt>(
     let start_height: u64 = 1;
     // The sends above land in the block mined last — the chain tip.
     let end_height: u64 = best_chaintip_height(&fetch_service_subscriber).await as u64;
-    let all_pools = vec![
-        PoolType::Transparent as i32,
-        PoolType::Sapling as i32,
-        PoolType::Orchard as i32,
-    ];
+    let all_pools = zaino_testutils::all_pools_i32();
 
     let fetch_service_get_block_range = zaino_testutils::collect_block_range(
         &fetch_service_subscriber,
@@ -509,22 +499,32 @@ async fn state_service_get_block_range_returns_all_pools<V: ValidatorExt>(
     test_manager.close().await;
 }
 
-// tests whether the `GetBlockRange` returns all blocks until the first requested block in the
-// range can't be bound
-async fn state_service_get_block_range_out_of_range_test_upper_bound<V: ValidatorExt>(
+/// Launch state+fetch services mining to `PoolType::Transparent` and bring
+/// the chain to height 100 — the shared preamble of the out-of-range
+/// block_range tests, which need a known tip but no funding. Transparent
+/// because the ~100-block mine would cost a halo2 proof per block under a
+/// shielded miner, for no benefit (nothing spends). The owned services and
+/// clients are returned because the caller must keep them alive for the
+/// subscribers to work.
+#[allow(deprecated)]
+async fn launch_transparent_with_known_tip<V: ValidatorExt>(
     validator: &ValidatorKind,
+) -> (
+    TestManager<V, StateService>,
+    FetchService,
+    FetchServiceSubscriber,
+    StateService,
+    StateServiceSubscriber,
+    wallet_tests::Clients,
 ) {
     let (
-        mut test_manager,
-        _fetch_service,
+        test_manager,
+        fetch_service,
         fetch_service_subscriber,
-        _state_service,
+        state_service,
         state_service_subscriber,
         mut clients,
     ) = create_test_manager_and_services_mining_to::<V>(
-        // This test mines ~100 blocks purely for a known tip and spends
-        // nothing — shielded coinbase would cost a halo2 proof per block for
-        // no benefit, so keep cheap transparent block templates.
         zaino_testutils::PoolType::Transparent,
         validator,
         None,
@@ -542,11 +542,31 @@ async fn state_service_get_block_range_out_of_range_test_upper_bound<V: Validato
     )
     .await;
 
-    let all_pools = vec![
-        PoolType::Transparent as i32,
-        PoolType::Sapling as i32,
-        PoolType::Orchard as i32,
-    ];
+    (
+        test_manager,
+        fetch_service,
+        fetch_service_subscriber,
+        state_service,
+        state_service_subscriber,
+        clients,
+    )
+}
+
+// tests whether the `GetBlockRange` returns all blocks until the first requested block in the
+// range can't be bound
+async fn state_service_get_block_range_out_of_range_test_upper_bound<V: ValidatorExt>(
+    validator: &ValidatorKind,
+) {
+    let (
+        mut test_manager,
+        _fetch_service,
+        fetch_service_subscriber,
+        _state_service,
+        state_service_subscriber,
+        _clients,
+    ) = launch_transparent_with_known_tip::<V>(validator).await;
+
+    let all_pools = zaino_testutils::all_pools_i32();
     let end_height: u64 = 106;
 
     let (fetch_service_blocks, fetch_errored) = zaino_testutils::drain_block_range(
@@ -591,33 +611,10 @@ async fn state_service_get_block_range_out_of_range_test_lower_bound<V: Validato
         fetch_service_subscriber,
         _state_service,
         state_service_subscriber,
-        mut clients,
-    ) = create_test_manager_and_services_mining_to::<V>(
-        // This test mines ~100 blocks purely for a known tip and spends
-        // nothing — shielded coinbase would cost a halo2 proof per block for
-        // no benefit, so keep cheap transparent block templates.
-        zaino_testutils::PoolType::Transparent,
-        validator,
-        None,
-        true,
-        None,
-    )
-    .await;
+        _clients,
+    ) = launch_transparent_with_known_tip::<V>(validator).await;
 
-    generate_up_to_height_100(
-        &test_manager,
-        &mut clients,
-        validator,
-        &fetch_service_subscriber,
-        &state_service_subscriber,
-    )
-    .await;
-
-    let all_pools = vec![
-        PoolType::Transparent as i32,
-        PoolType::Sapling as i32,
-        PoolType::Orchard as i32,
-    ];
+    let all_pools = zaino_testutils::all_pools_i32();
 
     let (fetch_service_blocks, fetch_errored) =
         zaino_testutils::drain_block_range(&fetch_service_subscriber, 106, 1, all_pools.clone())
@@ -803,11 +800,7 @@ async fn state_service_get_address_transactions_regtest<V: ValidatorExt>(
                     height: chain_height as u64,
                     hash: vec![],
                 }),
-                pool_types: vec![
-                    PoolType::Transparent as i32,
-                    PoolType::Sapling as i32,
-                    PoolType::Orchard as i32,
-                ],
+                pool_types: zaino_testutils::all_pools_i32(),
             }),
         })
         .await
@@ -1088,10 +1081,7 @@ mod zebra {
 
     pub(crate) mod lightwallet_indexer {
         use futures::StreamExt as _;
-        use zaino_proto::proto::{
-            service::{AddressList, BlockId, GetAddressUtxosArg, PoolType, TxFilter},
-            utils::pool_types_into_i32_vec,
-        };
+        use zaino_proto::proto::service::{AddressList, BlockId, GetAddressUtxosArg, TxFilter};
         use zebra_rpc::methods::GetAddressTxIdsRequest;
 
         use super::*;
@@ -1342,9 +1332,7 @@ mod zebra {
                 &state_service_subscriber,
                 1,
                 chain_height,
-                pool_types_into_i32_vec(
-                    [PoolType::Transparent, PoolType::Sapling, PoolType::Orchard].to_vec(),
-                ),
+                zaino_testutils::all_pools_i32(),
             )
             .await;
 
