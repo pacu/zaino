@@ -1352,7 +1352,11 @@ mod zebra {
                 _state_service,
                 state_service_subscriber,
                 _clients,
-            ) = create_test_manager_and_services::<Zebrad>(
+            ) = create_test_manager_and_services_mining_to::<Zebrad>(
+                // The assertion below requires every tx to carry a transparent
+                // vout; the miner's transparent coinbase is that data source,
+                // so coinbase must land on the miner taddr.
+                zaino_testutils::PoolType::Transparent,
                 &ValidatorKind::Zebrad,
                 None,
                 true,
