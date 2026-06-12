@@ -366,7 +366,14 @@ pub async fn shield_faucet_rounds<C, Service, A, B>(
         mine_and_sync_faucet(test_manager, clients, mined_against, then_synced, blocks).await;
         clients.shield_faucet().await;
     }
-    mine_and_sync_faucet(test_manager, clients, mined_against, then_synced, final_blocks).await;
+    mine_and_sync_faucet(
+        test_manager,
+        clients,
+        mined_against,
+        then_synced,
+        final_blocks,
+    )
+    .await;
 }
 
 /// Sync the faucet and, on zebrad, mine `coinbase_batches` blocks and sync —

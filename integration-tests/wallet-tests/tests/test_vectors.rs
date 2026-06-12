@@ -60,8 +60,7 @@ async fn create_200_block_regtest_chain_vectors() {
 
     let state_service_subscriber = test_manager.service_subscriber.take().unwrap();
 
-    let mut clients =
-        wallet_tests::build_clients_for(&test_manager, &ValidatorKind::Zebrad);
+    let mut clients = wallet_tests::build_clients_for(&test_manager, &ValidatorKind::Zebrad);
 
     let faucet_taddr = clients.get_faucet_address("transparent").await;
     let faucet_saddr = clients.get_faucet_address("sapling").await;

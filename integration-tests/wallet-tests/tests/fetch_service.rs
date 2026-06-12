@@ -25,12 +25,13 @@ async fn create_test_manager_and_fetch_service<V: ValidatorExt>(
     FetchServiceSubscriber,
     wallet_tests::Clients,
 ) {
-    let (test_manager, fetch_service_subscriber) = zaino_testutils::launch_with_fetch_subscriber_mining_to(
-        zaino_testutils::SHIELDED_FUNDING_POOL,
-        validator,
-        chain_cache,
-    )
-    .await;
+    let (test_manager, fetch_service_subscriber) =
+        zaino_testutils::launch_with_fetch_subscriber_mining_to(
+            zaino_testutils::SHIELDED_FUNDING_POOL,
+            validator,
+            chain_cache,
+        )
+        .await;
     let clients = wallet_tests::build_clients_for(&test_manager, validator);
     (test_manager, fetch_service_subscriber, clients)
 }

@@ -6,10 +6,9 @@ use zaino_state::ChainIndex as _;
 use nonempty::NonEmpty;
 #[allow(deprecated)]
 use zaino_state::{
-    FetchService, FetchServiceSubscriber, LightWalletIndexer, StateService, StateServiceSubscriber,
-    ZcashIndexer,
+    FetchServiceSubscriber, LightWalletIndexer, StateService, StateServiceSubscriber, ZcashIndexer,
 };
-use zaino_testutils::ValidatorExt;
+use zaino_testutils::{StateAndFetchServices, ValidatorExt};
 use zaino_testutils::{TestManager, ValidatorKind};
 use zcash_local_net::validator::zebrad::Zebrad;
 use zcash_primitives::transaction::TxId;
@@ -26,14 +25,7 @@ async fn create_test_manager_and_services<V: ValidatorExt>(
     chain_cache: Option<std::path::PathBuf>,
     enable_zaino: bool,
     network: Option<NetworkKind>,
-) -> (
-    TestManager<V, StateService>,
-    FetchService,
-    FetchServiceSubscriber,
-    StateService,
-    StateServiceSubscriber,
-    wallet_tests::Clients,
-) {
+) -> (StateAndFetchServices<V>, wallet_tests::Clients) {
     create_test_manager_and_services_mining_to::<V>(
         zaino_testutils::SHIELDED_FUNDING_POOL,
         validator,
@@ -56,34 +48,19 @@ async fn create_test_manager_and_services_mining_to<V: ValidatorExt>(
     chain_cache: Option<std::path::PathBuf>,
     enable_zaino: bool,
     network: Option<NetworkKind>,
-) -> (
-    TestManager<V, StateService>,
-    FetchService,
-    FetchServiceSubscriber,
-    StateService,
-    StateServiceSubscriber,
-    wallet_tests::Clients,
-) {
-    let (test_manager, fetch_service, fetch_subscriber, state_service, state_subscriber) =
-        zaino_testutils::launch_state_and_fetch_services_mining_to(
-            mine_to_pool,
-            validator,
-            chain_cache,
-            enable_zaino,
-            network,
-        )
-        .await;
-
-    let clients = wallet_tests::build_clients_for(&test_manager, validator);
-
-    (
-        test_manager,
-        fetch_service,
-        fetch_subscriber,
-        state_service,
-        state_subscriber,
-        clients,
+) -> (StateAndFetchServices<V>, wallet_tests::Clients) {
+    let svc = zaino_testutils::launch_state_and_fetch_services_mining_to(
+        mine_to_pool,
+        validator,
+        chain_cache,
+        enable_zaino,
+        network,
     )
+    .await;
+
+    let clients = wallet_tests::build_clients_for(&svc.test_manager, validator);
+
+    (svc, clients)
 }
 
 /// Sync the faucet and, on zebrad, generate blocks up to height 100 (computing
@@ -91,16 +68,15 @@ async fn create_test_manager_and_services_mining_to<V: ValidatorExt>(
 /// out-of-range block_range tests, which need a known tip but no funding.
 #[allow(deprecated)]
 async fn generate_up_to_height_100<V: ValidatorExt>(
-    test_manager: &TestManager<V, StateService>,
+    svc: &StateAndFetchServices<V>,
     clients: &mut wallet_tests::Clients,
     validator: &ValidatorKind,
-    fetch_service_subscriber: &FetchServiceSubscriber,
-    state_service_subscriber: &StateServiceSubscriber,
 ) {
     clients.sync_faucet().await;
 
     // Test manager generates blocks on startup; only generate up to height 100.
-    let chain_height = state_service_subscriber
+    let chain_height = svc
+        .state_subscriber
         .get_latest_block()
         .await
         .unwrap()
@@ -108,39 +84,30 @@ async fn generate_up_to_height_100<V: ValidatorExt>(
     let blocks_to_height_100 = 100 - chain_height;
 
     if matches!(validator, ValidatorKind::Zebrad) {
-        test_manager
-            .generate_blocks_and_wait_for_tips(
-                blocks_to_height_100,
-                fetch_service_subscriber,
-                state_service_subscriber,
-            )
+        svc.generate_blocks_and_wait_for_tips(blocks_to_height_100)
             .await;
         clients.sync_faucet().await;
     }
 }
 
-/// Fund the faucet (one shield round) and send 250_000 to the recipient's
+/// Fund the faucet (one coinbase batch) and send 250_000 to the recipient's
 /// `pool` address, mining it in on both subscribers; returns the recipient
 /// address and the send txid. The shared "fund and send one transaction" setup
 /// the single-send state_service query tests share (the dual-subscriber
-/// analogue of the fetch_service `fund_and_send`). Takes the handles by
-/// reference because the owned fetch/state services must stay alive in the
-/// caller.
+/// analogue of the fetch_service `fund_and_send`).
 #[allow(deprecated)]
 async fn fund_and_send<V: ValidatorExt>(
-    test_manager: &TestManager<V, StateService>,
+    svc: &StateAndFetchServices<V>,
     clients: &mut wallet_tests::Clients,
     validator: &ValidatorKind,
-    fetch_service_subscriber: &FetchServiceSubscriber,
-    state_service_subscriber: &StateServiceSubscriber,
     pool: wallet_tests::Pool,
 ) -> (String, NonEmpty<TxId>) {
     let (recipient_taddr, recipient_ua, txid) = wallet_tests::fund_and_send_dual(
-        test_manager,
+        &svc.test_manager,
         clients,
         validator,
-        fetch_service_subscriber,
-        state_service_subscriber,
+        &svc.fetch_subscriber,
+        &svc.state_subscriber,
         1,
         Some(pool),
     )
@@ -159,31 +126,22 @@ async fn fund_and_send<V: ValidatorExt>(
 /// The best (nonfinalized) chaintip height as seen through the fetch service's
 /// indexer snapshot.
 #[allow(deprecated)]
-async fn best_chaintip_height(fetch_service_subscriber: &FetchServiceSubscriber) -> u32 {
-    let idx = &fetch_service_subscriber.indexer;
+async fn best_chaintip_height(subscriber: &FetchServiceSubscriber) -> u32 {
+    let idx = &subscriber.indexer;
     let snapshot = idx.snapshot_nonfinalized_state().await.unwrap();
     u32::from(idx.best_chaintip(&snapshot).await.unwrap().height)
 }
 
 /// Get the faucet's transparent address and generate `blocks` blocks (waiting
-/// on both subscribers); returns the address. Takes the handles by reference
-/// because the owned fetch/state services must stay alive in the caller.
+/// on both subscribers); returns the address.
 #[allow(deprecated)]
 async fn generate_funded_taddr<V: ValidatorExt>(
-    test_manager: &TestManager<V, StateService>,
+    svc: &StateAndFetchServices<V>,
     clients: &wallet_tests::Clients,
-    fetch_service_subscriber: &FetchServiceSubscriber,
-    state_service_subscriber: &StateServiceSubscriber,
     blocks: u32,
 ) -> String {
     let taddr = clients.get_faucet_address("transparent").await;
-    test_manager
-        .generate_blocks_and_wait_for_tips(
-            blocks,
-            fetch_service_subscriber,
-            state_service_subscriber,
-        )
-        .await;
+    svc.generate_blocks_and_wait_for_tips(blocks).await;
     taddr
 }
 
@@ -199,63 +157,31 @@ async fn generate_funded_taddr<V: ValidatorExt>(
 async fn launch_and_build_faucet_request<R>(
     blocks: u32,
     build_request: impl FnOnce(String) -> R,
-) -> (
-    TestManager<Zebrad, StateService>,
-    FetchService,
-    FetchServiceSubscriber,
-    StateService,
-    StateServiceSubscriber,
-    wallet_tests::Clients,
-    R,
-) {
+) -> (StateAndFetchServices<Zebrad>, wallet_tests::Clients, R) {
     // These tests query the faucet taddr, which only coinbase funds — mining
     // must stay transparent or the queries compare empty against empty.
-    let (test_manager, fetch_service, fetch_subscriber, state_service, state_subscriber, clients) =
-        create_test_manager_and_services_mining_to::<Zebrad>(
-            zaino_testutils::PoolType::Transparent,
-            &ValidatorKind::Zebrad,
-            None,
-            true,
-            Some(NetworkKind::Regtest),
-        )
-        .await;
-    let taddr = generate_funded_taddr(
-        &test_manager,
-        &clients,
-        &fetch_subscriber,
-        &state_subscriber,
-        blocks,
+    let (svc, clients) = create_test_manager_and_services_mining_to::<Zebrad>(
+        zaino_testutils::PoolType::Transparent,
+        &ValidatorKind::Zebrad,
+        None,
+        true,
+        Some(NetworkKind::Regtest),
     )
     .await;
+    let taddr = generate_funded_taddr(&svc, &clients, blocks).await;
     let request = build_request(taddr);
-    (
-        test_manager,
-        fetch_service,
-        fetch_subscriber,
-        state_service,
-        state_subscriber,
-        clients,
-        request,
-    )
+    (svc, clients, request)
 }
 
 #[allow(deprecated)]
 async fn state_service_get_address_balance<V: ValidatorExt>(validator: &ValidatorKind) {
-    let (
-        mut test_manager,
-        _fetch_service,
-        fetch_service_subscriber,
-        _state_service,
-        state_service_subscriber,
-        mut clients,
-    ) = create_test_manager_and_services::<V>(validator, None, true, None).await;
+    let (mut services, mut clients) =
+        create_test_manager_and_services::<V>(validator, None, true, None).await;
 
     let (recipient_taddr, _txid) = fund_and_send(
-        &test_manager,
+        &services,
         &mut clients,
         validator,
-        &fetch_service_subscriber,
-        &state_service_subscriber,
         wallet_tests::Pool::Transparent,
     )
     .await;
@@ -263,12 +189,14 @@ async fn state_service_get_address_balance<V: ValidatorExt>(validator: &Validato
     clients.sync_recipient().await;
     let recipient_balance = clients.recipient_balance().await;
 
-    let fetch_service_balance = fetch_service_subscriber
+    let fetch_service_balance = services
+        .fetch_subscriber
         .z_get_address_balance(GetAddressBalanceRequest::new(vec![recipient_taddr.clone()]))
         .await
         .unwrap();
 
-    let state_service_balance = state_service_subscriber
+    let state_service_balance = services
+        .state_subscriber
         .z_get_address_balance(GetAddressBalanceRequest::new(vec![recipient_taddr]))
         .await
         .unwrap();
@@ -287,29 +215,21 @@ async fn state_service_get_address_balance<V: ValidatorExt>(validator: &Validato
     );
     assert_eq!(fetch_service_balance, state_service_balance);
 
-    test_manager.close().await;
+    services.test_manager.close().await;
 }
 
 async fn state_service_get_raw_mempool<V: ValidatorExt>(validator: &ValidatorKind) {
-    let (
-        mut test_manager,
-        _fetch_service,
-        fetch_service_subscriber,
-        _state_service,
-        state_service_subscriber,
-        mut clients,
-    ) = create_test_manager_and_services::<V>(validator, None, true, None).await;
+    let (mut services, mut clients) =
+        create_test_manager_and_services::<V>(validator, None, true, None).await;
 
-    test_manager
-        .generate_blocks_and_wait_for_tips(1, &fetch_service_subscriber, &state_service_subscriber)
-        .await;
+    services.generate_blocks_and_wait_for_tips(1).await;
 
     wallet_tests::fund_faucet_dual(
-        &test_manager,
+        &services.test_manager,
         &mut clients,
         validator,
-        &fetch_service_subscriber,
-        &state_service_subscriber,
+        &services.fetch_subscriber,
+        &services.state_subscriber,
         2,
     )
     .await;
@@ -321,8 +241,8 @@ async fn state_service_get_raw_mempool<V: ValidatorExt>(validator: &ValidatorKin
 
     tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
 
-    let mut fetch_service_mempool = fetch_service_subscriber.get_raw_mempool().await.unwrap();
-    let mut state_service_mempool = state_service_subscriber.get_raw_mempool().await.unwrap();
+    let mut fetch_service_mempool = services.fetch_subscriber.get_raw_mempool().await.unwrap();
+    let mut state_service_mempool = services.state_subscriber.get_raw_mempool().await.unwrap();
 
     dbg!(&fetch_service_mempool);
     fetch_service_mempool.sort();
@@ -332,7 +252,7 @@ async fn state_service_get_raw_mempool<V: ValidatorExt>(validator: &ValidatorKin
 
     assert_eq!(fetch_service_mempool, state_service_mempool);
 
-    test_manager.close().await;
+    services.test_manager.close().await;
 }
 
 /// Tests whether that calls to `get_block_range` with the same block range are the same when
@@ -341,31 +261,23 @@ async fn state_service_get_raw_mempool<V: ValidatorExt>(validator: &ValidatorKin
 async fn state_service_get_block_range_returns_default_pools<V: ValidatorExt>(
     validator: &ValidatorKind,
 ) {
-    let (
-        mut test_manager,
-        _fetch_service,
-        fetch_service_subscriber,
-        _state_service,
-        state_service_subscriber,
-        mut clients,
-    ) = create_test_manager_and_services::<V>(validator, None, true, None).await;
+    let (mut services, mut clients) =
+        create_test_manager_and_services::<V>(validator, None, true, None).await;
 
     fund_and_send(
-        &test_manager,
+        &services,
         &mut clients,
         validator,
-        &fetch_service_subscriber,
-        &state_service_subscriber,
         wallet_tests::Pool::Orchard,
     )
     .await;
 
     let start_height: u64 = 1;
     // fund_and_send mines the send into the block at the chain tip.
-    let end_height: u64 = best_chaintip_height(&fetch_service_subscriber).await as u64;
+    let end_height: u64 = best_chaintip_height(&services.fetch_subscriber).await as u64;
 
     let fetch_service_get_block_range = zaino_testutils::collect_block_range(
-        &fetch_service_subscriber,
+        &services.fetch_subscriber,
         start_height,
         end_height,
         vec![],
@@ -373,7 +285,7 @@ async fn state_service_get_block_range_returns_default_pools<V: ValidatorExt>(
     .await;
 
     let fetch_service_get_block_range_specifying_pools = zaino_testutils::collect_block_range(
-        &fetch_service_subscriber,
+        &services.fetch_subscriber,
         start_height,
         end_height,
         zaino_testutils::shielded_pools_i32(),
@@ -386,7 +298,7 @@ async fn state_service_get_block_range_returns_default_pools<V: ValidatorExt>(
     );
 
     let state_service_get_block_range_specifying_pools = zaino_testutils::collect_block_range(
-        &state_service_subscriber,
+        &services.state_subscriber,
         start_height,
         end_height,
         zaino_testutils::shielded_pools_i32(),
@@ -394,7 +306,7 @@ async fn state_service_get_block_range_returns_default_pools<V: ValidatorExt>(
     .await;
 
     let state_service_get_block_range = zaino_testutils::collect_block_range(
-        &state_service_subscriber,
+        &services.state_subscriber,
         start_height,
         end_height,
         vec![],
@@ -432,38 +344,32 @@ async fn state_service_get_block_range_returns_default_pools<V: ValidatorExt>(
             "transparent data should not be present when no pool types are specified in the request."
         );
     }
-    test_manager.close().await;
+    services.test_manager.close().await;
 }
 
 /// tests whether the `GetBlockRange` RPC returns all pools when requested
 async fn state_service_get_block_range_returns_all_pools<V: ValidatorExt>(
     validator: &ValidatorKind,
 ) {
-    let (
-        mut test_manager,
-        _fetch_service,
-        fetch_service_subscriber,
-        _state_service,
-        state_service_subscriber,
-        mut clients,
-    ) = create_test_manager_and_services::<V>(validator, None, true, None).await;
+    let (mut services, mut clients) =
+        create_test_manager_and_services::<V>(validator, None, true, None).await;
 
     let (deshielding_txid, sapling_txid, orchard_txid) = wallet_tests::fund_and_send_to_all_pools(
-        &test_manager,
+        &services.test_manager,
         &mut clients,
         validator,
-        &fetch_service_subscriber,
-        &state_service_subscriber,
+        &services.fetch_subscriber,
+        &services.state_subscriber,
     )
     .await;
 
     let start_height: u64 = 1;
     // The sends above land in the block mined last — the chain tip.
-    let end_height: u64 = best_chaintip_height(&fetch_service_subscriber).await as u64;
+    let end_height: u64 = best_chaintip_height(&services.fetch_subscriber).await as u64;
     let all_pools = zaino_testutils::all_pools_i32();
 
     let fetch_service_get_block_range = zaino_testutils::collect_block_range(
-        &fetch_service_subscriber,
+        &services.fetch_subscriber,
         start_height,
         end_height,
         all_pools.clone(),
@@ -471,7 +377,7 @@ async fn state_service_get_block_range_returns_all_pools<V: ValidatorExt>(
     .await;
 
     let state_service_get_block_range = zaino_testutils::collect_block_range(
-        &state_service_subscriber,
+        &services.state_subscriber,
         start_height,
         end_height,
         all_pools,
@@ -496,7 +402,7 @@ async fn state_service_get_block_range_returns_all_pools<V: ValidatorExt>(
     wallet_tests::assert_pool_present(compact_block, &sapling_txid, wallet_tests::Pool::Sapling);
     wallet_tests::assert_pool_present(compact_block, &orchard_txid, wallet_tests::Pool::Orchard);
 
-    test_manager.close().await;
+    services.test_manager.close().await;
 }
 
 /// Launch state+fetch services mining to `PoolType::Transparent` and bring
@@ -509,22 +415,8 @@ async fn state_service_get_block_range_returns_all_pools<V: ValidatorExt>(
 #[allow(deprecated)]
 async fn launch_transparent_with_known_tip<V: ValidatorExt>(
     validator: &ValidatorKind,
-) -> (
-    TestManager<V, StateService>,
-    FetchService,
-    FetchServiceSubscriber,
-    StateService,
-    StateServiceSubscriber,
-    wallet_tests::Clients,
-) {
-    let (
-        test_manager,
-        fetch_service,
-        fetch_service_subscriber,
-        state_service,
-        state_service_subscriber,
-        mut clients,
-    ) = create_test_manager_and_services_mining_to::<V>(
+) -> (StateAndFetchServices<V>, wallet_tests::Clients) {
+    let (svc, mut clients) = create_test_manager_and_services_mining_to::<V>(
         zaino_testutils::PoolType::Transparent,
         validator,
         None,
@@ -533,23 +425,9 @@ async fn launch_transparent_with_known_tip<V: ValidatorExt>(
     )
     .await;
 
-    generate_up_to_height_100(
-        &test_manager,
-        &mut clients,
-        validator,
-        &fetch_service_subscriber,
-        &state_service_subscriber,
-    )
-    .await;
+    generate_up_to_height_100(&svc, &mut clients, validator).await;
 
-    (
-        test_manager,
-        fetch_service,
-        fetch_service_subscriber,
-        state_service,
-        state_service_subscriber,
-        clients,
-    )
+    (svc, clients)
 }
 
 // tests whether the `GetBlockRange` returns all blocks until the first requested block in the
@@ -557,27 +435,20 @@ async fn launch_transparent_with_known_tip<V: ValidatorExt>(
 async fn state_service_get_block_range_out_of_range_test_upper_bound<V: ValidatorExt>(
     validator: &ValidatorKind,
 ) {
-    let (
-        mut test_manager,
-        _fetch_service,
-        fetch_service_subscriber,
-        _state_service,
-        state_service_subscriber,
-        _clients,
-    ) = launch_transparent_with_known_tip::<V>(validator).await;
+    let (mut services, _clients) = launch_transparent_with_known_tip::<V>(validator).await;
 
     let all_pools = zaino_testutils::all_pools_i32();
     let end_height: u64 = 106;
 
     let (fetch_service_blocks, fetch_errored) = zaino_testutils::drain_block_range(
-        &fetch_service_subscriber,
+        &services.fetch_subscriber,
         1,
         end_height,
         all_pools.clone(),
     )
     .await;
     let (state_service_blocks, state_errored) =
-        zaino_testutils::drain_block_range(&state_service_subscriber, 1, end_height, all_pools)
+        zaino_testutils::drain_block_range(&services.state_subscriber, 1, end_height, all_pools)
             .await;
 
     // check that the block range is the same
@@ -597,7 +468,7 @@ async fn state_service_get_block_range_out_of_range_test_upper_bound<V: Validato
         "fetch service stream should terminate with an error, not cleanly"
     );
 
-    test_manager.close().await;
+    services.test_manager.close().await;
 }
 
 // tests whether the `GetBlockRange` returns all blocks until the first requested block in the
@@ -605,22 +476,15 @@ async fn state_service_get_block_range_out_of_range_test_upper_bound<V: Validato
 async fn state_service_get_block_range_out_of_range_test_lower_bound<V: ValidatorExt>(
     validator: &ValidatorKind,
 ) {
-    let (
-        mut test_manager,
-        _fetch_service,
-        fetch_service_subscriber,
-        _state_service,
-        state_service_subscriber,
-        _clients,
-    ) = launch_transparent_with_known_tip::<V>(validator).await;
+    let (mut services, _clients) = launch_transparent_with_known_tip::<V>(validator).await;
 
     let all_pools = zaino_testutils::all_pools_i32();
 
     let (fetch_service_blocks, fetch_errored) =
-        zaino_testutils::drain_block_range(&fetch_service_subscriber, 106, 1, all_pools.clone())
+        zaino_testutils::drain_block_range(&services.fetch_subscriber, 106, 1, all_pools.clone())
             .await;
     let (state_service_blocks, state_errored) =
-        zaino_testutils::drain_block_range(&state_service_subscriber, 106, 1, all_pools).await;
+        zaino_testutils::drain_block_range(&services.state_subscriber, 106, 1, all_pools).await;
 
     // check that the block range is the same
     assert_eq!(fetch_service_blocks, state_service_blocks);
@@ -640,140 +504,116 @@ async fn state_service_get_block_range_out_of_range_test_lower_bound<V: Validato
     //     "unexpected error variant: {err:?}"
     // );
 
-    test_manager.close().await;
+    services.test_manager.close().await;
 }
 
 async fn state_service_z_get_treestate<V: ValidatorExt>(validator: &ValidatorKind) {
-    let (
-        mut test_manager,
-        _fetch_service,
-        fetch_service_subscriber,
-        _state_service,
-        state_service_subscriber,
-        mut clients,
-    ) = create_test_manager_and_services::<V>(validator, None, true, None).await;
+    let (mut services, mut clients) =
+        create_test_manager_and_services::<V>(validator, None, true, None).await;
 
     fund_and_send(
-        &test_manager,
+        &services,
         &mut clients,
         validator,
-        &fetch_service_subscriber,
-        &state_service_subscriber,
         wallet_tests::Pool::Orchard,
     )
     .await;
 
-    let chain_height = dbg!(state_service_subscriber.chain_height().await.unwrap()).0;
+    let chain_height = dbg!(services.state_subscriber.chain_height().await.unwrap()).0;
 
-    let fetch_service_treestate = dbg!(fetch_service_subscriber
+    let fetch_service_treestate = dbg!(services
+        .fetch_subscriber
         .z_get_treestate(chain_height.to_string())
         .await
         .unwrap());
 
-    let state_service_treestate = dbg!(state_service_subscriber
+    let state_service_treestate = dbg!(services
+        .state_subscriber
         .z_get_treestate(chain_height.to_string())
         .await
         .unwrap());
 
     assert_eq!(fetch_service_treestate, state_service_treestate);
 
-    test_manager.close().await;
+    services.test_manager.close().await;
 }
 
 async fn state_service_z_get_subtrees_by_index<V: ValidatorExt>(validator: &ValidatorKind) {
-    let (
-        mut test_manager,
-        _fetch_service,
-        fetch_service_subscriber,
-        _state_service,
-        state_service_subscriber,
-        mut clients,
-    ) = create_test_manager_and_services::<V>(validator, None, true, None).await;
+    let (mut services, mut clients) =
+        create_test_manager_and_services::<V>(validator, None, true, None).await;
 
     fund_and_send(
-        &test_manager,
+        &services,
         &mut clients,
         validator,
-        &fetch_service_subscriber,
-        &state_service_subscriber,
         wallet_tests::Pool::Orchard,
     )
     .await;
 
-    let fetch_service_subtrees = dbg!(fetch_service_subscriber
+    let fetch_service_subtrees = dbg!(services
+        .fetch_subscriber
         .z_get_subtrees_by_index("orchard".to_string(), NoteCommitmentSubtreeIndex(0), None)
         .await
         .unwrap());
 
-    let state_service_subtrees = dbg!(state_service_subscriber
+    let state_service_subtrees = dbg!(services
+        .state_subscriber
         .z_get_subtrees_by_index("orchard".to_string(), NoteCommitmentSubtreeIndex(0), None)
         .await
         .unwrap());
 
     assert_eq!(fetch_service_subtrees, state_service_subtrees);
 
-    test_manager.close().await;
+    services.test_manager.close().await;
 }
 
 use zcash_local_net::logs::LogsToStdoutAndStderr;
 async fn state_service_get_raw_transaction<V: ValidatorExt + LogsToStdoutAndStderr>(
     validator: &ValidatorKind,
 ) {
-    let (
-        mut test_manager,
-        _fetch_service,
-        fetch_service_subscriber,
-        _state_service,
-        state_service_subscriber,
-        mut clients,
-    ) = create_test_manager_and_services::<V>(validator, None, true, None).await;
+    let (mut services, mut clients) =
+        create_test_manager_and_services::<V>(validator, None, true, None).await;
 
     let (_recipient_ua, tx) = fund_and_send(
-        &test_manager,
+        &services,
         &mut clients,
         validator,
-        &fetch_service_subscriber,
-        &state_service_subscriber,
         wallet_tests::Pool::Orchard,
     )
     .await;
 
-    test_manager.local_net.print_stdout();
+    services.test_manager.local_net.print_stdout();
 
-    let fetch_service_transaction = dbg!(fetch_service_subscriber
+    let fetch_service_transaction = dbg!(services
+        .fetch_subscriber
         .get_raw_transaction(tx.first().to_string(), Some(1))
         .await
         .unwrap());
 
-    let state_service_transaction = dbg!(state_service_subscriber
+    let state_service_transaction = dbg!(services
+        .state_subscriber
         .get_raw_transaction(tx.first().to_string(), Some(1))
         .await
         .unwrap());
 
     assert_eq!(fetch_service_transaction, state_service_transaction);
 
-    test_manager.close().await;
+    services.test_manager.close().await;
 }
 
 async fn state_service_get_address_transactions_regtest<V: ValidatorExt>(
     validator: &ValidatorKind,
 ) {
-    let (
-        mut test_manager,
-        _fetch_service,
-        fetch_service_subscriber,
-        _state_service,
-        state_service_subscriber,
-        mut clients,
-    ) = create_test_manager_and_services::<V>(validator, None, true, None).await;
+    let (mut services, mut clients) =
+        create_test_manager_and_services::<V>(validator, None, true, None).await;
 
     let recipient_taddr = clients.get_recipient_address("transparent").await;
     wallet_tests::fund_faucet_dual(
-        &test_manager,
+        &services.test_manager,
         &mut clients,
         validator,
-        &fetch_service_subscriber,
-        &state_service_subscriber,
+        &services.fetch_subscriber,
+        &services.state_subscriber,
         1,
     )
     .await;
@@ -781,14 +621,13 @@ async fn state_service_get_address_transactions_regtest<V: ValidatorExt>(
     let tx = clients
         .send_from_faucet(recipient_taddr.as_str(), 250_000)
         .await;
-    test_manager
-        .generate_blocks_and_wait_for_tips(1, &fetch_service_subscriber, &state_service_subscriber)
-        .await;
+    services.generate_blocks_and_wait_for_tips(1).await;
 
-    let chain_height = best_chaintip_height(&fetch_service_subscriber).await;
+    let chain_height = best_chaintip_height(&services.fetch_subscriber).await;
     dbg!(&chain_height);
 
-    let state_service_txids = state_service_subscriber
+    let state_service_txids = services
+        .state_subscriber
         .get_taddress_transactions(TransparentAddressBlockFilter {
             address: recipient_taddr,
             range: Some(BlockRange {
@@ -811,32 +650,25 @@ async fn state_service_get_address_transactions_regtest<V: ValidatorExt>(
     dbg!(&state_service_txids);
     assert!(state_service_txids.count().await > 0);
 
-    test_manager.close().await;
+    services.test_manager.close().await;
 }
 async fn state_service_get_address_tx_ids<V: ValidatorExt>(validator: &ValidatorKind) {
-    let (
-        mut test_manager,
-        _fetch_service,
-        fetch_service_subscriber,
-        _state_service,
-        state_service_subscriber,
-        mut clients,
-    ) = create_test_manager_and_services::<V>(validator, None, true, None).await;
+    let (mut services, mut clients) =
+        create_test_manager_and_services::<V>(validator, None, true, None).await;
 
     let (recipient_taddr, tx) = fund_and_send(
-        &test_manager,
+        &services,
         &mut clients,
         validator,
-        &fetch_service_subscriber,
-        &state_service_subscriber,
         wallet_tests::Pool::Transparent,
     )
     .await;
 
-    let chain_height = best_chaintip_height(&fetch_service_subscriber).await;
+    let chain_height = best_chaintip_height(&services.fetch_subscriber).await;
     dbg!(&chain_height);
 
-    let fetch_service_txids = fetch_service_subscriber
+    let fetch_service_txids = services
+        .fetch_subscriber
         .get_address_tx_ids(GetAddressTxIdsRequest::new(
             vec![recipient_taddr.clone()],
             Some(chain_height - 2),
@@ -845,7 +677,8 @@ async fn state_service_get_address_tx_ids<V: ValidatorExt>(validator: &Validator
         .await
         .unwrap();
 
-    let state_service_txids = state_service_subscriber
+    let state_service_txids = services
+        .state_subscriber
         .get_address_tx_ids(GetAddressTxIdsRequest::new(
             vec![recipient_taddr],
             Some(chain_height - 2),
@@ -861,38 +694,32 @@ async fn state_service_get_address_tx_ids<V: ValidatorExt>(validator: &Validator
     dbg!(&state_service_txids);
     assert_eq!(fetch_service_txids, state_service_txids);
 
-    test_manager.close().await;
+    services.test_manager.close().await;
 }
 
 async fn state_service_get_address_utxos<V: ValidatorExt>(validator: &ValidatorKind) {
-    let (
-        mut test_manager,
-        _fetch_service,
-        fetch_service_subscriber,
-        _state_service,
-        state_service_subscriber,
-        mut clients,
-    ) = create_test_manager_and_services::<V>(validator, None, true, None).await;
+    let (mut services, mut clients) =
+        create_test_manager_and_services::<V>(validator, None, true, None).await;
 
     let (recipient_taddr, txid_1) = fund_and_send(
-        &test_manager,
+        &services,
         &mut clients,
         validator,
-        &fetch_service_subscriber,
-        &state_service_subscriber,
         wallet_tests::Pool::Transparent,
     )
     .await;
 
     clients.sync_faucet().await;
 
-    let fetch_service_utxos = fetch_service_subscriber
+    let fetch_service_utxos = services
+        .fetch_subscriber
         .z_get_address_utxos(GetAddressBalanceRequest::new(vec![recipient_taddr.clone()]))
         .await
         .unwrap();
     let (_, fetch_service_txid, ..) = fetch_service_utxos[0].into_parts();
 
-    let state_service_utxos = state_service_subscriber
+    let state_service_utxos = services
+        .state_subscriber
         .z_get_address_utxos(GetAddressBalanceRequest::new(vec![recipient_taddr]))
         .await
         .unwrap();
@@ -909,7 +736,7 @@ async fn state_service_get_address_utxos<V: ValidatorExt>(validator: &ValidatorK
         state_service_txid.to_string()
     );
 
-    test_manager.close().await;
+    services.test_manager.close().await;
 }
 
 mod zebra {
@@ -995,14 +822,7 @@ mod zebra {
         #[tokio::test(flavor = "multi_thread")]
         #[allow(deprecated)]
         async fn get_mempool_info() {
-            let (
-                mut test_manager,
-                _fetch_service,
-                fetch_service_subscriber,
-                _state_service,
-                state_service_subscriber,
-                mut clients,
-            ) = create_test_manager_and_services::<Zebrad>(
+            let (mut services, mut clients) = create_test_manager_and_services::<Zebrad>(
                 &ValidatorKind::Zebrad,
                 None,
                 true,
@@ -1013,11 +833,11 @@ mod zebra {
             let recipient_taddr = clients.get_recipient_address("transparent").await;
 
             wallet_tests::fund_faucet_dual(
-                &test_manager,
+                &services.test_manager,
                 &mut clients,
                 &ValidatorKind::Zebrad,
-                &fetch_service_subscriber,
-                &state_service_subscriber,
+                &services.fetch_subscriber,
+                &services.state_subscriber,
                 1,
             )
             .await;
@@ -1030,10 +850,10 @@ mod zebra {
             tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
 
             // Call the internal mempool info method
-            let info = state_service_subscriber.get_mempool_info().await.unwrap();
+            let info = services.state_subscriber.get_mempool_info().await.unwrap();
 
             // Derive expected values directly from the current mempool contents
-            let entries = state_service_subscriber.mempool.get_mempool().await;
+            let entries = services.state_subscriber.mempool.get_mempool().await;
 
             assert_eq!(entries.len() as u64, info.size);
             assert!(info.size >= 1);
@@ -1063,7 +883,7 @@ mod zebra {
                 );
             }
 
-            test_manager.close().await;
+            services.test_manager.close().await;
         }
 
         #[tokio::test(flavor = "multi_thread")]
@@ -1087,14 +907,7 @@ mod zebra {
         use super::*;
         #[tokio::test(flavor = "multi_thread")]
         async fn get_transaction() {
-            let (
-                test_manager,
-                _fetch_service,
-                fetch_service_subscriber,
-                _state_service,
-                state_service_subscriber,
-                _clients,
-            ) = create_test_manager_and_services::<Zebrad>(
+            let (services, _clients) = create_test_manager_and_services::<Zebrad>(
                 &ValidatorKind::Zebrad,
                 None,
                 true,
@@ -1104,19 +917,14 @@ mod zebra {
             // This test only inspects a coinbase transaction — any mined
             // block supplies one; it needs no funded wallets and no
             // particular height.
-            test_manager
-                .generate_blocks_and_wait_for_tips(
-                    1,
-                    &fetch_service_subscriber,
-                    &state_service_subscriber,
-                )
-                .await;
+            services.generate_blocks_and_wait_for_tips(1).await;
 
             let block = BlockId {
-                height: best_chaintip_height(&fetch_service_subscriber).await as u64,
+                height: best_chaintip_height(&services.fetch_subscriber).await as u64,
                 hash: vec![],
             };
-            let state_service_block_by_height = state_service_subscriber
+            let state_service_block_by_height = services
+                .state_subscriber
                 .get_block(block.clone())
                 .await
                 .unwrap();
@@ -1127,11 +935,13 @@ mod zebra {
                 index: 0,
                 hash,
             };
-            let fetch_service_raw_transaction = fetch_service_subscriber
+            let fetch_service_raw_transaction = services
+                .fetch_subscriber
                 .get_transaction(request.clone())
                 .await
                 .unwrap();
-            let state_service_raw_transaction = state_service_subscriber
+            let state_service_raw_transaction = services
+                .state_subscriber
                 .get_transaction(request)
                 .await
                 .unwrap();
@@ -1140,25 +950,19 @@ mod zebra {
 
         #[tokio::test(flavor = "multi_thread")]
         async fn get_taddress_txids() {
-            let (
-                _test_manager,
-                _fetch_service,
-                fetch_service_subscriber,
-                _state_service,
-                state_service_subscriber,
-                _clients,
-                request,
-            ) = launch_and_build_faucet_request(100, |taddr| {
+            let (services, _clients, request) = launch_and_build_faucet_request(100, |taddr| {
                 GetAddressTxIdsRequest::new(vec![taddr], Some(2), Some(5))
             })
             .await;
 
-            let state_service_taddress_txids = state_service_subscriber
+            let state_service_taddress_txids = services
+                .state_subscriber
                 .get_address_tx_ids(request.clone())
                 .await
                 .unwrap();
             dbg!(&state_service_taddress_txids);
-            let fetch_service_taddress_txids = fetch_service_subscriber
+            let fetch_service_taddress_txids = services
+                .fetch_subscriber
                 .get_address_tx_ids(request)
                 .await
                 .unwrap();
@@ -1168,28 +972,23 @@ mod zebra {
 
         #[tokio::test(flavor = "multi_thread")]
         async fn get_address_utxos_stream() {
-            let (
-                _test_manager,
-                _fetch_service,
-                fetch_service_subscriber,
-                _state_service,
-                state_service_subscriber,
-                mut clients,
-                request,
-            ) = launch_and_build_faucet_request(5, |taddr| GetAddressUtxosArg {
-                addresses: vec![taddr],
-                start_height: 2,
-                max_entries: 3,
-            })
-            .await;
-            let state_service_address_utxos_streamed = state_service_subscriber
+            let (services, mut clients, request) =
+                launch_and_build_faucet_request(5, |taddr| GetAddressUtxosArg {
+                    addresses: vec![taddr],
+                    start_height: 2,
+                    max_entries: 3,
+                })
+                .await;
+            let state_service_address_utxos_streamed = services
+                .state_subscriber
                 .get_address_utxos_stream(request.clone())
                 .await
                 .unwrap()
                 .map(Result::unwrap)
                 .collect::<Vec<_>>()
                 .await;
-            let fetch_service_address_utxos_streamed = fetch_service_subscriber
+            let fetch_service_address_utxos_streamed = services
+                .fetch_subscriber
                 .get_address_utxos_stream(request)
                 .await
                 .unwrap()
@@ -1215,25 +1014,20 @@ mod zebra {
 
         #[tokio::test(flavor = "multi_thread")]
         async fn get_address_utxos() {
-            let (
-                _test_manager,
-                _fetch_service,
-                fetch_service_subscriber,
-                _state_service,
-                state_service_subscriber,
-                mut clients,
-                request,
-            ) = launch_and_build_faucet_request(5, |taddr| GetAddressUtxosArg {
-                addresses: vec![taddr],
-                start_height: 2,
-                max_entries: 3,
-            })
-            .await;
-            let state_service_address_utxos = state_service_subscriber
+            let (services, mut clients, request) =
+                launch_and_build_faucet_request(5, |taddr| GetAddressUtxosArg {
+                    addresses: vec![taddr],
+                    start_height: 2,
+                    max_entries: 3,
+                })
+                .await;
+            let state_service_address_utxos = services
+                .state_subscriber
                 .get_address_utxos(request.clone())
                 .await
                 .unwrap();
-            let fetch_service_address_utxos = fetch_service_subscriber
+            let fetch_service_address_utxos = services
+                .fetch_subscriber
                 .get_address_utxos(request)
                 .await
                 .unwrap();
@@ -1257,24 +1051,19 @@ mod zebra {
 
         #[tokio::test(flavor = "multi_thread")]
         async fn get_taddress_balance() {
-            let (
-                _test_manager,
-                _fetch_service,
-                fetch_service_subscriber,
-                _state_service,
-                state_service_subscriber,
-                _clients,
-                request,
-            ) = launch_and_build_faucet_request(5, |taddr| AddressList {
-                addresses: vec![taddr],
-            })
-            .await;
+            let (services, _clients, request) =
+                launch_and_build_faucet_request(5, |taddr| AddressList {
+                    addresses: vec![taddr],
+                })
+                .await;
 
-            let state_service_taddress_balance = state_service_subscriber
+            let state_service_taddress_balance = services
+                .state_subscriber
                 .get_taddress_balance(request.clone())
                 .await
                 .unwrap();
-            let fetch_service_taddress_balance = fetch_service_subscriber
+            let fetch_service_taddress_balance = services
+                .fetch_subscriber
                 .get_taddress_balance(request)
                 .await
                 .unwrap();
@@ -1286,14 +1075,7 @@ mod zebra {
 
         #[tokio::test(flavor = "multi_thread")]
         async fn get_transparent_data_from_compact_block_when_requested() {
-            let (
-                test_manager,
-                _fetch_service,
-                fetch_service_subscriber,
-                _state_service,
-                state_service_subscriber,
-                _clients,
-            ) = create_test_manager_and_services_mining_to::<Zebrad>(
+            let (services, _clients) = create_test_manager_and_services_mining_to::<Zebrad>(
                 // The assertion below requires every tx to carry a transparent
                 // vout; the miner's transparent coinbase is that data source,
                 // so coinbase must land on the miner taddr.
@@ -1305,15 +1087,10 @@ mod zebra {
             )
             .await;
 
-            test_manager
-                .generate_blocks_and_wait_for_tips(
-                    5,
-                    &fetch_service_subscriber,
-                    &state_service_subscriber,
-                )
-                .await;
+            services.generate_blocks_and_wait_for_tips(5).await;
 
-            let chain_height = state_service_subscriber
+            let chain_height = services
+                .state_subscriber
                 .get_latest_block()
                 .await
                 .unwrap()
@@ -1329,7 +1106,7 @@ mod zebra {
             //
             // To see bug update start height of get_block_range to 0.
             let compact_block_range = zaino_testutils::collect_block_range(
-                &state_service_subscriber,
+                &services.state_subscriber,
                 1,
                 chain_height,
                 zaino_testutils::all_pools_i32(),
