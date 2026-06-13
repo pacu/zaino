@@ -28,10 +28,12 @@ zaino-fetch = { path = "../packages/zaino-fetch" }
 zainod = { path = "../packages/zainod" }
 
 # Zingo-infra (validator launcher; not a wallet dep)
-# TEMPORARY (zingolabs/infrastructure#269): the `add_client_support` branch
-# carries the in-progress client-manager + zcash-devtool work. Restore the
-# release tag once the coordinated changes are tagged upstream.
-zcash_local_net = { git = "https://github.com/zingolabs/infrastructure.git", branch = "add_client_support" }
+# TEMPORARY (zingolabs/infrastructure#269): pinned to a specific commit on the
+# `add_client_support` branch (not the branch itself) so every machine
+# resolves the same code — the Cargo.lock files are gitignored, and a moving
+# branch ref otherwise resolves differently per cargo cache. Bump this rev as
+# the coordinated work advances; restore the release tag once tagged upstream.
+zcash_local_net = { git = "https://github.com/zingolabs/infrastructure.git", rev = "97f35c99038eb9baf85ab25e8a5334bda7fb2c13" }
 
 # Librustzcash
 zcash_protocol = { version = "0.9", features = ["local-consensus"] }
