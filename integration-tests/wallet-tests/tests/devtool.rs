@@ -1060,6 +1060,58 @@ async fn get_address_transactions_regtest() {
     svc.test_manager.close().await;
 }
 
+/// Port of `state_service_…::get_transparent_data_from_compact_block_when_requested`
+/// (zebrad): with transparent mining, every compact-block tx carries a
+/// transparent vout (the miner's transparent coinbase is the data source), so
+/// each vout's `script_pub_key` is non-empty. Needs no wallet client — a pure
+/// indexer-against-a-transparent-mined-chain check, so it launches the dual
+/// services directly rather than through a `DevtoolClients` fixture.
+async fn transparent_data_in_compact_block() {
+    let mut services = zaino_testutils::launch_state_and_fetch_services_mining_to::<Zebrad>(
+        // The assertion below requires every tx to carry a transparent vout;
+        // the miner's transparent coinbase is that data source, so coinbase
+        // must land on the miner taddr.
+        zaino_testutils::PoolType::Transparent,
+        &ValidatorKind::Zebrad,
+        None,
+        true,
+        Some(zebra_chain::parameters::NetworkKind::Regtest),
+    )
+    .await;
+
+    services.generate_blocks_and_wait_for_tips(5).await;
+
+    let chain_height = services
+        .state_subscriber
+        .get_latest_block()
+        .await
+        .unwrap()
+        .height;
+
+    // NOTE / TODO: Zaino can not currently serve non standard script types in
+    // compact blocks, because of this it does not return the script pub key for
+    // the coinbase transaction of the genesis block. For this reason this test
+    // currently does not fetch the genesis block (start height 1, not 0).
+    // Issue: https://github.com/zingolabs/zaino/issues/818
+    let compact_block_range = zaino_testutils::collect_block_range(
+        &services.state_subscriber,
+        1,
+        chain_height,
+        zaino_testutils::all_pools_i32(),
+    )
+    .await;
+
+    for cb in compact_block_range.into_iter() {
+        for tx in cb.vtx {
+            dbg!(&tx);
+            // script pub key of this transaction is not empty
+            assert!(!tx.vout.first().unwrap().script_pub_key.is_empty());
+        }
+    }
+
+    services.test_manager.close().await;
+}
+
 mod zebrad {
     // FetchService is a deprecated re-export; the deprecation fires at the
     // turbofish use sites below, so the allow covers the whole module.
@@ -1203,6 +1255,11 @@ mod zebrad {
     #[tokio::test(flavor = "multi_thread")]
     async fn get_address_transactions_regtest() {
         crate::get_address_transactions_regtest().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn transparent_data_in_compact_block() {
+        crate::transparent_data_in_compact_block().await;
     }
 
     mod state_service {
