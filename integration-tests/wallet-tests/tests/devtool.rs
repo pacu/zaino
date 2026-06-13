@@ -18,7 +18,7 @@
 
 use wallet_tests::devtool::DevtoolClients;
 use zaino_proto::proto::service::{
-    BlockId, BlockRange, GetAddressUtxosArg, TransparentAddressBlockFilter, TxFilter,
+    AddressList, BlockId, BlockRange, GetAddressUtxosArg, TransparentAddressBlockFilter, TxFilter,
 };
 use zaino_state::{LightWalletIndexer, ZcashIndexer, ZcashService};
 use zaino_testutils::{PollableTip, TestManager, TestService, ValidatorKind};
@@ -1112,6 +1112,104 @@ async fn transparent_data_in_compact_block() {
     services.test_manager.close().await;
 }
 
+/// Launch transparent-mining state+fetch services, build the devtool faucet,
+/// mine `blocks` coinbase blocks to its transparent address, and return the
+/// services and that taddr — the dual-backend, devtool analogue of
+/// `launch_and_build_faucet_request`'s preamble for the faucet-taddr query
+/// tests. The faucet taddr is the abandon-art transparent receiver, which is
+/// also the zebrad miner address under transparent mining; the non-vacuity
+/// probes in the callers verify that equality empirically (devtool round-2
+/// spec P1(1)).
+async fn launch_transparent_and_faucet_taddr(
+    blocks: u32,
+) -> (zaino_testutils::StateAndFetchServices<Zebrad>, String) {
+    let svc = zaino_testutils::launch_state_and_fetch_services_mining_to::<Zebrad>(
+        // These tests query the faucet taddr, which only coinbase funds —
+        // mining must stay transparent or the queries compare empty against
+        // empty.
+        zaino_testutils::PoolType::Transparent,
+        &ValidatorKind::Zebrad,
+        None,
+        true,
+        Some(zebra_chain::parameters::NetworkKind::Regtest),
+    )
+    .await;
+
+    let clients = wallet_tests::devtool::build_clients(
+        svc.test_manager
+            .zaino_grpc_listen_address
+            .expect("zaino enabled")
+            .port(),
+    )
+    .await;
+
+    let faucet_taddr = clients.get_faucet_address("transparent").await;
+    svc.generate_blocks_and_wait_for_tips(blocks).await;
+
+    (svc, faucet_taddr)
+}
+
+/// Port of `state_service_…::get_taddress_txids` (zebrad, faucet-taddr cluster):
+/// the fetch and state indexers agree on `get_address_tx_ids` over the faucet's
+/// coinbase taddr. The non-vacuity probe (`!txids.is_empty()`) guards against a
+/// silent empty==empty pass and confirms the devtool faucet's transparent
+/// receiver equals the zebrad miner address (devtool round-2 spec P1(1)).
+async fn get_taddress_txids_faucet_fetch_vs_state() {
+    let (mut svc, faucet_taddr) = launch_transparent_and_faucet_taddr(100).await;
+
+    let request = GetAddressTxIdsRequest::new(vec![faucet_taddr], Some(2), Some(5));
+    let state_service_taddress_txids = svc
+        .state_subscriber
+        .get_address_tx_ids(request.clone())
+        .await
+        .unwrap();
+    dbg!(&state_service_taddress_txids);
+    let fetch_service_taddress_txids = svc
+        .fetch_subscriber
+        .get_address_tx_ids(request)
+        .await
+        .unwrap();
+    dbg!(&fetch_service_taddress_txids);
+    // Non-vacuity probe: the faucet taddr must actually hold coinbase txids in
+    // range, else the fetch==state assert would pass against empty == empty.
+    assert!(!fetch_service_taddress_txids.is_empty());
+    assert_eq!(fetch_service_taddress_txids, state_service_taddress_txids);
+
+    svc.test_manager.close().await;
+}
+
+/// Port of `state_service_…::get_taddress_balance` (zebrad, faucet-taddr
+/// cluster): the fetch and state indexers agree on `get_taddress_balance` over
+/// the faucet's coinbase taddr. The non-vacuity probe (`value_zat > 0`) guards
+/// against a silent 0==0 pass and confirms the address equality of round-2
+/// spec P1(1).
+async fn get_taddress_balance_faucet_fetch_vs_state() {
+    let (mut svc, faucet_taddr) = launch_transparent_and_faucet_taddr(5).await;
+
+    let request = AddressList {
+        addresses: vec![faucet_taddr],
+    };
+    let state_service_taddress_balance = svc
+        .state_subscriber
+        .get_taddress_balance(request.clone())
+        .await
+        .unwrap();
+    let fetch_service_taddress_balance = svc
+        .fetch_subscriber
+        .get_taddress_balance(request)
+        .await
+        .unwrap();
+    // Non-vacuity probe: the faucet taddr must actually hold coinbase value,
+    // else the fetch==state assert would pass against 0 == 0.
+    assert!(fetch_service_taddress_balance.value_zat > 0);
+    assert_eq!(
+        fetch_service_taddress_balance,
+        state_service_taddress_balance
+    );
+
+    svc.test_manager.close().await;
+}
+
 mod zebrad {
     // FetchService is a deprecated re-export; the deprecation fires at the
     // turbofish use sites below, so the allow covers the whole module.
@@ -1260,6 +1358,16 @@ mod zebrad {
     #[tokio::test(flavor = "multi_thread")]
     async fn transparent_data_in_compact_block() {
         crate::transparent_data_in_compact_block().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn get_taddress_txids_faucet_fetch_vs_state() {
+        crate::get_taddress_txids_faucet_fetch_vs_state().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn get_taddress_balance_faucet_fetch_vs_state() {
+        crate::get_taddress_balance_faucet_fetch_vs_state().await;
     }
 
     mod state_service {
