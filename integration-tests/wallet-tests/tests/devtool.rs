@@ -821,6 +821,61 @@ async fn block_range_returns_all_pools() {
 /// broadcast txid hex (display order), and the recipient address. The devtool
 /// analogue of the state_service `fund_and_send` (dual-subscriber); the wallet
 /// clients are dropped once the send is mined (the queries below hit zaino).
+/// Port of `fetch_service_get_address_balance` (zebrad): after a transparent
+/// send of 250_000 to the recipient, `z_get_address_balance` over that taddr
+/// reports exactly 250_000.
+async fn get_address_balance<Service>()
+where
+    Service: TestService,
+    IndexerError: From<<<Service as ZcashService>::Subscriber as ZcashIndexer>::Error>,
+    <Service as ZcashService>::Subscriber: PollableTip + LightWalletIndexer,
+{
+    let (mut test_manager, clients, _txid_hex) =
+        fund_and_send_to::<Service>(wallet_tests::Pool::Transparent).await;
+    let recipient_taddr = clients.get_recipient_address("transparent").await;
+
+    let balance = test_manager
+        .subscriber()
+        .z_get_address_balance(GetAddressBalanceRequest::new(vec![recipient_taddr]))
+        .await
+        .unwrap();
+
+    dbg!(balance);
+    // The fixture sent exactly 250_000 to the recipient taddr.
+    assert_eq!(balance.balance(), 250_000);
+
+    test_manager.close().await;
+}
+
+/// Port of `fetch_service_get_taddress_balance` (zebrad): after a transparent
+/// send of 250_000 to the recipient, `get_taddress_balance` over that taddr
+/// reports value_zat 250_000.
+async fn get_taddress_balance<Service>()
+where
+    Service: TestService,
+    IndexerError: From<<<Service as ZcashService>::Subscriber as ZcashIndexer>::Error>,
+    <Service as ZcashService>::Subscriber: PollableTip + LightWalletIndexer,
+{
+    let (mut test_manager, clients, _txid_hex) =
+        fund_and_send_to::<Service>(wallet_tests::Pool::Transparent).await;
+    let recipient_taddr = clients.get_recipient_address("transparent").await;
+
+    let address_list = AddressList {
+        addresses: vec![recipient_taddr],
+    };
+    let balance = test_manager
+        .subscriber()
+        .get_taddress_balance(address_list)
+        .await
+        .unwrap();
+
+    dbg!(&balance);
+    // The fixture sent exactly 250_000 to the recipient taddr.
+    assert_eq!(balance.value_zat, 250_000);
+
+    test_manager.close().await;
+}
+
 async fn fund_and_send_dual(
     pool: wallet_tests::Pool,
 ) -> (zaino_testutils::StateAndFetchServices<Zebrad>, String, String) {
@@ -1112,6 +1167,30 @@ async fn transparent_data_in_compact_block() {
     services.test_manager.close().await;
 }
 
+/// Port of `state_service_get_address_balance` (zebrad): the recipient taddr
+/// reports the 250_000 send, and the fetch and state indexers agree.
+async fn get_address_balance_fetch_vs_state() {
+    let (mut svc, _txid_hex, recipient_taddr) =
+        fund_and_send_dual(wallet_tests::Pool::Transparent).await;
+
+    let fetch = svc
+        .fetch_subscriber
+        .z_get_address_balance(GetAddressBalanceRequest::new(vec![recipient_taddr.clone()]))
+        .await
+        .unwrap();
+    let state = svc
+        .state_subscriber
+        .z_get_address_balance(GetAddressBalanceRequest::new(vec![recipient_taddr]))
+        .await
+        .unwrap();
+
+    // The fixture sent exactly 250_000 to the recipient taddr.
+    assert_eq!(fetch.balance(), 250_000);
+    assert_eq!(fetch, state);
+
+    svc.test_manager.close().await;
+}
+
 /// Launch transparent-mining state+fetch services, build the devtool faucet,
 /// mine `blocks` coinbase blocks to its transparent address, and return the
 /// services and that taddr — the dual-backend, devtool analogue of
@@ -1210,6 +1289,102 @@ async fn get_taddress_balance_faucet_fetch_vs_state() {
     svc.test_manager.close().await;
 }
 
+/// Launch transparent-mining state+fetch services and mine up to chain height
+/// 100 — the dual-backend, devtool analogue of `launch_transparent_with_known_tip`.
+/// The block-range edge tests need a known 100-block tip and no wallet client.
+async fn launch_transparent_to_height_100() -> zaino_testutils::StateAndFetchServices<Zebrad> {
+    let svc = zaino_testutils::launch_state_and_fetch_services_mining_to::<Zebrad>(
+        zaino_testutils::PoolType::Transparent,
+        &ValidatorKind::Zebrad,
+        None,
+        true,
+        Some(zebra_chain::parameters::NetworkKind::Regtest),
+    )
+    .await;
+
+    // The launch already generates blocks; only generate up to height 100.
+    let chain_height = svc
+        .state_subscriber
+        .get_latest_block()
+        .await
+        .unwrap()
+        .height as u32;
+    svc.generate_blocks_and_wait_for_tips(100 - chain_height).await;
+
+    svc
+}
+
+/// Port of `state_service_get_block_range_out_of_range_test_upper_bound`
+/// (zebrad): draining [1, 106] on a 100-block chain yields the 100 available
+/// blocks (fetch == state) and then errors rather than ending cleanly.
+async fn get_block_range_out_of_range_upper_bound() {
+    let mut services = launch_transparent_to_height_100().await;
+
+    let all_pools = zaino_testutils::all_pools_i32();
+    let end_height: u64 = 106;
+
+    let (fetch_service_blocks, fetch_errored) = zaino_testutils::drain_block_range(
+        &services.fetch_subscriber,
+        1,
+        end_height,
+        all_pools.clone(),
+    )
+    .await;
+    let (state_service_blocks, state_errored) =
+        zaino_testutils::drain_block_range(&services.state_subscriber, 1, end_height, all_pools)
+            .await;
+
+    // check that the block range is the same
+    assert_eq!(fetch_service_blocks, state_service_blocks);
+
+    let compact_block = state_service_blocks.last().unwrap();
+    assert!(compact_block.height < end_height);
+    assert_eq!(fetch_service_blocks.len(), 100);
+
+    // ...then an error, not a clean end-of-stream
+    assert!(
+        state_errored,
+        "state service stream should terminate with an error, not cleanly"
+    );
+    assert!(
+        fetch_errored,
+        "fetch service stream should terminate with an error, not cleanly"
+    );
+
+    services.test_manager.close().await;
+}
+
+/// Port of `state_service_get_block_range_out_of_range_test_lower_bound`
+/// (zebrad): draining the inverted range [106, 1] yields no blocks (fetch ==
+/// state, both empty) and then errors rather than ending cleanly.
+async fn get_block_range_out_of_range_lower_bound() {
+    let mut services = launch_transparent_to_height_100().await;
+
+    let all_pools = zaino_testutils::all_pools_i32();
+
+    let (fetch_service_blocks, fetch_errored) =
+        zaino_testutils::drain_block_range(&services.fetch_subscriber, 106, 1, all_pools.clone())
+            .await;
+    let (state_service_blocks, state_errored) =
+        zaino_testutils::drain_block_range(&services.state_subscriber, 106, 1, all_pools).await;
+
+    // check that the block range is the same
+    assert_eq!(fetch_service_blocks, state_service_blocks);
+    assert!(fetch_service_blocks.is_empty());
+
+    // ...then an error, not a clean end-of-stream
+    assert!(
+        state_errored,
+        "state service stream should terminate with an error, not cleanly"
+    );
+    assert!(
+        fetch_errored,
+        "fetch service stream should terminate with an error, not cleanly"
+    );
+
+    services.test_manager.close().await;
+}
+
 mod zebrad {
     // FetchService is a deprecated re-export; the deprecation fires at the
     // turbofish use sites below, so the allow covers the whole module.
@@ -1306,6 +1481,16 @@ mod zebrad {
         async fn get_transaction_mempool() {
             crate::get_transaction_mempool::<FetchService>().await;
         }
+
+        #[tokio::test(flavor = "multi_thread")]
+        async fn get_address_balance() {
+            crate::get_address_balance::<FetchService>().await;
+        }
+
+        #[tokio::test(flavor = "multi_thread")]
+        async fn get_taddress_balance() {
+            crate::get_taddress_balance::<FetchService>().await;
+        }
     }
 
     // Span both the fetch and state indexers (compares their answers), so they
@@ -1368,6 +1553,21 @@ mod zebrad {
     #[tokio::test(flavor = "multi_thread")]
     async fn get_taddress_balance_faucet_fetch_vs_state() {
         crate::get_taddress_balance_faucet_fetch_vs_state().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn get_address_balance_fetch_vs_state() {
+        crate::get_address_balance_fetch_vs_state().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn get_block_range_out_of_range_upper_bound() {
+        crate::get_block_range_out_of_range_upper_bound().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn get_block_range_out_of_range_lower_bound() {
+        crate::get_block_range_out_of_range_lower_bound().await;
     }
 
     mod state_service {
