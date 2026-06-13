@@ -25,17 +25,6 @@ info "-- TAG               = $TAG"
 # from script scope and stops the right container on EXIT/INT/TERM.
 CONTAINER_NAME="zaino-testing-$$"
 
-# TEMPORARY (zingolabs/infrastructure#269): the test workspaces' Cargo.tomls
-# point zcash_local_net (and zingo_test_vectors) at the local infrastructure
-# fork by absolute path; mount it read-only at the same path so those path
-# deps resolve inside the container. LOCAL_INFRA_DIR comes from
-# .env.testing-artifacts and disappears with the path deps once the
-# upstream tag ships.
-local_infra_mount=()
-if [ -n "${LOCAL_INFRA_DIR:-}" ]; then
-    local_infra_mount=(-v "${LOCAL_INFRA_DIR}:${LOCAL_INFRA_DIR}:ro")
-fi
-
 # Run podman in foreground with proper signal handling.
 #
 # `--pids-limit=-1` removes the default 2048-process cgroup cap. With
@@ -50,7 +39,6 @@ podman run --rm \
   --pids-limit=-1 \
   --name "$CONTAINER_NAME" \
   -v "$PWD":/home/container_user/zaino \
-  "${local_infra_mount[@]}" \
   -v zaino-container-target:/home/container_user/zaino/target:U \
   -v zaino-cargo-git:/usr/local/cargo/git:U \
   -v zaino-cargo-registry:/usr/local/cargo/registry:U \
