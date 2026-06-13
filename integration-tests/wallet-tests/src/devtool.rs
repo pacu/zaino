@@ -11,12 +11,6 @@
 //!
 //! # Known gaps vs the zingolib backend
 //!
-//! - **Per-pool addresses**: the client interface exposes only the default
-//!   unified address. The faucet's transparent address is recovered from
-//!   [`zingo_test_vectors::REG_T_ADDR_FROM_ABANDONART`] (same seed the miner
-//!   pays); bare sapling addresses and the recipient's transparent address
-//!   have no source yet and panic — coordinate an `address(pool)` operation
-//!   with the zcash_local_net fork before swapping the send-matrix tests.
 //! - **Unconfirmed (mempool) balances**: devtool sync is block-based;
 //!   `monitor_unverified_mempool` cannot swap backends.
 //! - **No `do_info` / transaction listing**: the two `do_info` smoke checks
@@ -28,7 +22,7 @@
 
 use zcash_local_net::client::{
     zcash_devtool::{ZcashDevtool, ZcashDevtoolConfig},
-    Client as _, WalletBalance,
+    AddressReceiver, Client as _, WalletBalance,
 };
 
 use crate::Pool;
@@ -75,40 +69,36 @@ pub fn txid_internal_bytes(devtool_txid_hex: &str) -> Vec<u8> {
 }
 
 impl DevtoolClients {
+    /// The address of `client` that routes funds into `pool`, read from the
+    /// wallet's default unified address (`"transparent"`/`"sapling"` emit the
+    /// bare receiver, `"unified"`/`"orchard"` the unified/orchard-only
+    /// address). Shared by [`DevtoolClients::get_faucet_address`] and
+    /// [`DevtoolClients::get_recipient_address`].
+    async fn address(client: &ZcashDevtool, who: &str, pool: &str) -> String {
+        let receiver = match pool {
+            "transparent" => AddressReceiver::Transparent,
+            "sapling" => AddressReceiver::Sapling,
+            "unified" => AddressReceiver::Unified,
+            "orchard" => AddressReceiver::Orchard,
+            other => panic!("unknown pool address kind {other:?} for {who}"),
+        };
+        client
+            .address(receiver)
+            .await
+            .unwrap_or_else(|e| panic!("address({pool}) for {who}: {e:?}"))
+    }
+
     /// The faucet address that routes funds into `pool`
-    /// (`"transparent" | "sapling" | "unified"`).
+    /// (`"transparent" | "sapling" | "unified"`). For the faucet (the miner's
+    /// wallet), the transparent address is the one the miner pays coinbase to.
     pub async fn get_faucet_address(&self, pool: &str) -> String {
-        match pool {
-            // The miner pays this address directly; it is derived from the
-            // same abandon-art seed the faucet wallet is restored from.
-            "transparent" => zingo_test_vectors::REG_T_ADDR_FROM_ABANDONART.to_string(),
-            "unified" => Self::default_address(&self.faucet, "faucet").await,
-            other => panic!(
-                "devtool backend cannot derive a bare {other} faucet address yet: \
-                 the zcash_local_net Client interface only exposes the default \
-                 unified address (see module docs)"
-            ),
-        }
+        Self::address(&self.faucet, "faucet", pool).await
     }
 
     /// The recipient address that routes funds into `pool`
     /// (`"transparent" | "sapling" | "unified"`).
     pub async fn get_recipient_address(&self, pool: &str) -> String {
-        match pool {
-            "unified" => Self::default_address(&self.recipient, "recipient").await,
-            other => panic!(
-                "devtool backend cannot derive a bare {other} recipient address yet: \
-                 the zcash_local_net Client interface only exposes the default \
-                 unified address (see module docs)"
-            ),
-        }
-    }
-
-    async fn default_address(client: &ZcashDevtool, who: &str) -> String {
-        client
-            .default_address()
-            .await
-            .unwrap_or_else(|e| panic!("default_address for {who}: {e:?}"))
+        Self::address(&self.recipient, "recipient", pool).await
     }
 
     /// The faucet's balance snapshot. Sync first; this reads the local

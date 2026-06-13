@@ -81,6 +81,12 @@ RUN git clone --depth 1 --branch "v${ZCASH_VERSION}" \
 FROM docker.io/library/rust:${RUST_VERSION}-trixie AS devtool-builder
 
 ARG DEVTOOL_VERSION
+# Resolved commit SHA of DEVTOOL_VERSION (a branch, hence moving). It seeds
+# the cache key of the build RUN below: a branch name alone never changes, so
+# without this the layer is reused even after the branch advances, baking a
+# stale binary. build-image.sh resolves it via `git ls-remote`; empty (e.g.
+# DEVTOOL_VERSION already a SHA) falls back to checking out DEVTOOL_VERSION.
+ARG DEVTOOL_REV
 # Versions pinned (DL3008) to the candidates in rust:1.95.0-trixie; bump
 # together with the base image (query with `apt-cache policy <pkg>`).
 # git/pkg-config/libssl-dev as for zebra-builder; protobuf-compiler for
@@ -96,8 +102,10 @@ WORKDIR /devtool
 # image's default toolchain builds it (the source tree's
 # rust-toolchain.toml is removed so rustup does not fetch another one).
 # `regtest_support` is the feature wallet-tests' regtest clients require.
+# Checking out the resolved SHA (falling back to the branch) makes this layer
+# rebuild whenever DEVTOOL_REV changes.
 RUN git clone https://github.com/zingolabs/zcash-devtool . \
-    && git checkout "${DEVTOOL_VERSION}" \
+    && git checkout "${DEVTOOL_REV:-$DEVTOOL_VERSION}" \
     && rm -f rust-toolchain.toml \
     && cargo build --release --features regtest_support \
     && cp target/release/zcash-devtool /tmp/zcash-devtool

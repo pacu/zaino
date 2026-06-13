@@ -4,13 +4,13 @@
 //! `Clients`, the matching tests in `wallet_to_validator.rs` migrate here and
 //! the zingolib versions are eventually retired (zingolabs/infrastructure#269).
 //!
-//! Current coverage is the orchard slice of the send/receive matrix: the
-//! devtool client interface exposes only the unified address, so transparent
-//! and sapling recipients wait on the `address(pool)` feature (see
-//! devtools/add_regtest/feature_requests.md). Zebrad only — the devtool
-//! client's compiled-in regtest activation heights match zebrad's launch
-//! heights; zcashd launches with different default heights, which the client
-//! rejects at construction.
+//! The client interface now exposes per-pool addresses
+//! ([`DevtoolClients::get_recipient_address`]), so transparent and sapling
+//! recipients are reachable; the current tests below still exercise the
+//! orchard path, with the transparent/sapling send-matrix ports to follow.
+//! Zebrad only — the devtool client's compiled-in regtest activation heights
+//! match zebrad's launch heights; zcashd launches with different default
+//! heights, which the client rejects at construction.
 //!
 //! Requires a `zcash-devtool` binary built with `--features regtest_support`
 //! in `TEST_BINARIES_DIR`/`PATH`, alongside the usual validator binaries.
