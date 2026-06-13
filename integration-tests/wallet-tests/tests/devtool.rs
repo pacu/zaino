@@ -4,13 +4,14 @@
 //! `Clients`, the matching tests in `wallet_to_validator.rs` migrate here and
 //! the zingolib versions are eventually retired (zingolabs/infrastructure#269).
 //!
-//! The client interface now exposes per-pool addresses
-//! ([`DevtoolClients::get_recipient_address`]), so transparent and sapling
-//! recipients are reachable; the current tests below still exercise the
-//! orchard path, with the transparent/sapling send-matrix ports to follow.
-//! Zebrad only — the devtool client's compiled-in regtest activation heights
-//! match zebrad's launch heights; zcashd launches with different default
-//! heights, which the client rejects at construction.
+//! Covered: sends to all three pools, shielding, mining-reward receipt, and
+//! the `get_transaction` / `get_block_range` query tests. Deferred: tests
+//! that mine to a transparent miner (the original `send_to_transparent` /
+//! `send_to_all` finalization mines), unconfirmed mempool balances
+//! (`monitor_unverified_mempool`), and the zcashd matrix (its default
+//! activation heights differ from the devtool client's compiled-in regtest
+//! heights, which it rejects at construction). Zebrad only for the same
+//! height reason.
 //!
 //! Requires a `zcash-devtool` binary built with `--features regtest_support`
 //! in `TEST_BINARIES_DIR`/`PATH`, alongside the usual validator binaries.
@@ -110,6 +111,46 @@ where
     assert_eq!(
         pool.spendable_balance(&clients.recipient_balance().await),
         250_000
+    );
+
+    test_manager.close().await;
+}
+
+/// Port of `wallet_to_validator::shield_for_validator` (zebrad): the faucet
+/// sends 250_000 to the recipient's transparent address; the recipient
+/// confirms the transparent receipt, shields it to orchard, and confirms the
+/// orchard balance net of the ZIP-317 fee (250_000 − 15_000 = 235_000 — the
+/// first devtool exercise of `shield`, and the constant flagged as needing
+/// re-verification against devtool's note selection).
+async fn shield_for_validator<Service>()
+where
+    Service: TestService,
+    IndexerError: From<<<Service as ZcashService>::Subscriber as ZcashIndexer>::Error>,
+    <Service as ZcashService>::Subscriber: PollableTip,
+{
+    let (mut test_manager, mut clients) = launch_and_fund_faucet::<Service>().await;
+
+    let recipient_taddr = clients.get_recipient_address("transparent").await;
+    clients.send_from_faucet(&recipient_taddr, 250_000).await;
+    test_manager
+        .generate_blocks_and_wait_for_tip(1, test_manager.subscriber())
+        .await;
+    clients.sync_recipient().await;
+
+    assert_eq!(
+        wallet_tests::Pool::Transparent.spendable_balance(&clients.recipient_balance().await),
+        250_000
+    );
+
+    clients.shield_recipient().await;
+    test_manager
+        .generate_blocks_and_wait_for_tip(1, test_manager.subscriber())
+        .await;
+    clients.sync_recipient().await;
+
+    assert_eq!(
+        wallet_tests::Pool::Orchard.spendable_balance(&clients.recipient_balance().await),
+        235_000
     );
 
     test_manager.close().await;
@@ -397,6 +438,11 @@ mod zebrad {
         }
 
         #[tokio::test(flavor = "multi_thread")]
+        async fn shield_for_validator() {
+            crate::shield_for_validator::<FetchService>().await;
+        }
+
+        #[tokio::test(flavor = "multi_thread")]
         async fn get_transaction_mined() {
             crate::get_transaction_mined::<FetchService>().await;
         }
@@ -441,6 +487,11 @@ mod zebrad {
         #[tokio::test(flavor = "multi_thread")]
         async fn send_to_transparent() {
             crate::send_to_pool::<StateService>(wallet_tests::Pool::Transparent).await;
+        }
+
+        #[tokio::test(flavor = "multi_thread")]
+        async fn shield_for_validator() {
+            crate::shield_for_validator::<StateService>().await;
         }
 
         #[tokio::test(flavor = "multi_thread")]
