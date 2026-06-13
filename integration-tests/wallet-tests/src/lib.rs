@@ -25,6 +25,9 @@ use zingolib_testutils::scenarios::ClientBuilder;
 
 use zingolib::testutils::lightclient::from_inputs;
 
+/// zcash-devtool-backed clients (the zingolib replacement in progress).
+pub mod devtool;
+
 /// Holds zingo lightclients along with the lightclient builder for
 /// wallet-to-validator tests.
 pub struct Clients {

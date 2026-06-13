@@ -34,6 +34,7 @@ podman build -f Containerfile \
   --target "$TARGET" \
   --build-arg "ZCASH_VERSION=$ZCASH_VERSION" \
   --build-arg "ZEBRA_VERSION=$ZEBRA_VERSION" \
+  --build-arg "DEVTOOL_VERSION=$DEVTOOL_VERSION" \
   --build-arg "RUST_VERSION=$RUST_VERSION" \
   --build-arg "UID=$(id -u)" \
   --build-arg "GID=$(id -g)" \

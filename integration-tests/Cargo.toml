@@ -28,7 +28,10 @@ zaino-fetch = { path = "../packages/zaino-fetch" }
 zainod = { path = "../packages/zainod" }
 
 # Zingo-infra (validator launcher; not a wallet dep)
-zcash_local_net = { git = "https://github.com/zingolabs/infrastructure.git", tag = "zcash_local_net_v0.6.0" }
+# TEMPORARY (zingolabs/infrastructure#269): local fork carrying the in-progress
+# client-manager + zcash-devtool work. Restore the git tag once the
+# coordinated changes are tagged upstream.
+zcash_local_net = { path = "/home/nattyb/src/zingolabs/infras/add_client_support/zcash_local_net" }
 
 # Librustzcash
 zcash_protocol = { version = "0.9", features = ["local-consensus"] }

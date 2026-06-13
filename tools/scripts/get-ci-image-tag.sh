@@ -12,7 +12,8 @@ main() {
 
   local tag_vars
   tag_vars="RUST_$RUST_VERSION-ZCASH_$ZCASH_VERSION"
-  tag_vars+="-ZEBRA_$ZEBRA_VERSION-CONTAINER_$container_hash"
+  tag_vars+="-ZEBRA_$ZEBRA_VERSION-DEVTOOL_$DEVTOOL_VERSION"
+  tag_vars+="-CONTAINER_$container_hash"
   echo "$tag_vars"
 }
 
