@@ -18,7 +18,7 @@
 
 use wallet_tests::devtool::DevtoolClients;
 use zaino_proto::proto::service::TxFilter;
-use zaino_state::{ChainIndex, LightWalletIndexer, ZcashIndexer, ZcashService};
+use zaino_state::{LightWalletIndexer, ZcashIndexer, ZcashService};
 use zaino_testutils::{PollableTip, TestManager, TestService, ValidatorKind};
 use zainodlib::error::IndexerError;
 use zcash_local_net::validator::zebrad::Zebrad;
@@ -218,18 +218,19 @@ async fn get_address_tx_ids<Service>()
 where
     Service: TestService,
     IndexerError: From<<<Service as ZcashService>::Subscriber as ZcashIndexer>::Error>,
-    <Service as ZcashService>::Subscriber: PollableTip + LightWalletIndexer + ChainIndex,
+    <Service as ZcashService>::Subscriber: PollableTip + LightWalletIndexer,
 {
     let (mut test_manager, clients, txid_hex) =
         fund_and_send_to::<Service>(wallet_tests::Pool::Transparent).await;
     let recipient_taddr = clients.get_recipient_address("transparent").await;
 
-    let chain_height = test_manager.subscriber().chain_height().await.unwrap().0;
+    // A range start a couple of blocks below the tip, covering the send block.
+    let start = test_manager.subscriber().tip_height().await as u32 - 2;
     let txids = test_manager
         .subscriber()
         .get_address_tx_ids(GetAddressTxIdsRequest::new(
             vec![recipient_taddr],
-            Some(chain_height - 2),
+            Some(start),
             None,
         ))
         .await
