@@ -17,11 +17,14 @@
 //! in `TEST_BINARIES_DIR`/`PATH`, alongside the usual validator binaries.
 
 use wallet_tests::devtool::DevtoolClients;
-use zaino_proto::proto::service::TxFilter;
+use zaino_proto::proto::service::{
+    BlockId, BlockRange, GetAddressUtxosArg, TransparentAddressBlockFilter, TxFilter,
+};
 use zaino_state::{LightWalletIndexer, ZcashIndexer, ZcashService};
 use zaino_testutils::{PollableTip, TestManager, TestService, ValidatorKind};
 use zainodlib::error::IndexerError;
 use zcash_local_net::validator::zebrad::Zebrad;
+use zebra_chain::subtree::NoteCommitmentSubtreeIndex;
 use zebra_rpc::methods::{GetAddressBalanceRequest, GetAddressTxIdsRequest};
 
 /// Launch an orchard-mining zebrad + Zaino on the `Service` backend, build
@@ -264,6 +267,169 @@ where
 
     dbg!(&txid_hex, &utxo_txid);
     assert_eq!(txid_hex.trim(), utxo_txid.to_string());
+
+    test_manager.close().await;
+}
+
+/// Port of `fetch_service_z_get_treestate` (zebrad, smoke): `z_get_treestate`
+/// at the tip height succeeds.
+async fn z_get_treestate<Service>()
+where
+    Service: TestService,
+    IndexerError: From<<<Service as ZcashService>::Subscriber as ZcashIndexer>::Error>,
+    <Service as ZcashService>::Subscriber: PollableTip + LightWalletIndexer,
+{
+    let (mut test_manager, _clients, _txid_hex) =
+        fund_and_send_to::<Service>(wallet_tests::Pool::Orchard).await;
+
+    let tip = test_manager.subscriber().tip_height().await;
+    dbg!(test_manager
+        .subscriber()
+        .z_get_treestate(tip.to_string())
+        .await
+        .unwrap());
+
+    test_manager.close().await;
+}
+
+/// Port of `fetch_service_z_get_subtrees_by_index` (zebrad, smoke):
+/// `z_get_subtrees_by_index` for orchard succeeds.
+async fn z_get_subtrees_by_index<Service>()
+where
+    Service: TestService,
+    IndexerError: From<<<Service as ZcashService>::Subscriber as ZcashIndexer>::Error>,
+    <Service as ZcashService>::Subscriber: PollableTip + LightWalletIndexer,
+{
+    let (mut test_manager, _clients, _txid_hex) =
+        fund_and_send_to::<Service>(wallet_tests::Pool::Orchard).await;
+
+    dbg!(test_manager
+        .subscriber()
+        .z_get_subtrees_by_index("orchard".to_string(), NoteCommitmentSubtreeIndex(0), None)
+        .await
+        .unwrap());
+
+    test_manager.close().await;
+}
+
+/// Port of `fetch_service_get_raw_transaction` (zebrad, smoke):
+/// `get_raw_transaction` for the orchard send's txid succeeds.
+async fn get_raw_transaction<Service>()
+where
+    Service: TestService,
+    IndexerError: From<<<Service as ZcashService>::Subscriber as ZcashIndexer>::Error>,
+    <Service as ZcashService>::Subscriber: PollableTip + LightWalletIndexer,
+{
+    let (mut test_manager, _clients, txid_hex) =
+        fund_and_send_to::<Service>(wallet_tests::Pool::Orchard).await;
+
+    dbg!(test_manager
+        .subscriber()
+        .get_raw_transaction(txid_hex.trim().to_string(), Some(1))
+        .await
+        .unwrap());
+
+    test_manager.close().await;
+}
+
+/// Port of `fetch_service_get_taddress_txids` (zebrad, smoke):
+/// `get_taddress_txids` over the recipient's taddr and a height range around
+/// the send succeeds.
+async fn get_taddress_txids<Service>()
+where
+    Service: TestService,
+    IndexerError: From<<<Service as ZcashService>::Subscriber as ZcashIndexer>::Error>,
+    <Service as ZcashService>::Subscriber: PollableTip + LightWalletIndexer,
+{
+    use futures::StreamExt as _;
+
+    let (mut test_manager, clients, _txid_hex) =
+        fund_and_send_to::<Service>(wallet_tests::Pool::Transparent).await;
+    let recipient_taddr = clients.get_recipient_address("transparent").await;
+
+    let tip = test_manager.subscriber().tip_height().await;
+    let block_filter = TransparentAddressBlockFilter {
+        address: recipient_taddr,
+        range: Some(BlockRange {
+            start: Some(BlockId {
+                height: tip - 2,
+                hash: Vec::new(),
+            }),
+            end: Some(BlockId {
+                height: tip,
+                hash: Vec::new(),
+            }),
+            pool_types: zaino_testutils::all_pools_i32(),
+        }),
+    };
+
+    let stream_items: Vec<_> = test_manager
+        .subscriber()
+        .get_taddress_txids(block_filter)
+        .await
+        .unwrap()
+        .collect()
+        .await;
+    let txids: Vec<_> = stream_items.into_iter().filter_map(|r| r.ok()).collect();
+    dbg!(&txids);
+
+    test_manager.close().await;
+}
+
+/// Port of `fetch_service_get_taddress_utxos` (zebrad, smoke):
+/// `get_address_utxos` over the recipient's taddr succeeds.
+async fn get_taddress_utxos<Service>()
+where
+    Service: TestService,
+    IndexerError: From<<<Service as ZcashService>::Subscriber as ZcashIndexer>::Error>,
+    <Service as ZcashService>::Subscriber: PollableTip + LightWalletIndexer,
+{
+    let (mut test_manager, clients, _txid_hex) =
+        fund_and_send_to::<Service>(wallet_tests::Pool::Transparent).await;
+    let recipient_taddr = clients.get_recipient_address("transparent").await;
+
+    let utxos_arg = GetAddressUtxosArg {
+        addresses: vec![recipient_taddr],
+        start_height: 0,
+        max_entries: 0,
+    };
+    dbg!(test_manager
+        .subscriber()
+        .get_address_utxos(utxos_arg)
+        .await
+        .unwrap());
+
+    test_manager.close().await;
+}
+
+/// Port of `fetch_service_get_taddress_utxos_stream` (zebrad, smoke):
+/// `get_address_utxos_stream` over the recipient's taddr succeeds.
+async fn get_taddress_utxos_stream<Service>()
+where
+    Service: TestService,
+    IndexerError: From<<<Service as ZcashService>::Subscriber as ZcashIndexer>::Error>,
+    <Service as ZcashService>::Subscriber: PollableTip + LightWalletIndexer,
+{
+    use futures::StreamExt as _;
+
+    let (mut test_manager, clients, _txid_hex) =
+        fund_and_send_to::<Service>(wallet_tests::Pool::Transparent).await;
+    let recipient_taddr = clients.get_recipient_address("transparent").await;
+
+    let utxos_arg = GetAddressUtxosArg {
+        addresses: vec![recipient_taddr],
+        start_height: 0,
+        max_entries: 0,
+    };
+    let stream_items: Vec<_> = test_manager
+        .subscriber()
+        .get_address_utxos_stream(utxos_arg)
+        .await
+        .unwrap()
+        .collect()
+        .await;
+    let utxos: Vec<_> = stream_items.into_iter().filter_map(|r| r.ok()).collect();
+    dbg!(utxos);
 
     test_manager.close().await;
 }
@@ -658,6 +824,36 @@ mod zebrad {
         #[tokio::test(flavor = "multi_thread")]
         async fn get_address_utxos() {
             crate::get_address_utxos::<FetchService>().await;
+        }
+
+        #[tokio::test(flavor = "multi_thread")]
+        async fn z_get_treestate() {
+            crate::z_get_treestate::<FetchService>().await;
+        }
+
+        #[tokio::test(flavor = "multi_thread")]
+        async fn z_get_subtrees_by_index() {
+            crate::z_get_subtrees_by_index::<FetchService>().await;
+        }
+
+        #[tokio::test(flavor = "multi_thread")]
+        async fn get_raw_transaction() {
+            crate::get_raw_transaction::<FetchService>().await;
+        }
+
+        #[tokio::test(flavor = "multi_thread")]
+        async fn get_taddress_txids() {
+            crate::get_taddress_txids::<FetchService>().await;
+        }
+
+        #[tokio::test(flavor = "multi_thread")]
+        async fn get_taddress_utxos() {
+            crate::get_taddress_utxos::<FetchService>().await;
+        }
+
+        #[tokio::test(flavor = "multi_thread")]
+        async fn get_taddress_utxos_stream() {
+            crate::get_taddress_utxos_stream::<FetchService>().await;
         }
 
         #[tokio::test(flavor = "multi_thread")]
