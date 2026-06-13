@@ -81,10 +81,16 @@ where
     test_manager.close().await;
 }
 
-/// Port of `wallet_to_validator::send_to_orchard` (zebrad): send 250_000 from
-/// the faucet to the recipient's unified address, mine it in, and assert the
-/// recipient's synced wallet shows the orchard receipt.
-async fn send_to_orchard<Service>()
+/// Port of the `assert_send_to_pool` family from `wallet_to_validator`
+/// (zebrad): send 250_000 from the faucet (spending its orchard coinbase) to
+/// the recipient's `pool` address, mine it in, and assert the recipient's
+/// synced wallet shows the receipt in that pool. Covers `send_to_orchard`
+/// (unified), `send_to_sapling`, and the basic transparent receipt — the
+/// per-pool address wiring is the new surface under test. (The original
+/// `send_to_transparent` additionally mines across the finalization boundary
+/// under transparent mining; that variant is deferred, as it exercises the
+/// transparent-coinbase detection path devtool has not yet been run against.)
+async fn send_to_pool<Service>(pool: wallet_tests::Pool)
 where
     Service: TestService,
     IndexerError: From<<<Service as ZcashService>::Subscriber as ZcashIndexer>::Error>,
@@ -92,8 +98,8 @@ where
 {
     let (mut test_manager, mut clients) = launch_and_fund_faucet::<Service>().await;
 
-    let recipient_ua = clients.get_recipient_address("unified").await;
-    let txid = clients.send_from_faucet(&recipient_ua, 250_000).await;
+    let recipient = clients.get_recipient_address(pool.address_kind()).await;
+    let txid = clients.send_from_faucet(&recipient, 250_000).await;
     dbg!(txid);
 
     test_manager
@@ -102,7 +108,7 @@ where
     clients.sync_recipient().await;
 
     assert_eq!(
-        wallet_tests::Pool::Orchard.spendable_balance(&clients.recipient_balance().await),
+        pool.spendable_balance(&clients.recipient_balance().await),
         250_000
     );
 
@@ -295,7 +301,17 @@ mod zebrad {
 
         #[tokio::test(flavor = "multi_thread")]
         async fn send_to_orchard() {
-            crate::send_to_orchard::<FetchService>().await;
+            crate::send_to_pool::<FetchService>(wallet_tests::Pool::Orchard).await;
+        }
+
+        #[tokio::test(flavor = "multi_thread")]
+        async fn send_to_sapling() {
+            crate::send_to_pool::<FetchService>(wallet_tests::Pool::Sapling).await;
+        }
+
+        #[tokio::test(flavor = "multi_thread")]
+        async fn send_to_transparent() {
+            crate::send_to_pool::<FetchService>(wallet_tests::Pool::Transparent).await;
         }
 
         #[tokio::test(flavor = "multi_thread")]
@@ -327,7 +343,17 @@ mod zebrad {
 
         #[tokio::test(flavor = "multi_thread")]
         async fn send_to_orchard() {
-            crate::send_to_orchard::<StateService>().await;
+            crate::send_to_pool::<StateService>(wallet_tests::Pool::Orchard).await;
+        }
+
+        #[tokio::test(flavor = "multi_thread")]
+        async fn send_to_sapling() {
+            crate::send_to_pool::<StateService>(wallet_tests::Pool::Sapling).await;
+        }
+
+        #[tokio::test(flavor = "multi_thread")]
+        async fn send_to_transparent() {
+            crate::send_to_pool::<StateService>(wallet_tests::Pool::Transparent).await;
         }
 
         #[tokio::test(flavor = "multi_thread")]
