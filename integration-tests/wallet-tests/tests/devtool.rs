@@ -769,6 +769,158 @@ async fn block_range_returns_all_pools() {
     svc.test_manager.close().await;
 }
 
+/// Launch dual fetch+state services, fund the faucet, send 250_000 to the
+/// recipient's `pool` address, and mine it in. Returns the services, the
+/// broadcast txid hex (display order), and the recipient address. The devtool
+/// analogue of the state_service `fund_and_send` (dual-subscriber); the wallet
+/// clients are dropped once the send is mined (the queries below hit zaino).
+async fn fund_and_send_dual(
+    pool: wallet_tests::Pool,
+) -> (zaino_testutils::StateAndFetchServices<Zebrad>, String, String) {
+    let svc = zaino_testutils::launch_state_and_fetch_services_mining_to::<Zebrad>(
+        zaino_testutils::SHIELDED_FUNDING_POOL,
+        &ValidatorKind::Zebrad,
+        None,
+        true,
+        Some(zebra_chain::parameters::NetworkKind::Regtest),
+    )
+    .await;
+
+    let mut clients = wallet_tests::devtool::build_clients(
+        svc.test_manager
+            .zaino_grpc_listen_address
+            .expect("zaino enabled")
+            .port(),
+    )
+    .await;
+
+    svc.generate_blocks_and_wait_for_tips(1).await;
+    clients.sync_faucet().await;
+    let recipient = clients.get_recipient_address(pool.address_kind()).await;
+    let txid_hex = clients.send_from_faucet(&recipient, 250_000).await;
+    svc.generate_blocks_and_wait_for_tips(1).await;
+
+    (svc, txid_hex, recipient)
+}
+
+/// Port of `state_service_z_get_treestate` (zebrad): the fetch and state
+/// indexers agree on `z_get_treestate` at the tip.
+async fn z_get_treestate_fetch_vs_state() {
+    let (mut svc, _txid_hex, _addr) = fund_and_send_dual(wallet_tests::Pool::Orchard).await;
+
+    let tip = svc.fetch_subscriber.tip_height().await;
+    let fetch = svc
+        .fetch_subscriber
+        .z_get_treestate(tip.to_string())
+        .await
+        .unwrap();
+    let state = svc
+        .state_subscriber
+        .z_get_treestate(tip.to_string())
+        .await
+        .unwrap();
+    assert_eq!(fetch, state);
+
+    svc.test_manager.close().await;
+}
+
+/// Port of `state_service_z_get_subtrees_by_index` (zebrad): the fetch and
+/// state indexers agree on `z_get_subtrees_by_index` for orchard.
+async fn z_get_subtrees_by_index_fetch_vs_state() {
+    let (mut svc, _txid_hex, _addr) = fund_and_send_dual(wallet_tests::Pool::Orchard).await;
+
+    let fetch = svc
+        .fetch_subscriber
+        .z_get_subtrees_by_index("orchard".to_string(), NoteCommitmentSubtreeIndex(0), None)
+        .await
+        .unwrap();
+    let state = svc
+        .state_subscriber
+        .z_get_subtrees_by_index("orchard".to_string(), NoteCommitmentSubtreeIndex(0), None)
+        .await
+        .unwrap();
+    assert_eq!(fetch, state);
+
+    svc.test_manager.close().await;
+}
+
+/// Port of `state_service_get_raw_transaction` (zebrad): the fetch and state
+/// indexers agree on `get_raw_transaction` for the orchard send's txid.
+async fn get_raw_transaction_fetch_vs_state() {
+    let (mut svc, txid_hex, _addr) = fund_and_send_dual(wallet_tests::Pool::Orchard).await;
+    let txid = txid_hex.trim().to_string();
+
+    let fetch = svc
+        .fetch_subscriber
+        .get_raw_transaction(txid.clone(), Some(1))
+        .await
+        .unwrap();
+    let state = svc
+        .state_subscriber
+        .get_raw_transaction(txid, Some(1))
+        .await
+        .unwrap();
+    assert_eq!(fetch, state);
+
+    svc.test_manager.close().await;
+}
+
+/// Port of `state_service_get_address_tx_ids` (zebrad): `get_address_tx_ids`
+/// over the recipient's taddr returns the send's txid, and the fetch and state
+/// indexers agree.
+async fn get_address_tx_ids_fetch_vs_state() {
+    let (mut svc, txid_hex, recipient_taddr) =
+        fund_and_send_dual(wallet_tests::Pool::Transparent).await;
+
+    let tip = svc.fetch_subscriber.tip_height().await;
+    let start = Some((tip - 2) as u32);
+    let end = Some(tip as u32);
+    let fetch = svc
+        .fetch_subscriber
+        .get_address_tx_ids(GetAddressTxIdsRequest::new(
+            vec![recipient_taddr.clone()],
+            start,
+            end,
+        ))
+        .await
+        .unwrap();
+    let state = svc
+        .state_subscriber
+        .get_address_tx_ids(GetAddressTxIdsRequest::new(vec![recipient_taddr], start, end))
+        .await
+        .unwrap();
+    assert_eq!(txid_hex.trim(), fetch[0]);
+    assert_eq!(fetch, state);
+
+    svc.test_manager.close().await;
+}
+
+/// Port of `state_service_get_address_utxos` (zebrad): `z_get_address_utxos`
+/// over the recipient's taddr returns the send's txid, and the fetch and state
+/// indexers agree on it.
+async fn get_address_utxos_fetch_vs_state() {
+    let (mut svc, txid_hex, recipient_taddr) =
+        fund_and_send_dual(wallet_tests::Pool::Transparent).await;
+
+    let fetch_utxos = svc
+        .fetch_subscriber
+        .z_get_address_utxos(GetAddressBalanceRequest::new(vec![recipient_taddr.clone()]))
+        .await
+        .unwrap();
+    let (_, fetch_txid, ..) = fetch_utxos[0].into_parts();
+    let state_utxos = svc
+        .state_subscriber
+        .z_get_address_utxos(GetAddressBalanceRequest::new(vec![recipient_taddr]))
+        .await
+        .unwrap();
+    let (_, state_txid, ..) = state_utxos[0].into_parts();
+
+    assert_eq!(txid_hex.trim(), fetch_txid.to_string());
+    assert_eq!(fetch_txid.to_string(), state_txid.to_string());
+
+    svc.test_manager.close().await;
+}
+
 mod zebrad {
     // FetchService is a deprecated re-export; the deprecation fires at the
     // turbofish use sites below, so the allow covers the whole module.
@@ -872,6 +1024,31 @@ mod zebrad {
     #[tokio::test(flavor = "multi_thread")]
     async fn block_range_returns_all_pools() {
         crate::block_range_returns_all_pools().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn z_get_treestate_fetch_vs_state() {
+        crate::z_get_treestate_fetch_vs_state().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn z_get_subtrees_by_index_fetch_vs_state() {
+        crate::z_get_subtrees_by_index_fetch_vs_state().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn get_raw_transaction_fetch_vs_state() {
+        crate::get_raw_transaction_fetch_vs_state().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn get_address_tx_ids_fetch_vs_state() {
+        crate::get_address_tx_ids_fetch_vs_state().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn get_address_utxos_fetch_vs_state() {
+        crate::get_address_utxos_fetch_vs_state().await;
     }
 
     mod state_service {
