@@ -156,6 +156,81 @@ where
     test_manager.close().await;
 }
 
+/// Launch, fund the faucet with two orchard notes, and broadcast (without
+/// mining) one transparent and one unified send into the mempool. Returns the
+/// manager and the two broadcast txids (transparent, then unified). The
+/// devtool analogue of `fund_and_fill_mempool`.
+async fn fund_and_fill_mempool<Service>() -> (TestManager<Zebrad, Service>, String, String)
+where
+    Service: TestService,
+    IndexerError: From<<<Service as ZcashService>::Subscriber as ZcashIndexer>::Error>,
+    <Service as ZcashService>::Subscriber: PollableTip,
+{
+    let test_manager = TestManager::<Zebrad, Service>::launch_mining_to(
+        zaino_testutils::SHIELDED_FUNDING_POOL,
+        &ValidatorKind::Zebrad,
+        None,
+        None,
+        None,
+        true,
+        false,
+        false,
+    )
+    .await
+    .expect("launch TestManager");
+
+    let mut clients = wallet_tests::devtool::build_clients(
+        test_manager
+            .zaino_grpc_listen_address
+            .expect("zaino enabled")
+            .port(),
+    )
+    .await;
+
+    // Two orchard coinbase notes (one per unmined send — devtool will not
+    // chain unconfirmed change).
+    test_manager
+        .generate_blocks_and_wait_for_tip(2, test_manager.subscriber())
+        .await;
+    clients.sync_faucet().await;
+
+    let recipient_taddr = clients.get_recipient_address("transparent").await;
+    let recipient_ua = clients.get_recipient_address("unified").await;
+    let transparent_txid = clients.send_from_faucet(&recipient_taddr, 250_000).await;
+    let unified_txid = clients.send_from_faucet(&recipient_ua, 250_000).await;
+
+    // Allow the broadcaster and the indexer to observe the unmined transactions.
+    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+
+    (test_manager, transparent_txid, unified_txid)
+}
+
+/// Port of `fetch_service_get_raw_mempool` (zebrad): with two transactions
+/// broadcast but unmined, the indexer's `get_raw_mempool` matches the
+/// validator's own JSON-RPC `getrawmempool`.
+async fn get_raw_mempool<Service>()
+where
+    Service: TestService,
+    IndexerError: From<<<Service as ZcashService>::Subscriber as ZcashIndexer>::Error>,
+    <Service as ZcashService>::Subscriber: PollableTip + LightWalletIndexer,
+{
+    let (mut test_manager, _transparent_txid, _unified_txid) =
+        fund_and_fill_mempool::<Service>().await;
+
+    let json_service = test_manager.full_node_jsonrpc_connector().await;
+
+    let mut zaino_mempool = test_manager.subscriber().get_raw_mempool().await.unwrap();
+    let mut validator_mempool = json_service.get_raw_mempool().await.unwrap().transactions;
+
+    dbg!(&zaino_mempool);
+    dbg!(&validator_mempool);
+    zaino_mempool.sort();
+    validator_mempool.sort();
+    assert_eq!(validator_mempool, zaino_mempool);
+
+    test_manager.close().await;
+}
+
 /// Fund the faucet, send 250_000 to the recipient's unified address, and mine
 /// it in. Returns the manager and the broadcast txid in zaino's internal byte
 /// order. The devtool analogue of `fund_and_send(Pool::Orchard)`; the wallet
@@ -448,6 +523,11 @@ mod zebrad {
         }
 
         #[tokio::test(flavor = "multi_thread")]
+        async fn get_raw_mempool() {
+            crate::get_raw_mempool::<FetchService>().await;
+        }
+
+        #[tokio::test(flavor = "multi_thread")]
         async fn get_transaction_mempool() {
             crate::get_transaction_mempool::<FetchService>().await;
         }
@@ -497,6 +577,11 @@ mod zebrad {
         #[tokio::test(flavor = "multi_thread")]
         async fn get_transaction_mined() {
             crate::get_transaction_mined::<StateService>().await;
+        }
+
+        #[tokio::test(flavor = "multi_thread")]
+        async fn get_raw_mempool() {
+            crate::get_raw_mempool::<StateService>().await;
         }
     }
 }
