@@ -62,6 +62,18 @@ pub async fn build_clients(zaino_grpc_listen_port: u16) -> DevtoolClients {
     DevtoolClients { faucet, recipient }
 }
 
+/// Convert a devtool txid — the hex string `send`/`shield` return, which
+/// devtool prints in display (reversed) order via `TxId`'s `Display` — into
+/// the internal-order 32 bytes that zaino's `TxFilter` and compact-tx
+/// comparisons use (the order zingolib's `TxId::as_ref()` yields). Any test
+/// that then queries zaino with the result validates the order: a wrong one
+/// simply fails to match the indexed transaction.
+pub fn txid_internal_bytes(devtool_txid_hex: &str) -> Vec<u8> {
+    let mut bytes = hex::decode(devtool_txid_hex.trim()).expect("devtool txid is valid hex");
+    bytes.reverse();
+    bytes
+}
+
 impl DevtoolClients {
     /// The faucet address that routes funds into `pool`
     /// (`"transparent" | "sapling" | "unified"`).

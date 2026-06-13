@@ -16,7 +16,8 @@
 //! in `TEST_BINARIES_DIR`/`PATH`, alongside the usual validator binaries.
 
 use wallet_tests::devtool::DevtoolClients;
-use zaino_state::{ZcashIndexer, ZcashService};
+use zaino_proto::proto::service::TxFilter;
+use zaino_state::{LightWalletIndexer, ZcashIndexer, ZcashService};
 use zaino_testutils::{PollableTip, TestManager, TestService, ValidatorKind};
 use zainodlib::error::IndexerError;
 use zcash_local_net::validator::zebrad::Zebrad;
@@ -108,6 +109,178 @@ where
     test_manager.close().await;
 }
 
+/// Fund the faucet, send 250_000 to the recipient's unified address, and mine
+/// it in. Returns the manager and the broadcast txid in zaino's internal byte
+/// order. The devtool analogue of `fund_and_send(Pool::Orchard)`; the wallet
+/// clients are dropped once the transaction is mined (the queries below hit
+/// zaino, not the wallet).
+async fn fund_and_send_orchard<Service>() -> (TestManager<Zebrad, Service>, Vec<u8>)
+where
+    Service: TestService,
+    IndexerError: From<<<Service as ZcashService>::Subscriber as ZcashIndexer>::Error>,
+    <Service as ZcashService>::Subscriber: PollableTip,
+{
+    let (test_manager, mut clients) = launch_and_fund_faucet::<Service>().await;
+
+    let recipient_ua = clients.get_recipient_address("unified").await;
+    let txid_hex = clients.send_from_faucet(&recipient_ua, 250_000).await;
+
+    test_manager
+        .generate_blocks_and_wait_for_tip(1, test_manager.subscriber())
+        .await;
+
+    (test_manager, wallet_tests::devtool::txid_internal_bytes(&txid_hex))
+}
+
+/// Port of `fetch_service_get_transaction_mined` (zebrad): the indexer serves
+/// `get_transaction` for the mined orchard send, keyed by its txid. Also
+/// confirms `txid_internal_bytes` yields the order the indexer matches on.
+async fn get_transaction_mined<Service>()
+where
+    Service: TestService,
+    IndexerError: From<<<Service as ZcashService>::Subscriber as ZcashIndexer>::Error>,
+    <Service as ZcashService>::Subscriber: PollableTip + LightWalletIndexer,
+{
+    let (mut test_manager, txid_bytes) = fund_and_send_orchard::<Service>().await;
+
+    let tx_filter = TxFilter {
+        block: None,
+        index: 0,
+        hash: txid_bytes,
+    };
+    let raw_transaction = test_manager
+        .subscriber()
+        .get_transaction(tx_filter)
+        .await
+        .unwrap();
+    dbg!(raw_transaction);
+
+    test_manager.close().await;
+}
+
+/// Port of `fetch_service_get_transaction_mempool` (zebrad): the indexer
+/// serves `get_transaction` for an orchard send that is broadcast but not
+/// mined, keyed by its txid — i.e. from the mempool.
+async fn get_transaction_mempool<Service>()
+where
+    Service: TestService,
+    IndexerError: From<<<Service as ZcashService>::Subscriber as ZcashIndexer>::Error>,
+    <Service as ZcashService>::Subscriber: PollableTip + LightWalletIndexer,
+{
+    let (mut test_manager, mut clients) = launch_and_fund_faucet::<Service>().await;
+
+    let recipient_ua = clients.get_recipient_address("unified").await;
+    let txid_hex = clients.send_from_faucet(&recipient_ua, 250_000).await;
+    let tx_filter = TxFilter {
+        block: None,
+        index: 0,
+        hash: wallet_tests::devtool::txid_internal_bytes(&txid_hex),
+    };
+
+    // Let the broadcaster and the indexer observe the unmined transaction.
+    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+
+    let raw_transaction = test_manager
+        .subscriber()
+        .get_transaction(tx_filter)
+        .await
+        .unwrap();
+    dbg!(raw_transaction);
+
+    test_manager.close().await;
+}
+
+/// Port of `state_service_get_block_range_returns_default_pools` (zebrad):
+/// fund the faucet, send 250_000 to the recipient's unified address, mine it
+/// in, then assert that `get_block_range` with no pools requested returns the
+/// same shielded compact blocks as requesting sapling+orchard, that the
+/// fetch- and state-service indexers agree, and that the tip block holds the
+/// shielded coinbase and the send with no transparent data.
+async fn block_range_returns_default_pools() {
+    let mut svc = zaino_testutils::launch_state_and_fetch_services_mining_to::<Zebrad>(
+        zaino_testutils::SHIELDED_FUNDING_POOL,
+        &ValidatorKind::Zebrad,
+        None,
+        true,
+        Some(zebra_chain::parameters::NetworkKind::Regtest),
+    )
+    .await;
+
+    let mut clients = wallet_tests::devtool::build_clients(
+        svc.test_manager
+            .zaino_grpc_listen_address
+            .expect("zaino enabled")
+            .port(),
+    )
+    .await;
+
+    // fund_and_send(Orchard): one orchard coinbase note, then send it to the
+    // recipient's unified address and mine the send in.
+    svc.generate_blocks_and_wait_for_tips(1).await;
+    clients.sync_faucet().await;
+    let recipient_ua = clients.get_recipient_address("unified").await;
+    clients.send_from_faucet(&recipient_ua, 250_000).await;
+    svc.generate_blocks_and_wait_for_tips(1).await;
+
+    let start_height: u64 = 1;
+    let end_height: u64 = svc.fetch_subscriber.tip_height().await;
+
+    let fetch_default = zaino_testutils::collect_block_range(
+        &svc.fetch_subscriber,
+        start_height,
+        end_height,
+        vec![],
+    )
+    .await;
+    let fetch_shielded = zaino_testutils::collect_block_range(
+        &svc.fetch_subscriber,
+        start_height,
+        end_height,
+        zaino_testutils::shielded_pools_i32(),
+    )
+    .await;
+    assert_eq!(fetch_default, fetch_shielded);
+
+    let state_shielded = zaino_testutils::collect_block_range(
+        &svc.state_subscriber,
+        start_height,
+        end_height,
+        zaino_testutils::shielded_pools_i32(),
+    )
+    .await;
+    let state_default = zaino_testutils::collect_block_range(
+        &svc.state_subscriber,
+        start_height,
+        end_height,
+        vec![],
+    )
+    .await;
+    assert_eq!(state_default, state_shielded);
+
+    assert_eq!(fetch_default, state_default);
+
+    let compact_block = state_default.last().unwrap();
+    assert_eq!(compact_block.height, end_height);
+    // The tip block holds the shielded coinbase (the miner address is a
+    // shielded pool) and the send.
+    assert_eq!(compact_block.vtx.len(), 2);
+    assert_eq!(compact_block.vtx.last().unwrap().index, 1);
+    for tx in &compact_block.vtx {
+        assert_eq!(
+            tx.vin,
+            vec![],
+            "transparent data should not be present when no pool types are specified in the request."
+        );
+        assert_eq!(
+            tx.vout,
+            vec![],
+            "transparent data should not be present when no pool types are specified in the request."
+        );
+    }
+
+    svc.test_manager.close().await;
+}
+
 mod zebrad {
     // FetchService is a deprecated re-export; the deprecation fires at the
     // turbofish use sites below, so the allow covers the whole module.
@@ -124,6 +297,23 @@ mod zebrad {
         async fn send_to_orchard() {
             crate::send_to_orchard::<FetchService>().await;
         }
+
+        #[tokio::test(flavor = "multi_thread")]
+        async fn get_transaction_mined() {
+            crate::get_transaction_mined::<FetchService>().await;
+        }
+
+        #[tokio::test(flavor = "multi_thread")]
+        async fn get_transaction_mempool() {
+            crate::get_transaction_mempool::<FetchService>().await;
+        }
+    }
+
+    // Spans both the fetch and state indexers (compares their answers), so it
+    // is not a per-backend test.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn block_range_returns_default_pools() {
+        crate::block_range_returns_default_pools().await;
     }
 
     mod state_service {
@@ -138,6 +328,11 @@ mod zebrad {
         #[tokio::test(flavor = "multi_thread")]
         async fn send_to_orchard() {
             crate::send_to_orchard::<StateService>().await;
+        }
+
+        #[tokio::test(flavor = "multi_thread")]
+        async fn get_transaction_mined() {
+            crate::get_transaction_mined::<StateService>().await;
         }
     }
 }
