@@ -515,6 +515,53 @@ where
     test_manager.close().await;
 }
 
+/// Port of `fetch_service_get_mempool_stream` (zebrad): a `get_mempool_stream`
+/// subscription opened before two sends observes those unmined transactions.
+/// Smoke test — the original only `dbg!`s the collected stream.
+async fn get_mempool_stream<Service>()
+where
+    Service: TestService,
+    IndexerError: From<<<Service as ZcashService>::Subscriber as ZcashIndexer>::Error>,
+    <Service as ZcashService>::Subscriber: PollableTip + LightWalletIndexer,
+{
+    use futures::StreamExt as _;
+
+    // Two orchard notes — one per unmined send.
+    let (mut test_manager, mut clients) = launch_and_fund_faucet::<Service>(2).await;
+
+    // Subscribe before the sends so the stream observes them entering the mempool.
+    let subscriber = test_manager.subscriber().clone();
+    let stream_handle = tokio::spawn(async move {
+        let stream = subscriber.get_mempool_stream().await.unwrap();
+        let items: Vec<_> = stream.collect().await;
+        items
+            .into_iter()
+            .filter_map(|result| result.ok())
+            .collect::<Vec<_>>()
+    });
+
+    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+
+    let recipient_ua = clients.get_recipient_address("unified").await;
+    let recipient_taddr = clients.get_recipient_address("transparent").await;
+    clients.send_from_faucet(&recipient_taddr, 250_000).await;
+    clients.send_from_faucet(&recipient_ua, 250_000).await;
+
+    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    test_manager
+        .generate_blocks_and_wait_for_tip(1, test_manager.subscriber())
+        .await;
+
+    let mempool_tx = stream_handle.await.unwrap();
+
+    let mut sorted_mempool_tx = mempool_tx.clone();
+    sorted_mempool_tx.sort_by_key(|tx| tx.data.clone());
+
+    dbg!(sorted_mempool_tx);
+
+    test_manager.close().await;
+}
+
 /// Fund the faucet, send 250_000 to the recipient's unified address, and mine
 /// it in. Returns the manager and the broadcast txid in zaino's internal byte
 /// order. The devtool analogue of `fund_and_send(Pool::Orchard)`; the wallet
@@ -921,6 +968,98 @@ async fn get_address_utxos_fetch_vs_state() {
     svc.test_manager.close().await;
 }
 
+/// Dual-backend analogue of [`fund_and_fill_mempool`]: launch state+fetch
+/// services, fund the faucet with two orchard notes, then broadcast a
+/// transparent and a unified send (unmined) so both indexers' mempools hold
+/// them. Returns the services.
+async fn fund_and_fill_mempool_dual() -> zaino_testutils::StateAndFetchServices<Zebrad> {
+    let svc = zaino_testutils::launch_state_and_fetch_services_mining_to::<Zebrad>(
+        zaino_testutils::SHIELDED_FUNDING_POOL,
+        &ValidatorKind::Zebrad,
+        None,
+        true,
+        Some(zebra_chain::parameters::NetworkKind::Regtest),
+    )
+    .await;
+
+    let mut clients = wallet_tests::devtool::build_clients(
+        svc.test_manager
+            .zaino_grpc_listen_address
+            .expect("zaino enabled")
+            .port(),
+    )
+    .await;
+
+    // Two orchard notes — one per unmined send.
+    svc.generate_blocks_and_wait_for_tips(2).await;
+    clients.sync_faucet().await;
+
+    let recipient_taddr = clients.get_recipient_address("transparent").await;
+    let recipient_ua = clients.get_recipient_address("unified").await;
+    clients.send_from_faucet(&recipient_taddr, 250_000).await;
+    clients.send_from_faucet(&recipient_ua, 250_000).await;
+
+    // Allow the broadcaster and the indexers to observe the unmined transactions.
+    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+
+    svc
+}
+
+/// Port of `state_service_get_raw_mempool` (zebrad): the fetch and state
+/// indexers agree on `get_raw_mempool` while two sends sit unmined.
+async fn get_raw_mempool_fetch_vs_state() {
+    let mut svc = fund_and_fill_mempool_dual().await;
+
+    let mut fetch_service_mempool = svc.fetch_subscriber.get_raw_mempool().await.unwrap();
+    let mut state_service_mempool = svc.state_subscriber.get_raw_mempool().await.unwrap();
+
+    dbg!(&fetch_service_mempool);
+    fetch_service_mempool.sort();
+
+    dbg!(&state_service_mempool);
+    state_service_mempool.sort();
+
+    assert_eq!(fetch_service_mempool, state_service_mempool);
+
+    svc.test_manager.close().await;
+}
+
+/// Port of `state_service_get_address_transactions_regtest` (zebrad): after a
+/// transparent send to the recipient, the state indexer's
+/// `get_taddress_transactions` over that taddr yields at least one transaction.
+async fn get_address_transactions_regtest() {
+    use futures::StreamExt as _;
+
+    let (mut svc, _txid_hex, recipient_taddr) =
+        fund_and_send_dual(wallet_tests::Pool::Transparent).await;
+
+    let chain_height = svc.fetch_subscriber.tip_height().await;
+    dbg!(&chain_height);
+
+    let state_service_txids = svc
+        .state_subscriber
+        .get_taddress_transactions(TransparentAddressBlockFilter {
+            address: recipient_taddr,
+            range: Some(BlockRange {
+                start: Some(BlockId {
+                    height: chain_height - 2,
+                    hash: vec![],
+                }),
+                end: Some(BlockId {
+                    height: chain_height,
+                    hash: vec![],
+                }),
+                pool_types: zaino_testutils::all_pools_i32(),
+            }),
+        })
+        .await
+        .unwrap();
+
+    assert!(state_service_txids.count().await > 0);
+
+    svc.test_manager.close().await;
+}
+
 mod zebrad {
     // FetchService is a deprecated re-export; the deprecation fires at the
     // turbofish use sites below, so the allow covers the whole module.
@@ -966,6 +1105,11 @@ mod zebrad {
         #[tokio::test(flavor = "multi_thread")]
         async fn get_mempool_tx() {
             crate::get_mempool_tx::<FetchService>().await;
+        }
+
+        #[tokio::test(flavor = "multi_thread")]
+        async fn get_mempool_stream() {
+            crate::get_mempool_stream::<FetchService>().await;
         }
 
         #[tokio::test(flavor = "multi_thread")]
@@ -1049,6 +1193,16 @@ mod zebrad {
     #[tokio::test(flavor = "multi_thread")]
     async fn get_address_utxos_fetch_vs_state() {
         crate::get_address_utxos_fetch_vs_state().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn get_raw_mempool_fetch_vs_state() {
+        crate::get_raw_mempool_fetch_vs_state().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn get_address_transactions_regtest() {
+        crate::get_address_transactions_regtest().await;
     }
 
     mod state_service {
