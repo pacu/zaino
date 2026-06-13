@@ -23,12 +23,17 @@ use zaino_testutils::{PollableTip, TestManager, TestService, ValidatorKind};
 use zainodlib::error::IndexerError;
 use zcash_local_net::validator::zebrad::Zebrad;
 
-/// Launch an orchard-mining zebrad + Zaino on the `Service` backend and build
-/// devtool faucet/recipient wallets against it. Mines one block past the
-/// launch (height 1 is the sapling-activation coinbase; height 2 the first
-/// orchard coinbase) so the faucet holds a spendable orchard note, and syncs
-/// the faucet. The shared preamble of the ports below.
-async fn launch_and_fund_faucet<Service>() -> (TestManager<Zebrad, Service>, DevtoolClients)
+/// Launch an orchard-mining zebrad + Zaino on the `Service` backend, build
+/// devtool faucet/recipient wallets against it, mine `coinbase_blocks` blocks
+/// past the launch, and sync the faucet. Each mined block past the launch is
+/// an orchard coinbase note for the faucet (height 1 is the
+/// sapling-activation coinbase), so `coinbase_blocks` is the number of
+/// spendable orchard notes the faucet ends with — one per send a test makes
+/// before mining (devtool will not chain unconfirmed change). The shared
+/// launch+fund preamble of the ports below.
+async fn launch_and_fund_faucet<Service>(
+    coinbase_blocks: u32,
+) -> (TestManager<Zebrad, Service>, DevtoolClients)
 where
     Service: TestService,
     IndexerError: From<<<Service as ZcashService>::Subscriber as ZcashIndexer>::Error>,
@@ -56,7 +61,7 @@ where
     .await;
 
     test_manager
-        .generate_blocks_and_wait_for_tip(1, test_manager.subscriber())
+        .generate_blocks_and_wait_for_tip(coinbase_blocks, test_manager.subscriber())
         .await;
     clients.sync_faucet().await;
 
@@ -71,7 +76,7 @@ where
     IndexerError: From<<<Service as ZcashService>::Subscriber as ZcashIndexer>::Error>,
     <Service as ZcashService>::Subscriber: PollableTip,
 {
-    let (mut test_manager, clients) = launch_and_fund_faucet::<Service>().await;
+    let (mut test_manager, clients) = launch_and_fund_faucet::<Service>(1).await;
 
     let faucet_balance = dbg!(clients.faucet_balance().await);
     assert!(
@@ -97,7 +102,7 @@ where
     IndexerError: From<<<Service as ZcashService>::Subscriber as ZcashIndexer>::Error>,
     <Service as ZcashService>::Subscriber: PollableTip,
 {
-    let (mut test_manager, mut clients) = launch_and_fund_faucet::<Service>().await;
+    let (mut test_manager, mut clients) = launch_and_fund_faucet::<Service>(1).await;
 
     let recipient = clients.get_recipient_address(pool.address_kind()).await;
     let txid = clients.send_from_faucet(&recipient, 250_000).await;
@@ -128,7 +133,7 @@ where
     IndexerError: From<<<Service as ZcashService>::Subscriber as ZcashIndexer>::Error>,
     <Service as ZcashService>::Subscriber: PollableTip,
 {
-    let (mut test_manager, mut clients) = launch_and_fund_faucet::<Service>().await;
+    let (mut test_manager, mut clients) = launch_and_fund_faucet::<Service>(1).await;
 
     let recipient_taddr = clients.get_recipient_address("transparent").await;
     clients.send_from_faucet(&recipient_taddr, 250_000).await;
@@ -166,33 +171,8 @@ where
     IndexerError: From<<<Service as ZcashService>::Subscriber as ZcashIndexer>::Error>,
     <Service as ZcashService>::Subscriber: PollableTip,
 {
-    let test_manager = TestManager::<Zebrad, Service>::launch_mining_to(
-        zaino_testutils::SHIELDED_FUNDING_POOL,
-        &ValidatorKind::Zebrad,
-        None,
-        None,
-        None,
-        true,
-        false,
-        false,
-    )
-    .await
-    .expect("launch TestManager");
-
-    let mut clients = wallet_tests::devtool::build_clients(
-        test_manager
-            .zaino_grpc_listen_address
-            .expect("zaino enabled")
-            .port(),
-    )
-    .await;
-
-    // Two orchard coinbase notes (one per unmined send — devtool will not
-    // chain unconfirmed change).
-    test_manager
-        .generate_blocks_and_wait_for_tip(2, test_manager.subscriber())
-        .await;
-    clients.sync_faucet().await;
+    // Two orchard notes — one per unmined send.
+    let (test_manager, mut clients) = launch_and_fund_faucet::<Service>(2).await;
 
     let recipient_taddr = clients.get_recipient_address("transparent").await;
     let recipient_ua = clients.get_recipient_address("unified").await;
@@ -231,6 +211,61 @@ where
     test_manager.close().await;
 }
 
+/// Port of `fetch_service_get_mempool_tx` (zebrad): the `get_mempool_tx`
+/// stream returns the two unmined transactions keyed by txid (internal byte
+/// order), and the exclude-by-txid-suffix filter drops the named one.
+async fn get_mempool_tx<Service>()
+where
+    Service: TestService,
+    IndexerError: From<<<Service as ZcashService>::Subscriber as ZcashIndexer>::Error>,
+    <Service as ZcashService>::Subscriber: PollableTip + LightWalletIndexer,
+{
+    use futures::StreamExt as _;
+    use zaino_proto::proto::service::GetMempoolTxRequest;
+
+    let (mut test_manager, transparent_txid, unified_txid) = fund_and_fill_mempool::<Service>().await;
+
+    let to_bytes = |hex: &str| -> [u8; 32] {
+        wallet_tests::devtool::txid_internal_bytes(hex)
+            .try_into()
+            .expect("txid is 32 bytes")
+    };
+    let mut sorted_txids = [to_bytes(&transparent_txid), to_bytes(&unified_txid)];
+    sorted_txids.sort();
+
+    let subscriber = test_manager.subscriber().clone();
+    let collect = |req: GetMempoolTxRequest| {
+        let subscriber = subscriber.clone();
+        async move {
+            let stream_items: Vec<_> = subscriber.get_mempool_tx(req).await.unwrap().collect().await;
+            let mut txs: Vec<_> = stream_items.into_iter().filter_map(|r| r.ok()).collect();
+            txs.sort_by_key(|tx| tx.txid.clone());
+            txs
+        }
+    };
+
+    // Both transactions present, no exclusions.
+    let all = collect(GetMempoolTxRequest {
+        exclude_txid_suffixes: Vec::new(),
+        pool_types: Vec::new(),
+    })
+    .await;
+    assert_eq!(all.len(), 2);
+    assert_eq!(all[0].txid, sorted_txids[0]);
+    assert_eq!(all[1].txid, sorted_txids[1]);
+
+    // Excluding the first by its txid suffix leaves only the second.
+    let remaining = collect(GetMempoolTxRequest {
+        exclude_txid_suffixes: vec![sorted_txids[0][8..].to_vec()],
+        pool_types: Vec::new(),
+    })
+    .await;
+    assert_eq!(remaining.len(), 1);
+    assert_eq!(remaining[0].txid, sorted_txids[1]);
+
+    test_manager.close().await;
+}
+
 /// Fund the faucet, send 250_000 to the recipient's unified address, and mine
 /// it in. Returns the manager and the broadcast txid in zaino's internal byte
 /// order. The devtool analogue of `fund_and_send(Pool::Orchard)`; the wallet
@@ -242,7 +277,7 @@ where
     IndexerError: From<<<Service as ZcashService>::Subscriber as ZcashIndexer>::Error>,
     <Service as ZcashService>::Subscriber: PollableTip,
 {
-    let (test_manager, mut clients) = launch_and_fund_faucet::<Service>().await;
+    let (test_manager, mut clients) = launch_and_fund_faucet::<Service>(1).await;
 
     let recipient_ua = clients.get_recipient_address("unified").await;
     let txid_hex = clients.send_from_faucet(&recipient_ua, 250_000).await;
@@ -289,7 +324,7 @@ where
     IndexerError: From<<<Service as ZcashService>::Subscriber as ZcashIndexer>::Error>,
     <Service as ZcashService>::Subscriber: PollableTip + LightWalletIndexer,
 {
-    let (mut test_manager, mut clients) = launch_and_fund_faucet::<Service>().await;
+    let (mut test_manager, mut clients) = launch_and_fund_faucet::<Service>(1).await;
 
     let recipient_ua = clients.get_recipient_address("unified").await;
     let txid_hex = clients.send_from_faucet(&recipient_ua, 250_000).await;
@@ -528,6 +563,11 @@ mod zebrad {
         }
 
         #[tokio::test(flavor = "multi_thread")]
+        async fn get_mempool_tx() {
+            crate::get_mempool_tx::<FetchService>().await;
+        }
+
+        #[tokio::test(flavor = "multi_thread")]
         async fn get_transaction_mempool() {
             crate::get_transaction_mempool::<FetchService>().await;
         }
@@ -582,6 +622,11 @@ mod zebrad {
         #[tokio::test(flavor = "multi_thread")]
         async fn get_raw_mempool() {
             crate::get_raw_mempool::<StateService>().await;
+        }
+
+        #[tokio::test(flavor = "multi_thread")]
+        async fn get_mempool_tx() {
+            crate::get_mempool_tx::<StateService>().await;
         }
     }
 }
