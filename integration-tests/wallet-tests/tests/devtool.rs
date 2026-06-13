@@ -625,9 +625,9 @@ mod zebrad {
         }
 
         // No get_mempool_tx here: the state backend returns mempool-tx txids
-        // in a different byte representation than the fetch backend (the
-        // fetch case passes with the same assertion), so the cross-backend
-        // txid comparison fails on state. The original test was FetchService-
-        // only; the discrepancy is left for separate investigation.
+        // in display (reversed) byte order while the fetch backend returns
+        // internal order, so the cross-backend txid comparison fails on
+        // state (zingolabs/zaino#1225). The original test was FetchService-
+        // only; re-enable once that bug is fixed.
     }
 }
