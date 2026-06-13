@@ -287,6 +287,88 @@ async fn block_range_returns_default_pools() {
     svc.test_manager.close().await;
 }
 
+/// Port of `state_service_get_block_range_returns_all_pools` (zebrad): fund
+/// the faucet with three orchard coinbase notes, send 250_000 to the
+/// recipient's transparent, sapling, and unified addresses (one tx each),
+/// mine them into one block, then assert `get_block_range` with all pools
+/// requested agrees between the fetch and state indexers and that the tip
+/// block carries the coinbase plus all three sends with their pool data.
+async fn block_range_returns_all_pools() {
+    let mut svc = zaino_testutils::launch_state_and_fetch_services_mining_to::<Zebrad>(
+        zaino_testutils::SHIELDED_FUNDING_POOL,
+        &ValidatorKind::Zebrad,
+        None,
+        true,
+        Some(zebra_chain::parameters::NetworkKind::Regtest),
+    )
+    .await;
+
+    let mut clients = wallet_tests::devtool::build_clients(
+        svc.test_manager
+            .zaino_grpc_listen_address
+            .expect("zaino enabled")
+            .port(),
+    )
+    .await;
+
+    // Three orchard coinbase notes (one per send below — devtool will not
+    // chain unconfirmed change), then one send to each pool's recipient
+    // address, mined into a single block.
+    svc.generate_blocks_and_wait_for_tips(3).await;
+    clients.sync_faucet().await;
+
+    let recipient_t = clients.get_recipient_address("transparent").await;
+    let recipient_s = clients.get_recipient_address("sapling").await;
+    let recipient_u = clients.get_recipient_address("unified").await;
+    let deshielding_txid = clients.send_from_faucet(&recipient_t, 250_000).await;
+    let sapling_txid = clients.send_from_faucet(&recipient_s, 250_000).await;
+    let orchard_txid = clients.send_from_faucet(&recipient_u, 250_000).await;
+    svc.generate_blocks_and_wait_for_tips(1).await;
+
+    let start_height: u64 = 1;
+    let end_height: u64 = svc.fetch_subscriber.tip_height().await;
+    let all_pools = zaino_testutils::all_pools_i32();
+
+    let fetch_range = zaino_testutils::collect_block_range(
+        &svc.fetch_subscriber,
+        start_height,
+        end_height,
+        all_pools.clone(),
+    )
+    .await;
+    let state_range = zaino_testutils::collect_block_range(
+        &svc.state_subscriber,
+        start_height,
+        end_height,
+        all_pools,
+    )
+    .await;
+    assert_eq!(fetch_range, state_range);
+
+    let compact_block = state_range.last().unwrap();
+    assert_eq!(compact_block.height, end_height);
+    // coinbase + the three sends
+    assert_eq!(compact_block.vtx.len(), 4);
+
+    wallet_tests::assert_pool_present(
+        compact_block,
+        &wallet_tests::devtool::txid_from_devtool(&deshielding_txid),
+        wallet_tests::Pool::Transparent,
+    );
+    wallet_tests::assert_pool_present(
+        compact_block,
+        &wallet_tests::devtool::txid_from_devtool(&sapling_txid),
+        wallet_tests::Pool::Sapling,
+    );
+    wallet_tests::assert_pool_present(
+        compact_block,
+        &wallet_tests::devtool::txid_from_devtool(&orchard_txid),
+        wallet_tests::Pool::Orchard,
+    );
+
+    svc.test_manager.close().await;
+}
+
 mod zebrad {
     // FetchService is a deprecated re-export; the deprecation fires at the
     // turbofish use sites below, so the allow covers the whole module.
@@ -325,11 +407,16 @@ mod zebrad {
         }
     }
 
-    // Spans both the fetch and state indexers (compares their answers), so it
-    // is not a per-backend test.
+    // Span both the fetch and state indexers (compares their answers), so they
+    // are not per-backend tests.
     #[tokio::test(flavor = "multi_thread")]
     async fn block_range_returns_default_pools() {
         crate::block_range_returns_default_pools().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn block_range_returns_all_pools() {
+        crate::block_range_returns_all_pools().await;
     }
 
     mod state_service {

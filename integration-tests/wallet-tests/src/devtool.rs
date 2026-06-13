@@ -24,6 +24,7 @@ use zcash_local_net::client::{
     zcash_devtool::{ZcashDevtool, ZcashDevtoolConfig},
     AddressReceiver, Client as _, WalletBalance,
 };
+use zcash_primitives::transaction::TxId;
 
 use crate::Pool;
 
@@ -66,6 +67,15 @@ pub fn txid_internal_bytes(devtool_txid_hex: &str) -> Vec<u8> {
     let mut bytes = hex::decode(devtool_txid_hex.trim()).expect("devtool txid is valid hex");
     bytes.reverse();
     bytes
+}
+
+/// [`txid_internal_bytes`] as a [`TxId`], for asserting on compact-block
+/// contents (e.g. [`crate::assert_pool_present`]).
+pub fn txid_from_devtool(devtool_txid_hex: &str) -> TxId {
+    let bytes: [u8; 32] = txid_internal_bytes(devtool_txid_hex)
+        .try_into()
+        .expect("devtool txid is 32 bytes");
+    TxId::from_bytes(bytes)
 }
 
 impl DevtoolClients {
