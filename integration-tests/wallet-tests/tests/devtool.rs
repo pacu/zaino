@@ -18,10 +18,11 @@
 
 use wallet_tests::devtool::DevtoolClients;
 use zaino_proto::proto::service::TxFilter;
-use zaino_state::{LightWalletIndexer, ZcashIndexer, ZcashService};
+use zaino_state::{ChainIndex, LightWalletIndexer, ZcashIndexer, ZcashService};
 use zaino_testutils::{PollableTip, TestManager, TestService, ValidatorKind};
 use zainodlib::error::IndexerError;
 use zcash_local_net::validator::zebrad::Zebrad;
+use zebra_rpc::methods::{GetAddressBalanceRequest, GetAddressTxIdsRequest};
 
 /// Launch an orchard-mining zebrad + Zaino on the `Service` backend, build
 /// devtool faucet/recipient wallets against it, mine `coinbase_blocks` blocks
@@ -183,6 +184,87 @@ where
     tokio::time::sleep(std::time::Duration::from_secs(1)).await;
 
     (test_manager, transparent_txid, unified_txid)
+}
+
+/// Fund the faucet, send 250_000 to the recipient's `pool` address, mine it
+/// in, and return the manager, clients (for address lookup), and the broadcast
+/// txid hex. The txid is in display (reversed) order — devtool prints it that
+/// way, which matches the txid strings zaino's address queries return, so no
+/// conversion is needed for those comparisons.
+async fn fund_and_send_to<Service>(
+    pool: wallet_tests::Pool,
+) -> (TestManager<Zebrad, Service>, DevtoolClients, String)
+where
+    Service: TestService,
+    IndexerError: From<<<Service as ZcashService>::Subscriber as ZcashIndexer>::Error>,
+    <Service as ZcashService>::Subscriber: PollableTip,
+{
+    let (test_manager, mut clients) = launch_and_fund_faucet::<Service>(1).await;
+
+    let recipient = clients.get_recipient_address(pool.address_kind()).await;
+    let txid_hex = clients.send_from_faucet(&recipient, 250_000).await;
+
+    test_manager
+        .generate_blocks_and_wait_for_tip(1, test_manager.subscriber())
+        .await;
+
+    (test_manager, clients, txid_hex)
+}
+
+/// Port of `fetch_service_get_address_tx_ids` (zebrad): after a transparent
+/// send to the recipient, `get_address_tx_ids` over the recipient's taddr
+/// returns the send's txid.
+async fn get_address_tx_ids<Service>()
+where
+    Service: TestService,
+    IndexerError: From<<<Service as ZcashService>::Subscriber as ZcashIndexer>::Error>,
+    <Service as ZcashService>::Subscriber: PollableTip + LightWalletIndexer + ChainIndex,
+{
+    let (mut test_manager, clients, txid_hex) =
+        fund_and_send_to::<Service>(wallet_tests::Pool::Transparent).await;
+    let recipient_taddr = clients.get_recipient_address("transparent").await;
+
+    let chain_height = test_manager.subscriber().chain_height().await.unwrap().0;
+    let txids = test_manager
+        .subscriber()
+        .get_address_tx_ids(GetAddressTxIdsRequest::new(
+            vec![recipient_taddr],
+            Some(chain_height - 2),
+            None,
+        ))
+        .await
+        .unwrap();
+
+    dbg!(&txid_hex, &txids);
+    assert_eq!(txid_hex.trim(), txids[0]);
+
+    test_manager.close().await;
+}
+
+/// Port of `fetch_service_get_address_utxos` (zebrad): after a transparent
+/// send to the recipient, `z_get_address_utxos` over the recipient's taddr
+/// returns a utxo whose txid is the send's.
+async fn get_address_utxos<Service>()
+where
+    Service: TestService,
+    IndexerError: From<<<Service as ZcashService>::Subscriber as ZcashIndexer>::Error>,
+    <Service as ZcashService>::Subscriber: PollableTip + LightWalletIndexer,
+{
+    let (mut test_manager, clients, txid_hex) =
+        fund_and_send_to::<Service>(wallet_tests::Pool::Transparent).await;
+    let recipient_taddr = clients.get_recipient_address("transparent").await;
+
+    let utxos = test_manager
+        .subscriber()
+        .z_get_address_utxos(GetAddressBalanceRequest::new(vec![recipient_taddr]))
+        .await
+        .unwrap();
+    let (_, utxo_txid, ..) = utxos[0].into_parts();
+
+    dbg!(&txid_hex, &utxo_txid);
+    assert_eq!(txid_hex.trim(), utxo_txid.to_string());
+
+    test_manager.close().await;
 }
 
 /// Port of `fetch_service_get_raw_mempool` (zebrad): with two transactions
@@ -565,6 +647,16 @@ mod zebrad {
         #[tokio::test(flavor = "multi_thread")]
         async fn get_mempool_tx() {
             crate::get_mempool_tx::<FetchService>().await;
+        }
+
+        #[tokio::test(flavor = "multi_thread")]
+        async fn get_address_tx_ids() {
+            crate::get_address_tx_ids::<FetchService>().await;
+        }
+
+        #[tokio::test(flavor = "multi_thread")]
+        async fn get_address_utxos() {
+            crate::get_address_utxos::<FetchService>().await;
         }
 
         #[tokio::test(flavor = "multi_thread")]
