@@ -125,6 +125,54 @@ where
     test_manager.close().await;
 }
 
+/// Port of `send_to_all` (wallet_to_validator, zebrad): one faucet funds a send
+/// to all three pools at once; each recipient pool reports 250_000.
+///
+/// The original mined to a transparent miner and ran a 100-block "heavy mine"
+/// after the sends; here the faucet is funded by orchard coinbase notes (the
+/// mine-to-orchard funding pattern, no shield) and the sends are confirmed with
+/// a single block. The 100-block mine is not load-bearing for the per-pool
+/// balance assertions — the sends confirm in one block, and received funds are
+/// regular (non-coinbase) outputs with no maturity rule — and 100 orchard
+/// blocks would cost 100 halo2 proofs against the net-speedup criterion.
+async fn send_to_all<Service>()
+where
+    Service: TestService,
+    IndexerError: From<<<Service as ZcashService>::Subscriber as ZcashIndexer>::Error>,
+    <Service as ZcashService>::Subscriber: PollableTip,
+{
+    // Three orchard notes — one per send (devtool will not chain unconfirmed change).
+    let (mut test_manager, mut clients) = launch_and_fund_faucet::<Service>(3).await;
+
+    let recipient_ua = clients.get_recipient_address("unified").await;
+    let recipient_zaddr = clients.get_recipient_address("sapling").await;
+    let recipient_taddr = clients.get_recipient_address("transparent").await;
+    clients.send_from_faucet(&recipient_ua, 250_000).await;
+    clients.send_from_faucet(&recipient_zaddr, 250_000).await;
+    clients.send_from_faucet(&recipient_taddr, 250_000).await;
+
+    test_manager
+        .generate_blocks_and_wait_for_tip(1, test_manager.subscriber())
+        .await;
+    clients.sync_recipient().await;
+
+    let balance = clients.recipient_balance().await;
+    assert_eq!(
+        wallet_tests::Pool::Orchard.spendable_balance(&balance),
+        250_000
+    );
+    assert_eq!(
+        wallet_tests::Pool::Sapling.spendable_balance(&balance),
+        250_000
+    );
+    assert_eq!(
+        wallet_tests::Pool::Transparent.spendable_balance(&balance),
+        250_000
+    );
+
+    test_manager.close().await;
+}
+
 /// Port of `wallet_to_validator::shield_for_validator` (zebrad): the faucet
 /// sends 250_000 to the recipient's transparent address; the recipient
 /// confirms the transparent receipt, shields it to orchard, and confirms the
@@ -1413,6 +1461,11 @@ mod zebrad {
         }
 
         #[tokio::test(flavor = "multi_thread")]
+        async fn send_to_all() {
+            crate::send_to_all::<FetchService>().await;
+        }
+
+        #[tokio::test(flavor = "multi_thread")]
         async fn shield_for_validator() {
             crate::shield_for_validator::<FetchService>().await;
         }
@@ -1592,6 +1645,11 @@ mod zebrad {
         #[tokio::test(flavor = "multi_thread")]
         async fn send_to_transparent() {
             crate::send_to_pool::<StateService>(wallet_tests::Pool::Transparent).await;
+        }
+
+        #[tokio::test(flavor = "multi_thread")]
+        async fn send_to_all() {
+            crate::send_to_all::<StateService>().await;
         }
 
         #[tokio::test(flavor = "multi_thread")]
