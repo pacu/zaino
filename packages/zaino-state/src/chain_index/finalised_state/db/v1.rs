@@ -143,6 +143,26 @@ pub(crate) const TX_OUT_SET_INFO_ACCUMULATOR_DATABASE_NAME: &str =
 /// Singleton key for the finalised txout-set accumulator table.
 pub(crate) const TX_OUT_SET_INFO_ACCUMULATOR_KEY: &[u8] = b"tx_out_set_info_accumulator";
 
+/// Metadata key recording the height the finalised txout-set accumulator was last *fully* built to.
+///
+/// Stored in the `metadata` table as `StoredEntryFixed<Height>`. The accumulator is no longer
+/// maintained per block on the sync write path; it is rebuilt in bulk (see
+/// [`DbV1::rebuild_tx_out_set_accumulator`]) once a sync run reaches the tip. This watermark lets
+/// readers detect a *stale* accumulator (watermark `<` db tip) after a sync was interrupted before
+/// the rebuild ran, rather than serving incorrect `gettxoutsetinfo` data.
+pub(crate) const TX_OUT_SET_ACCUMULATOR_BUILT_HEIGHT_KEY: &[u8] =
+    b"_tx_out_set_accumulator_built_height";
+
+/// Number of txid-prefix shards used by the bulk txout-set accumulator builder.
+///
+/// The builder holds the set of spent outpoints in memory while scanning the block data. Sharding
+/// on the creating-txid's first byte bounds that working set to roughly `1 / shards` of the total
+/// spent index, at the cost of one extra sequential pass over the block data per shard. The
+/// per-shard partials recombine exactly (XOR commitment + additive counters), so the result is
+/// independent of the shard count. `1` is a single optimal pass and is correct on any host with
+/// enough RAM for the full spent set; raise it on memory-constrained deployments.
+pub(crate) const ACCUMULATOR_BUILD_SHARDS: u16 = 1;
+
 /// Number of committed block writes / migration heights between explicit
 /// `env.sync(true)` durability checkpoints.
 ///

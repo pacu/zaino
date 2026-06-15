@@ -1025,6 +1025,43 @@ async fn tx_out_set_info_accumulator_updates_on_write() {
     assert_eq!(expected_accumulator, actual_accumulator);
 }
 
+/// The bulk sequential accumulator builder must produce exactly the accumulator that the
+/// per-block incremental write path maintained, for every shard count. Sharding partitions the
+/// work by creating-txid prefix and recombines the partials; the result must be shard-count
+/// independent.
+#[tokio::test(flavor = "multi_thread")]
+async fn bulk_tx_out_set_accumulator_builder_matches_incremental() {
+    init_tracing();
+
+    let (_data, _db_dir, zaino_db) = load_vectors_and_spawn_and_sync_v1_zaino_db().await;
+    zaino_db.wait_until_ready().await;
+
+    use crate::chain_index::finalised_state::capability::{
+        CapabilityRequest, DbRead, TransparentHistExt,
+    };
+
+    let backend = zaino_db
+        .backend_for_cap(CapabilityRequest::WriteCore)
+        .unwrap();
+
+    let db_tip = backend.db_height().await.unwrap().unwrap();
+    let incremental = backend.get_tx_out_set_info_accumulator().await.unwrap();
+
+    // 1 = single optimal pass; >1 exercises the sharded multi-pass recombination; 256 = one
+    // first-byte value per shard (maximal sharding).
+    for shards in [1u16, 2, 4, 256] {
+        let built = tokio::task::block_in_place(|| {
+            backend.build_tx_out_set_accumulator_blocking(db_tip, shards)
+        })
+        .unwrap();
+
+        assert_eq!(
+            built, incremental,
+            "bulk builder (shards={shards}) must equal the incrementally-maintained accumulator"
+        );
+    }
+}
+
 /// Computes the canonical [`FinalisedTxOutSetInfoAccumulator`] for a fully-resolved UTXO set,
 /// used as the source of truth by the write/delete accumulator tests.
 fn accumulator_from_unspent_map(
