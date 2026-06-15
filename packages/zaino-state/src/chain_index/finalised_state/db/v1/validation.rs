@@ -460,7 +460,7 @@ impl DbV1 {
     /// Behavior:
     /// - Duplicates the final element when the layer width is odd, matching Bitcoin/Zcash merkle rules.
     /// - Uses SHA256d over 64-byte concatenated pairs at each layer.
-    fn calculate_block_merkle_root(txids: &[[u8; 32]]) -> [u8; 32] {
+    pub(super) fn calculate_block_merkle_root(txids: &[[u8; 32]]) -> [u8; 32] {
         assert!(
             !txids.is_empty(),
             "block must contain at least the coinbase"

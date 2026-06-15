@@ -23,9 +23,7 @@ impl DbWrite for DbV1 {
         height: Height,
         source: &S,
     ) -> Result<(), FinalisedStateError> {
-        use crate::chain_index::finalised_state::{
-            build_indexed_block_from_source, capability::BlockCoreExt,
-        };
+        use crate::chain_index::finalised_state::build_indexed_block_from_source;
         use zebra_chain::parameters::NetworkUpgrade;
 
         let network = self.config.network;
@@ -36,17 +34,45 @@ impl DbWrite for DbV1 {
         let nu5_activation_height = NetworkUpgrade::Nu5.activation_height(&zebra_network);
 
         // Seed `parent_chainwork` from the current tip header (the block before the first one we
-        // write). On an empty database this is genesis with zero chainwork.
+        // write). On an empty database this is genesis with zero chainwork. Read raw rather than via
+        // `get_block_header`, which routes through `resolve_validated_hash_or_height` →
+        // `validate_block_blocking` (a full re-validation for any height above `validated_tip`); the
+        // tip is already on disk and trusted here, exactly as the v1.2 migration reads block data.
         let (start_height, mut parent_chainwork) = match self.tip_height().await? {
             None => (GENESIS_HEIGHT.0, crate::ChainWork::from_u256(0.into())),
             Some(tip) => {
-                let chainwork = <Self as BlockCoreExt>::get_block_header(self, tip)
-                    .await
-                    .map(|header| header.context.chainwork)
-                    .unwrap_or_else(|_| crate::ChainWork::from_u256(0.into()));
+                let tip_bytes = tip.to_bytes()?;
+                let chainwork = tokio::task::block_in_place(|| {
+                    let ro = self.env.begin_ro_txn()?;
+                    match ro.get(self.headers, &tip_bytes) {
+                        Ok(raw) => {
+                            let entry = StoredEntryVar::<BlockHeaderData>::from_bytes(raw)
+                                .map_err(|e| {
+                                    FinalisedStateError::Custom(format!(
+                                        "tip header decode error: {e}"
+                                    ))
+                                })?;
+                            Ok::<_, FinalisedStateError>(entry.inner().context.chainwork)
+                        }
+                        Err(lmdb::Error::NotFound) => Ok(crate::ChainWork::from_u256(0.into())),
+                        Err(e) => Err(FinalisedStateError::LmdbError(e)),
+                    }
+                })?;
                 (tip.0 + 1, chainwork)
             }
         };
+
+        // Nothing to do when the tip already meets the target. Importantly, this means a steady-state
+        // poll (the indexer calls `sync_to_height` repeatedly) does *not* trigger the bulk accumulator
+        // rebuild below when no new blocks finalised.
+        if start_height > height.0 {
+            return Ok(());
+        }
+
+        info!(
+            "write_blocks_to_height: syncing finalised blocks {start_height}..={} on {:?}",
+            height.0, network
+        );
 
         for height_int in start_height..=height.0 {
             let block = build_indexed_block_from_source(
@@ -60,10 +86,14 @@ impl DbWrite for DbV1 {
             .await?;
             parent_chainwork = block.context.chainwork;
 
-            self.write_block_with_options(block, false, false).await?;
+            self.write_block_with_options(block, false).await?;
         }
 
         // Rebuild the deferred txout-set accumulator once, at the tip, via sequential scans.
+        info!(
+            "write_blocks_to_height: rebuilding txout-set accumulator to height {}",
+            height.0
+        );
         self.rebuild_tx_out_set_accumulator().await?;
 
         Ok(())
@@ -95,19 +125,21 @@ impl DbV1 {
     ///
     /// NOTE: This method should never leave a block partially written to the database.
     pub(crate) async fn write_block(&self, block: IndexedBlock) -> Result<(), FinalisedStateError> {
-        self.write_block_with_options(block, true, true).await
+        self.write_block_with_options(block, true).await
     }
 
-    /// Writes a single finalised [`IndexedBlock`], optionally maintaining the txout-set accumulator
-    /// and validating the written block.
+    /// Writes a single finalised [`IndexedBlock`], optionally maintaining the txout-set accumulator.
     ///
     /// - `update_tx_out_set`: when `true`, the accumulator is recomputed incrementally for this
     ///   block and persisted (with its freshness watermark) inside the block's write transaction.
     ///   When `false`, accumulator maintenance is deferred — the caller is responsible for a bulk
     ///   rebuild (see [`DbV1::rebuild_tx_out_set_accumulator`]).
-    /// - `validate`: when `true`, the block is re-read and structurally validated after commit;
-    ///   when `false`, the height is marked validated directly (the in-session writer trusts the
-    ///   block it just built — startup is the integrity gate for untrusted on-disk data).
+    ///
+    /// Validation is *not* a read-back pass on this path. Two cheap in-memory correctness checks run
+    /// before commit — parent-hash continuity (tip-check) and the header merkle root (vs. the
+    /// block's txids) — after which the height is marked validated directly. The expensive
+    /// [`DbV1::validate_block_blocking`] re-read is reserved for startup, where on-disk data is
+    /// untrusted.
     ///
     /// NOTE: This method should never leave a block partially written to the database.
     // `u32::is_multiple_of` is only stable from Rust 1.87; the `% 100 == 0` form below keeps the
@@ -117,7 +149,6 @@ impl DbV1 {
         &self,
         block: IndexedBlock,
         update_tx_out_set: bool,
-        validate: bool,
     ) -> Result<(), FinalisedStateError> {
         self.status.store(StatusType::Syncing);
         let block_hash = block.context.index.hash;
@@ -164,7 +195,7 @@ impl DbV1 {
             let cur = ro.open_ro_cursor(self.headers)?;
             match cur.get(None, None, lmdb_sys::MDB_LAST) {
                 // Database already has blocks
-                Ok((last_height_bytes, _last_header_bytes)) => {
+                Ok((last_height_bytes, last_header_bytes)) => {
                     let last_height = Height::from_bytes(
                         last_height_bytes.expect("Height is always some in the finalised state"),
                     )?;
@@ -175,6 +206,28 @@ impl DbV1 {
                             "cannot write block at height {block_height:?}; \
                      current tip is {last_height:?}"
                         )));
+                    }
+
+                    // Parent-hash continuity: the new block must extend the current tip. This is
+                    // one of the two cheap, in-memory correctness checks (the other is the merkle
+                    // root below) that justify marking the block validated after a successful write
+                    // without the expensive post-commit re-read.
+                    let last_entry = StoredEntryVar::<BlockHeaderData>::from_bytes(last_header_bytes)
+                        .map_err(|e| {
+                            FinalisedStateError::Custom(format!(
+                                "tip header decode error during continuity check: {e}"
+                            ))
+                        })?;
+                    if last_entry.inner().context.hash() != block.context.parent_hash() {
+                        return Err(FinalisedStateError::InvalidBlock {
+                            height: block_height.0,
+                            hash: block_hash,
+                            reason: format!(
+                                "parent hash does not extend current tip (tip: {:?}, parent: {:?})",
+                                last_entry.inner().context.hash(),
+                                block.context.parent_hash()
+                            ),
+                        });
                     }
                 }
                 // no block in db, this must be genesis block.
@@ -401,6 +454,23 @@ impl DbV1 {
         // Split the paired vector into the per-table shapes used for storage.
         let (txids, transparent): (Vec<TransactionHash>, Vec<Option<TransparentCompactTx>>) =
             transactions.into_iter().unzip();
+
+        // Cheap, in-memory correctness check: the block's txids must reproduce the header's merkle
+        // root. Together with the parent-hash continuity check in the tip-check above, this is what
+        // lets us mark the block validated after a successful write without the expensive
+        // post-commit re-read + spent-index cross-check (which only re-verifies on-disk integrity of
+        // bytes we just wrote from memory, and is redundant for our own writes).
+        {
+            let txid_bytes: Vec<[u8; 32]> = txids.iter().map(|txid| txid.0).collect();
+            let computed_merkle_root = Self::calculate_block_merkle_root(&txid_bytes);
+            if &computed_merkle_root != block.data().merkle_root() {
+                return Err(FinalisedStateError::InvalidBlock {
+                    height: block_height.0,
+                    hash: block_hash,
+                    reason: "header merkle root does not match block txids".to_string(),
+                });
+            }
+        }
 
         // Reverse txid index entries (`txid -> TxLocation`). Built before `txids` is moved into
         // the `TxidList` below, and sorted by txid so the random-keyed `txid_location` B-tree
@@ -642,19 +712,16 @@ impl DbV1 {
 
             // `txn.commit()` makes the block visible to subsequent readers (LMDB MVCC), but the
             // env is opened with `NO_SYNC`, so it is *not* fsynced here. Durability is forced at
-            // `SYNC_CHECKPOINT_INTERVAL` boundaries below and on graceful shutdown. Validation
-            // is read-only and observes the just-committed state from the map regardless of sync.
+            // `SYNC_CHECKPOINT_INTERVAL` boundaries below and on graceful shutdown.
             txn.commit()?;
 
-            if validate {
-                zaino_db.validate_block_blocking(block_height, block_hash)?;
-            } else {
-                // Deferred (bulk-sync) path: we built this block from the source this session and
-                // trust it, so skip the read-back validation pass and just advance the validated
-                // tip. Reads then see `is_validated` and never re-validate; startup remains the
-                // integrity gate for untrusted on-disk data.
-                zaino_db.mark_validated(block_height.0);
-            }
+            // Advance the validated tip directly. The block was built from a trusted source this
+            // session and passed the cheap in-memory correctness checks (parent-hash continuity and
+            // merkle root) before commit, so the expensive read-back validation pass is redundant
+            // here — it only re-verifies on-disk integrity of bytes we just wrote. Startup remains
+            // the integrity gate for untrusted on-disk data (`validate_block_blocking` via
+            // `initial_block_scan`). Marking validated keeps reads on the `is_validated` fast path.
+            zaino_db.mark_validated(block_height.0);
 
             Ok::<_, FinalisedStateError>(())
         });
@@ -1292,6 +1359,12 @@ impl DbV1 {
 
 #[cfg(test)]
 impl DbV1 {
+    /// Returns the current contiguous validated-tip height. Test hook for asserting that the write
+    /// path advances the validated tip without relying on the background validator.
+    pub(crate) fn validated_tip_height(&self) -> u32 {
+        self.validated_tip.load(std::sync::atomic::Ordering::Acquire)
+    }
+
     /// Writes a block using the v1.0.0 format.
     ///
     /// This intentionally writes only the core v1 tables and uses v1 item encodings.

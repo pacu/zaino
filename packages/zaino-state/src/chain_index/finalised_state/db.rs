@@ -862,6 +862,14 @@ impl DbBackend {
         Ok(Self::V1(DbV1::spawn_v1_0_0(cfg).await?))
     }
 
+    /// Current contiguous validated-tip height (v1 only; 0 for v0). Test hook.
+    pub(crate) fn validated_tip_height(&self) -> u32 {
+        match self {
+            Self::V1(db) => db.validated_tip_height(),
+            Self::V0(_) => 0,
+        }
+    }
+
     /// Computes (without persisting) the bulk-built txout-set accumulator to `db_tip` (V1 only).
     ///
     /// Test hook for asserting the sequential bulk builder matches the incrementally-maintained

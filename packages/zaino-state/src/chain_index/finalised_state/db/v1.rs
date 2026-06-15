@@ -676,7 +676,16 @@ impl DbV1 {
         .map_err(|e| FinalisedStateError::Custom(format!("spawn_blocking failed: {e}")))?
     }
 
-    /// Scans the whole finalised chain once at start-up and validates every block by checksum and continuity.
+    /// Scans the whole finalised chain once at start-up and validates every block by checksum and
+    /// continuity.
+    ///
+    /// Iterates the height-keyed `headers` table, which LMDB orders by big-endian height — i.e. in
+    /// **ascending block-height order**. This lets `validated_tip` advance monotonically as each
+    /// height is validated (every height is `validated_tip + 1` in turn), and surfaces any gap
+    /// immediately (the parent-hash continuity check in `validate_block_blocking` fails at the first
+    /// missing height). The previous implementation iterated the hash-keyed `heights` table, which
+    /// validated in pseudo-random height order — thrashing the cache and preventing the tip from
+    /// advancing until the whole set had been validated.
     async fn initial_block_scan(&self) -> Result<(), FinalisedStateError> {
         let zaino_db = Self {
             env: Arc::clone(&self.env),
@@ -703,13 +712,17 @@ impl DbV1 {
 
         tokio::task::spawn_blocking(move || {
             let ro = zaino_db.env.begin_ro_txn()?;
-            let mut cursor = ro.open_ro_cursor(zaino_db.heights)?;
+            let mut cursor = ro.open_ro_cursor(zaino_db.headers)?;
 
-            for (hash_bytes, height_entry_bytes) in cursor.iter() {
-                let hash = BlockHash::from_bytes(hash_bytes)?;
-                let height = *StoredEntryFixed::<Height>::from_bytes(height_entry_bytes)
-                    .map_err(|e| FinalisedStateError::Custom(format!("corrupt height entry: {e}")))?
-                    .inner();
+            // `headers` is keyed by big-endian height, so the cursor yields blocks in ascending
+            // height order. Both the height and hash are read from the header entry itself.
+            for (height_bytes, header_entry_bytes) in cursor.iter() {
+                let height = Height::from_bytes(height_bytes)?;
+                let header_entry = StoredEntryVar::<BlockHeaderData>::from_bytes(header_entry_bytes)
+                    .map_err(|e| {
+                        FinalisedStateError::Custom(format!("corrupt header entry: {e}"))
+                    })?;
+                let hash = *header_entry.inner().context.hash();
 
                 zaino_db.validate_block_blocking(height, hash)?
             }

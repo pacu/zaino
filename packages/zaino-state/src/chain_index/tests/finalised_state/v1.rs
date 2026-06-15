@@ -1062,6 +1062,34 @@ async fn bulk_tx_out_set_accumulator_builder_matches_incremental() {
     }
 }
 
+/// The write path must advance the validated tip itself (via the cheap in-memory parent + merkle
+/// checks), so reads never fall back to the expensive read-back validation. This must hold right
+/// after a sync completes, independent of the background validator.
+#[tokio::test(flavor = "multi_thread")]
+async fn write_path_advances_validated_tip() {
+    init_tracing();
+
+    let (_data, _db_dir, zaino_db) = load_vectors_and_spawn_and_sync_v1_zaino_db().await;
+
+    // Intentionally do NOT call `wait_until_ready` (which would let the background validator run):
+    // the bulk write path should have marked every synced height validated by the time
+    // `sync_to_height` returned.
+    let backend = zaino_db
+        .backend_for_cap(
+            crate::chain_index::finalised_state::capability::CapabilityRequest::WriteCore,
+        )
+        .unwrap();
+
+    use crate::chain_index::finalised_state::capability::DbRead;
+    let db_tip = backend.db_height().await.unwrap().unwrap();
+
+    assert_eq!(
+        backend.validated_tip_height(),
+        db_tip.0,
+        "write path must advance validated_tip to the synced tip"
+    );
+}
+
 /// Computes the canonical [`FinalisedTxOutSetInfoAccumulator`] for a fully-resolved UTXO set,
 /// used as the source of truth by the write/delete accumulator tests.
 fn accumulator_from_unspent_map(
