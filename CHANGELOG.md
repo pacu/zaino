@@ -41,6 +41,13 @@ and this library adheres to Rust's notion of
   height is not configured.
 ### Removed
 ### Deprecated
+### Fixed
+- Finalised-state DB v1.2.0 migration no longer appears to hang on large caches.
+  A reverse transaction-id index (`txid_location`) makes previous-output
+  resolution an O(log n) lookup instead of a full table scan, removing a
+  near-quadratic cost in both the migration backfill and the clean-sync write
+  path. The v1.1.0 -> v1.2.0 migration is now a re-entrant two-stage backfill
+  with progress logging, and caches built by 0.4.0-alpha.1 self-heal on open.
 
 ## [v0.2.0] - 2026-03-25
 - [808] Adopt lightclient-protocol v0.4.0
