@@ -188,24 +188,92 @@ use zebra_chain::parameters::NetworkKind;
 use crate::{
     chain_index::{
         finalised_state::db::v1::DB_VERSION_V1, source::BlockchainSourceError,
-        types::GENESIS_HEIGHT,
     },
     config::BlockCacheConfig,
     error::FinalisedStateError,
     BlockHash, BlockMetadata, BlockWithMetadata, ChainWork, Height, IndexedBlock, StatusType,
 };
 
-use std::{
-    sync::{
-        atomic::{AtomicU64, Ordering},
-        Arc,
-    },
-    time::Duration,
-};
+use std::{sync::Arc, time::Duration};
 use tokio::{
     sync::watch,
     time::{interval, MissedTickBehavior},
 };
+
+/// Fetches the block at `height_int` from `source` and builds its [`IndexedBlock`], threading
+/// `parent_chainwork` into the block metadata.
+///
+/// Shared by every backend's [`capability::DbWrite::write_blocks_to_height`] ingestion loop so the
+/// fetch + commitment-tree-root + metadata assembly lives in one place regardless of which backend
+/// owns the loop.
+pub(crate) async fn build_indexed_block_from_source<S: BlockchainSource>(
+    source: &S,
+    network: zaino_common::Network,
+    sapling_activation_height: zebra_chain::block::Height,
+    nu5_activation_height: Option<zebra_chain::block::Height>,
+    height_int: u32,
+    parent_chainwork: ChainWork,
+) -> Result<IndexedBlock, FinalisedStateError> {
+    let block = match source
+        .get_block(zebra_state::HashOrHeight::Height(
+            zebra_chain::block::Height(height_int),
+        ))
+        .await?
+    {
+        Some(block) => block,
+        None => {
+            return Err(FinalisedStateError::BlockchainSourceError(
+                BlockchainSourceError::Unrecoverable(format!(
+                    "error fetching block at height {height_int} from validator"
+                )),
+            ));
+        }
+    };
+
+    let block_hash = BlockHash::from(block.hash().0);
+
+    // Fetch sapling / orchard commitment tree data if above the relevant network upgrade.
+    let (sapling_opt, orchard_opt) = source.get_commitment_tree_roots(block_hash).await?;
+    let is_sapling_active = height_int >= sapling_activation_height.0;
+    let is_orchard_active =
+        nu5_activation_height.is_some_and(|nu5_activation_height| height_int >= nu5_activation_height.0);
+
+    let (sapling_root, sapling_size) = if is_sapling_active {
+        sapling_opt.ok_or_else(|| {
+            FinalisedStateError::BlockchainSourceError(BlockchainSourceError::Unrecoverable(
+                format!("missing Sapling commitment tree root for block {block_hash}"),
+            ))
+        })?
+    } else {
+        (zebra_chain::sapling::tree::Root::default(), 0)
+    };
+
+    let (orchard_root, orchard_size) = if is_orchard_active {
+        orchard_opt.ok_or_else(|| {
+            FinalisedStateError::BlockchainSourceError(BlockchainSourceError::Unrecoverable(
+                format!("missing Orchard commitment tree root for block {block_hash}"),
+            ))
+        })?
+    } else {
+        (zebra_chain::orchard::tree::Root::default(), 0)
+    };
+
+    let metadata = BlockMetadata::new(
+        sapling_root,
+        sapling_size as u32,
+        orchard_root,
+        orchard_size as u32,
+        parent_chainwork,
+        network.to_zebra_network(),
+    );
+
+    let block_with_metadata = BlockWithMetadata::new(block.as_ref(), metadata);
+    IndexedBlock::try_from(block_with_metadata).map_err(|_| {
+        FinalisedStateError::BlockchainSourceError(BlockchainSourceError::Unrecoverable(format!(
+            "error building block data at height {height_int}"
+        )))
+    })
+}
 
 use super::source::BlockchainSource;
 
@@ -510,151 +578,40 @@ impl ZainoDB {
         T: BlockchainSource,
     {
         let network = self.cfg.network;
-        let db_height_opt = self.db_height().await?;
-        let mut db_height = db_height_opt.unwrap_or(GENESIS_HEIGHT);
-
-        let zebra_network = network.to_zebra_network();
-        let sapling_activation_height = zebra_chain::parameters::NetworkUpgrade::Sapling
-            .activation_height(&zebra_network)
-            .expect("Sapling activation height must be set");
-        let nu5_activation_height =
-            zebra_chain::parameters::NetworkUpgrade::Nu5.activation_height(&zebra_network);
-
-        let mut parent_chainwork = if db_height_opt.is_none() {
-            ChainWork::from_u256(0.into())
-        } else {
-            db_height.0 += 1;
-            match self
-                .db
-                .backend(CapabilityRequest::BlockCoreExt)?
-                .get_block_header(height)
-                .await
-            {
-                Ok(header) => header.context.chainwork,
-                // V0 does not hold or use chainwork, and does not serve header data,
-                // can we handle this better?
-                //
-                // can we get this data from zebra blocks?
-                Err(_) => ChainWork::from_u256(0.into()),
-            }
-        };
-
-        // Track last time we emitted an info log so we only print every 10s.
-        let current_height = Arc::new(AtomicU64::new(db_height.0 as u64));
-        let target_height = height.0 as u64;
+        let target_height = height.0;
 
         // Shutdown signal for the reporter task.
-        let (shutdown_tx, shutdown_rx) = watch::channel(());
-        // Spawn reporter task that logs every 10 seconds, even while write_block() is running.
-        let reporter_current = Arc::clone(&current_height);
-        let reporter_network = network;
-        let mut reporter_shutdown = shutdown_rx.clone();
+        let (shutdown_tx, mut shutdown_rx) = watch::channel(());
+        // Spawn a reporter that logs sync progress every 10s by polling the db tip, while the
+        // backend owns the ingestion loop below.
+        let reporter_db = Arc::clone(&self.db);
         let reporter_handle = tokio::spawn(async move {
             let mut interval = tokio::time::interval(Duration::from_secs(10));
             loop {
                 tokio::select! {
                     _ = interval.tick() => {
-                        let cur = reporter_current.load(Ordering::Relaxed);
+                        let current = reporter_db
+                            .db_height()
+                            .await
+                            .ok()
+                            .flatten()
+                            .map_or(0, |height| height.0);
                         tracing::info!(
-                            "sync_to_height: syncing height {current} / {target} on network = {:?}",
-                            reporter_network,
-                            current = cur,
-                            target = target_height
+                            "sync_to_height: syncing height {current} / {target_height} on network = {:?}",
+                            network,
                         );
                     }
                     // stop when we receive a shutdown signal
-                    _ = reporter_shutdown.changed() => {
+                    _ = shutdown_rx.changed() => {
                         break;
                     }
                 }
             }
         });
 
-        // Run the main sync logic inside an inner async block so we always get
-        // a chance to shutdown the reporter task regardless of how this block exits.
-        let result: Result<(), FinalisedStateError> = (async {
-            for height_int in (db_height.0)..=height.0 {
-                // Update the shared progress value as soon as we start processing this height.
-                current_height.store(height_int as u64, Ordering::Relaxed);
-
-                let block = match source
-                    .get_block(zebra_state::HashOrHeight::Height(
-                        zebra_chain::block::Height(height_int),
-                    ))
-                    .await?
-                {
-                    Some(block) => block,
-                    None => {
-                        return Err(FinalisedStateError::BlockchainSourceError(
-                            BlockchainSourceError::Unrecoverable(format!(
-                                "error fetching block at height {} from validator",
-                                height.0
-                            )),
-                        ));
-                    }
-                };
-
-                let block_hash = BlockHash::from(block.hash().0);
-
-                // Fetch sapling / orchard commitment tree data if above relevant network upgrade.
-                let (sapling_opt, orchard_opt) =
-                    source.get_commitment_tree_roots(block_hash).await?;
-                let is_sapling_active = height_int >= sapling_activation_height.0;
-                let is_orchard_active = nu5_activation_height
-                    .is_some_and(|nu5_activation_height| height_int >= nu5_activation_height.0);
-                let (sapling_root, sapling_size) = if is_sapling_active {
-                    sapling_opt.ok_or_else(|| {
-                        FinalisedStateError::BlockchainSourceError(
-                            BlockchainSourceError::Unrecoverable(format!(
-                                "missing Sapling commitment tree root for block {block_hash}"
-                            )),
-                        )
-                    })?
-                } else {
-                    (zebra_chain::sapling::tree::Root::default(), 0)
-                };
-
-                let (orchard_root, orchard_size) = if is_orchard_active {
-                    orchard_opt.ok_or_else(|| {
-                        FinalisedStateError::BlockchainSourceError(
-                            BlockchainSourceError::Unrecoverable(format!(
-                                "missing Orchard commitment tree root for block {block_hash}"
-                            )),
-                        )
-                    })?
-                } else {
-                    (zebra_chain::orchard::tree::Root::default(), 0)
-                };
-
-                let metadata = BlockMetadata::new(
-                    sapling_root,
-                    sapling_size as u32,
-                    orchard_root,
-                    orchard_size as u32,
-                    parent_chainwork,
-                    network.to_zebra_network(),
-                );
-
-                let block_with_metadata = BlockWithMetadata::new(block.as_ref(), metadata);
-                let chain_block = match IndexedBlock::try_from(block_with_metadata) {
-                    Ok(block) => block,
-                    Err(_) => {
-                        return Err(FinalisedStateError::BlockchainSourceError(
-                            BlockchainSourceError::Unrecoverable(format!(
-                                "error building block data at height {}",
-                                height.0
-                            )),
-                        ));
-                    }
-                };
-                parent_chainwork = chain_block.context.chainwork;
-
-                self.write_block(chain_block).await?;
-            }
-
-            Ok(())
-        })
-        .await;
+        // Backends own the ingestion loop (fetch → build → write) so they can batch and defer
+        // secondary-index maintenance; see `DbWrite::write_blocks_to_height`.
+        let result = self.db.write_blocks_to_height(height, source).await;
 
         // Signal the reporter to shut down and wait for it to finish.
         // Ignore send error if receiver already dropped.
@@ -896,7 +853,7 @@ impl ZainoDB {
 
         let mut parent_chainwork = ChainWork::from_u256(0.into());
 
-        for height in GENESIS_HEIGHT.0..=tip.0 {
+        for height in crate::chain_index::types::GENESIS_HEIGHT.0..=tip.0 {
             let block = source
                 .get_block(zebra_state::HashOrHeight::Height(
                     zebra_chain::block::Height(height),

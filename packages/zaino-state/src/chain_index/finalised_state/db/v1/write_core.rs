@@ -14,6 +14,61 @@ impl DbWrite for DbV1 {
         self.write_block(block).await
     }
 
+    /// Bulk catch-up: ingests `tip+1..=height` from `source`, deferring txout-set accumulator
+    /// maintenance across the run and rebuilding it once at the end. Each block is written with
+    /// `update_tx_out_set = false` (deferred) and `validate = false` (the height is marked
+    /// validated directly, since we built the block from the source this session).
+    async fn write_blocks_to_height<S: crate::chain_index::source::BlockchainSource>(
+        &self,
+        height: Height,
+        source: &S,
+    ) -> Result<(), FinalisedStateError> {
+        use crate::chain_index::finalised_state::{
+            build_indexed_block_from_source, capability::BlockCoreExt,
+        };
+        use zebra_chain::parameters::NetworkUpgrade;
+
+        let network = self.config.network;
+        let zebra_network = network.to_zebra_network();
+        let sapling_activation_height = NetworkUpgrade::Sapling
+            .activation_height(&zebra_network)
+            .expect("Sapling activation height must be set");
+        let nu5_activation_height = NetworkUpgrade::Nu5.activation_height(&zebra_network);
+
+        // Seed `parent_chainwork` from the current tip header (the block before the first one we
+        // write). On an empty database this is genesis with zero chainwork.
+        let (start_height, mut parent_chainwork) = match self.tip_height().await? {
+            None => (GENESIS_HEIGHT.0, crate::ChainWork::from_u256(0.into())),
+            Some(tip) => {
+                let chainwork = <Self as BlockCoreExt>::get_block_header(self, tip)
+                    .await
+                    .map(|header| header.context.chainwork)
+                    .unwrap_or_else(|_| crate::ChainWork::from_u256(0.into()));
+                (tip.0 + 1, chainwork)
+            }
+        };
+
+        for height_int in start_height..=height.0 {
+            let block = build_indexed_block_from_source(
+                source,
+                network,
+                sapling_activation_height,
+                nu5_activation_height,
+                height_int,
+                parent_chainwork,
+            )
+            .await?;
+            parent_chainwork = block.context.chainwork;
+
+            self.write_block_with_options(block, false, false).await?;
+        }
+
+        // Rebuild the deferred txout-set accumulator once, at the tip, via sequential scans.
+        self.rebuild_tx_out_set_accumulator().await?;
+
+        Ok(())
+    }
+
     async fn delete_block_at_height(&self, height: Height) -> Result<(), FinalisedStateError> {
         self.delete_block_at_height(height).await
     }
@@ -33,11 +88,37 @@ impl DbV1 {
 
     /// Writes a given (finalised) [`IndexedBlock`] to ZainoDB.
     ///
+    /// Single-block append: the txout-set accumulator is maintained incrementally and the written
+    /// block is validated before the height advances. Bulk catch-up uses
+    /// [`DbV1::write_blocks_to_height`], which defers the accumulator (see
+    /// [`DbV1::write_block_with_options`]) and rebuilds it once at the tip.
+    ///
+    /// NOTE: This method should never leave a block partially written to the database.
+    pub(crate) async fn write_block(&self, block: IndexedBlock) -> Result<(), FinalisedStateError> {
+        self.write_block_with_options(block, true, true).await
+    }
+
+    /// Writes a single finalised [`IndexedBlock`], optionally maintaining the txout-set accumulator
+    /// and validating the written block.
+    ///
+    /// - `update_tx_out_set`: when `true`, the accumulator is recomputed incrementally for this
+    ///   block and persisted (with its freshness watermark) inside the block's write transaction.
+    ///   When `false`, accumulator maintenance is deferred — the caller is responsible for a bulk
+    ///   rebuild (see [`DbV1::rebuild_tx_out_set_accumulator`]).
+    /// - `validate`: when `true`, the block is re-read and structurally validated after commit;
+    ///   when `false`, the height is marked validated directly (the in-session writer trusts the
+    ///   block it just built — startup is the integrity gate for untrusted on-disk data).
+    ///
     /// NOTE: This method should never leave a block partially written to the database.
     // `u32::is_multiple_of` is only stable from Rust 1.87; the `% 100 == 0` form below keeps the
     // crate buildable on our older minimum supported Rust version.
     #[allow(clippy::manual_is_multiple_of)]
-    pub(crate) async fn write_block(&self, block: IndexedBlock) -> Result<(), FinalisedStateError> {
+    async fn write_block_with_options(
+        &self,
+        block: IndexedBlock,
+        update_tx_out_set: bool,
+        validate: bool,
+    ) -> Result<(), FinalisedStateError> {
         self.status.store(StatusType::Syncing);
         let block_hash = block.context.index.hash;
         let block_hash_bytes = block_hash.to_bytes()?;
@@ -302,13 +383,20 @@ impl DbV1 {
             }
         }
 
-        let tx_out_set_info_accumulator = self
-            .calculate_tx_out_set_info_accumulator_after_block(
-                block_height,
-                &transactions,
-                &spent_map,
+        // Accumulator maintenance is deferred on the bulk-sync path (`update_tx_out_set == false`)
+        // and rebuilt once at the tip; only the single-block append path maintains it incrementally.
+        let tx_out_set_info_accumulator = if update_tx_out_set {
+            Some(
+                self.calculate_tx_out_set_info_accumulator_after_block(
+                    block_height,
+                    &transactions,
+                    &spent_map,
+                )
+                .await?,
             )
-            .await?;
+        } else {
+            None
+        };
 
         // Split the paired vector into the per-table shapes used for storage.
         let (txids, transparent): (Vec<TransactionHash>, Vec<Option<TransparentCompactTx>>) =
@@ -436,15 +524,31 @@ impl DbV1 {
                 )?;
             }
 
-            let tx_out_set_info_accumulator_entry =
-                StoredEntryFixed::new(TX_OUT_SET_INFO_ACCUMULATOR_KEY, tx_out_set_info_accumulator);
+            // Persist the incrementally-maintained accumulator and advance its freshness watermark
+            // in the same transaction as the block, so the watermark always tracks the height the
+            // accumulator reflects. Skipped on the deferred (bulk-sync) path.
+            if let Some(tx_out_set_info_accumulator) = tx_out_set_info_accumulator {
+                let tx_out_set_info_accumulator_entry = StoredEntryFixed::new(
+                    TX_OUT_SET_INFO_ACCUMULATOR_KEY,
+                    tx_out_set_info_accumulator,
+                );
 
-            txn.put(
-                zaino_db.tx_out_set_info_accumulator,
-                &TX_OUT_SET_INFO_ACCUMULATOR_KEY,
-                &tx_out_set_info_accumulator_entry.to_bytes()?,
-                WriteFlags::empty(),
-            )?;
+                txn.put(
+                    zaino_db.tx_out_set_info_accumulator,
+                    &TX_OUT_SET_INFO_ACCUMULATOR_KEY,
+                    &tx_out_set_info_accumulator_entry.to_bytes()?,
+                    WriteFlags::empty(),
+                )?;
+
+                let watermark =
+                    StoredEntryFixed::new(TX_OUT_SET_ACCUMULATOR_BUILT_HEIGHT_KEY, block_height);
+                txn.put(
+                    zaino_db.metadata,
+                    &TX_OUT_SET_ACCUMULATOR_BUILT_HEIGHT_KEY,
+                    &watermark.to_bytes()?,
+                    WriteFlags::empty(),
+                )?;
+            }
 
             #[cfg(feature = "transparent_address_history_experimental")]
             {
@@ -542,7 +646,15 @@ impl DbV1 {
             // is read-only and observes the just-committed state from the map regardless of sync.
             txn.commit()?;
 
-            zaino_db.validate_block_blocking(block_height, block_hash)?;
+            if validate {
+                zaino_db.validate_block_blocking(block_height, block_hash)?;
+            } else {
+                // Deferred (bulk-sync) path: we built this block from the source this session and
+                // trust it, so skip the read-back validation pass and just advance the validated
+                // tip. Reads then see `is_validated` and never re-validate; startup remains the
+                // integrity gate for untrusted on-disk data.
+                zaino_db.mark_validated(block_height.0);
+            }
 
             Ok::<_, FinalisedStateError>(())
         });

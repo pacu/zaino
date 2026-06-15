@@ -63,7 +63,7 @@ impl DbV1 {
     ///
     /// NOTE:
     /// - This function is intentionally tolerant of races: redundant inserts / removals are benign.
-    fn mark_validated(&self, h: u32) {
+    pub(super) fn mark_validated(&self, h: u32) {
         let mut next = h;
         loop {
             let tip = self.validated_tip.load(Ordering::Acquire);

@@ -456,6 +456,18 @@ impl DbWrite for DbBackend {
         }
     }
 
+    /// Bulk catch-up ingestion, delegated to the concrete backend's strategy.
+    async fn write_blocks_to_height<S: crate::chain_index::source::BlockchainSource>(
+        &self,
+        height: Height,
+        source: &S,
+    ) -> Result<(), FinalisedStateError> {
+        match self {
+            Self::V0(db) => db.write_blocks_to_height(height, source).await,
+            Self::V1(db) => db.write_blocks_to_height(height, source).await,
+        }
+    }
+
     /// Delete the block at a given height, if present.
     ///
     /// This is a thin delegation wrapper over the concrete implementation.
