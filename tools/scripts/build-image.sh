@@ -11,6 +11,11 @@
 
 set -euo pipefail
 
+# Shared with get-ci-image-tag.sh so the tag's devtool SHA and this build's
+# checkout SHA are resolved identically.
+# shellcheck source=tools/scripts/functions.sh
+source ./tools/scripts/functions.sh
+
 # Create target directory with correct ownership before podman creates it as
 # root.
 mkdir -p target
@@ -30,11 +35,10 @@ info "Current directory: $(pwd)"
 info "Files in tools/scripts/: $(ls -la tools/scripts/ | head -5)"
 
 # Resolve DEVTOOL_VERSION (a moving branch) to its current commit SHA so the
-# devtool build layer's cache key tracks the branch HEAD; empty if it is
-# already a SHA/unresolvable, in which case the Containerfile checks out
-# DEVTOOL_VERSION directly.
-DEVTOOL_REV=$(git ls-remote https://github.com/zingolabs/zcash-devtool "$DEVTOOL_VERSION" 2>/dev/null | awk 'NR==1{print $1}')
-info "Resolved DEVTOOL_VERSION=$DEVTOOL_VERSION to DEVTOOL_REV=${DEVTOOL_REV:-<unresolved>}"
+# devtool build layer's cache key tracks the branch HEAD. Same resolution the
+# tag uses, so the build-arg SHA and the tag's embedded SHA match.
+DEVTOOL_REV=$(resolve_devtool_rev "$DEVTOOL_VERSION")
+info "Resolved DEVTOOL_VERSION=$DEVTOOL_VERSION to DEVTOOL_REV=$DEVTOOL_REV"
 
 cd integration-tests/test_environment && \
 podman build -f Containerfile \
