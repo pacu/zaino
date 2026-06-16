@@ -674,7 +674,12 @@ fn flush_migration_spent_batch(
     let mut txn = env.begin_rw_txn()?;
     for (outpoint_bytes, tx_location) in buffer.iter() {
         let entry_bytes = StoredEntryFixed::new(outpoint_bytes, *tx_location).to_bytes()?;
-        match txn.put(spent_db, outpoint_bytes, &entry_bytes, WriteFlags::NO_OVERWRITE) {
+        match txn.put(
+            spent_db,
+            outpoint_bytes,
+            &entry_bytes,
+            WriteFlags::NO_OVERWRITE,
+        ) {
             Ok(()) => {}
             Err(lmdb::Error::KeyExist) => {
                 let existing = txn
@@ -1005,7 +1010,9 @@ impl<T: BlockchainSource> Migration<T> for Migration1_1_0To1_2_0 {
                         .map_err(FinalisedStateError::LmdbError)?;
                     let entry =
                         StoredEntryVar::<TransparentTxList>::from_bytes(raw).map_err(|error| {
-                            FinalisedStateError::Custom(format!("transparent corrupt data: {error}"))
+                            FinalisedStateError::Custom(format!(
+                                "transparent corrupt data: {error}"
+                            ))
                         })?;
                     if !entry.verify(&height_bytes) {
                         return Err(FinalisedStateError::Custom(
@@ -1115,7 +1122,10 @@ impl<T: BlockchainSource> Migration<T> for Migration1_1_0To1_2_0 {
             // mid-Stage-C is recovered by simply re-running the (skipped) earlier stages and
             // rebuilding again.
             let stage_c_started = std::time::Instant::now();
-            info!(db_tip, "v1.2.0 migration Stage C: building txout-set accumulator");
+            info!(
+                db_tip,
+                "v1.2.0 migration Stage C: building txout-set accumulator"
+            );
             backend.rebuild_tx_out_set_accumulator().await?;
             info!(
                 db_tip,

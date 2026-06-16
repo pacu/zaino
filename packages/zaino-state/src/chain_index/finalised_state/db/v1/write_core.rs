@@ -1265,7 +1265,7 @@ impl DbV1 {
             put_idempotent(&mut txn, self.spent, key, &entry_bytes)?;
         }
 
-        txid_location_batch.sort_by(|a, b| a.0.cmp(&b.0));
+        txid_location_batch.sort_by_key(|entry| entry.0);
         for (key, tx_location) in &txid_location_batch {
             let entry_bytes = StoredEntryFixed::new(key, *tx_location).to_bytes()?;
             put_idempotent(&mut txn, self.txid_location, key, &entry_bytes)?;

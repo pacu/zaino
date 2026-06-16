@@ -50,6 +50,27 @@ and this library adheres to Rust's notion of
   `transactions`, `txouts`, `total_amount`, `height` and `bestblock` agree
   with zcashd's RPC; `bytes_serialized` and `hash_serialized` follow Zaino's
   own deterministic spec.
+- Finalised-state catch-up sync now ingests via `DbWrite::write_blocks_to_height`
+  (the tip->height fetch/build/write loop moved into the backend) and writes the
+  random-keyed `spent` / `txid_location` indexes in **sorted batches** within a
+  single transaction — a sequential B-tree sweep instead of a random fault per
+  insert once the DB exceeds RAM. The v1.1.0 -> v1.2.0 migration's `spent`
+  backfill does the same. Batches are bounded by
+  `storage.database.sync_write_batch_bytes` (default 4 GiB), a block-count cap,
+  and a time cap; each batch commits and fsyncs atomically, so sync and migration
+  stay crash-safe and resume gap-free.
+- The finalised txout-set accumulator is no longer maintained per block during
+  bulk sync or migration. It is deferred and rebuilt once at the tip via
+  sequential table scans (`DbV1::rebuild_tx_out_set_accumulator`), removing an
+  unbounded fan-out of random `spent` reads per block that stalled sync around
+  sandblast height. Single-block appends (`write_block`) still maintain it
+  incrementally; a `_tx_out_set_accumulator_built_height` watermark tracks
+  freshness.
+- Block validation moved off the write hot path: `write_block` now performs cheap
+  in-memory parent-hash continuity and merkle-root checks and advances
+  `validated_tip` directly, instead of a post-commit read-back. The full
+  `validate_block_blocking` re-read runs at startup only (the integrity gate for
+  untrusted on-disk data).
 ### Deprecated
 ### Removed
 ### Fixed
@@ -58,8 +79,14 @@ and this library adheres to Rust's notion of
   instead of a full scan of the `txids` table. This fixes a near-quadratic
   slowdown that made the v1.1.0 -> v1.2.0 migration appear to hang on large
   caches and progressively slowed clean sync. The migration is now a re-entrant
-  two-stage backfill (build `txid_location`, then `spent` + accumulator) with
-  per-stage progress trackers and progress logging.
+  **three-stage** backfill (build `txid_location`, then `spent`, then a bulk
+  txout-set accumulator rebuild) with per-stage progress trackers and progress
+  logging. Stage C never trusts an existing accumulator, so a partially-run
+  original migration is recomputed correctly rather than corrupted.
+- Finalised-state startup validation now scans blocks in ascending height order
+  (previously block-hash order via the `heights` table), so `validated_tip`
+  advances monotonically, gaps surface immediately, and startup no longer
+  thrashes the page cache with random-access reads.
 - Finalised-state DB v1.2.0: caches built by 0.4.0-alpha.1 (recorded at v1.2.0
   with an unbuilt `txid_location` index) are detected on open and self-heal by
   rolling back to v1.1.0 and rebuilding the indices in place (temporary shim,

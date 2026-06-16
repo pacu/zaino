@@ -1802,9 +1802,11 @@ impl DbV1 {
                     let raw = txn
                         .get(self.transparent, &height_bytes)
                         .map_err(FinalisedStateError::LmdbError)?;
-                    let entry = StoredEntryVar::<TransparentTxList>::from_bytes(raw)
-                        .map_err(|error| {
-                            FinalisedStateError::Custom(format!("transparent corrupt data: {error}"))
+                    let entry =
+                        StoredEntryVar::<TransparentTxList>::from_bytes(raw).map_err(|error| {
+                            FinalisedStateError::Custom(format!(
+                                "transparent corrupt data: {error}"
+                            ))
                         })?;
                     if !entry.verify(&height_bytes) {
                         return Err(FinalisedStateError::Custom(

@@ -718,10 +718,10 @@ impl DbV1 {
             // height order. Both the height and hash are read from the header entry itself.
             for (height_bytes, header_entry_bytes) in cursor.iter() {
                 let height = Height::from_bytes(height_bytes)?;
-                let header_entry = StoredEntryVar::<BlockHeaderData>::from_bytes(header_entry_bytes)
-                    .map_err(|e| {
-                        FinalisedStateError::Custom(format!("corrupt header entry: {e}"))
-                    })?;
+                let header_entry = StoredEntryVar::<BlockHeaderData>::from_bytes(
+                    header_entry_bytes,
+                )
+                .map_err(|e| FinalisedStateError::Custom(format!("corrupt header entry: {e}")))?;
                 let hash = *header_entry.inner().context.hash();
 
                 zaino_db.validate_block_blocking(height, hash)?

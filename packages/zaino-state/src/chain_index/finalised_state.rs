@@ -186,9 +186,7 @@ use tracing::{info, instrument};
 use zebra_chain::parameters::NetworkKind;
 
 use crate::{
-    chain_index::{
-        finalised_state::db::v1::DB_VERSION_V1, source::BlockchainSourceError,
-    },
+    chain_index::{finalised_state::db::v1::DB_VERSION_V1, source::BlockchainSourceError},
     config::BlockCacheConfig,
     error::FinalisedStateError,
     BlockHash, BlockMetadata, BlockWithMetadata, ChainWork, Height, IndexedBlock, StatusType,
@@ -232,8 +230,8 @@ pub(crate) async fn build_indexed_block_from_source<S: BlockchainSource>(
     // Fetch sapling / orchard commitment tree data if above the relevant network upgrade.
     let (sapling_opt, orchard_opt) = source.get_commitment_tree_roots(block_hash).await?;
     let is_sapling_active = height_int >= sapling_activation_height.0;
-    let is_orchard_active =
-        nu5_activation_height.is_some_and(|nu5_activation_height| height_int >= nu5_activation_height.0);
+    let is_orchard_active = nu5_activation_height
+        .is_some_and(|nu5_activation_height| height_int >= nu5_activation_height.0);
 
     let (sapling_root, sapling_size) = if is_sapling_active {
         sapling_opt.ok_or_else(|| {
