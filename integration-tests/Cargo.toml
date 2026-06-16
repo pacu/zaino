@@ -33,7 +33,7 @@ zainod = { path = "../packages/zainod" }
 # resolves the same code — the Cargo.lock files are gitignored, and a moving
 # branch ref otherwise resolves differently per cargo cache. Bump this rev as
 # the coordinated work advances; restore the release tag once tagged upstream.
-zcash_local_net = { git = "https://github.com/zingolabs/infrastructure.git", rev = "97f35c99038eb9baf85ab25e8a5334bda7fb2c13" }
+zcash_local_net = { git = "https://github.com/zingolabs/infrastructure.git", rev = "0cc7dab7d12dd906c23deddd4e1fc3c42cf0f083" }
 
 # Librustzcash
 zcash_protocol = { version = "0.9", features = ["local-consensus"] }

@@ -15,12 +15,11 @@
 //!   faucet-coinbase variants), `get_address_transactions_regtest`;
 //! - tree state: `z_get_treestate`, `z_get_subtrees_by_index`;
 //! - block range: default/all pools and the out-of-range edge cases;
-//! - compact-block transparent data.
+//! - compact-block transparent data;
+//! - `connect_to_node_get_info` (wallet `get_info` smoke).
 //! Dual `*_fetch_vs_state` tests assert the fetch and state backends agree.
 //!
 //! Deferred, with the capability each waits on:
-//! - `connect_to_node_get_info` — needs a devtool wallet `get_info`
-//!   (round-3 spec P1).
 //! - `send_to_transparent` (heavy / finalization) — runnable now via orchard
 //!   funding, but the load-bearing 99-block advance across the finalized /
 //!   non-finalized boundary costs a halo2 proof per block; waits on cheap
@@ -95,6 +94,57 @@ where
     clients.sync_faucet().await;
 
     (test_manager, clients)
+}
+
+/// Launch an orchard-mining zebrad + Zaino on the `Service` backend and build
+/// devtool faucet/recipient wallets against it, without mining or syncing — the
+/// minimal preamble for tests that only exercise wallet↔server connectivity.
+async fn launch_and_build_clients<Service>() -> (TestManager<Zebrad, Service>, DevtoolClients)
+where
+    Service: TestService,
+    IndexerError: From<<<Service as ZcashService>::Subscriber as ZcashIndexer>::Error>,
+    <Service as ZcashService>::Subscriber: PollableTip,
+{
+    let test_manager = TestManager::<Zebrad, Service>::launch_mining_to(
+        zaino_testutils::SHIELDED_FUNDING_POOL,
+        &ValidatorKind::Zebrad,
+        None,
+        None,
+        None,
+        true,
+        false,
+        false,
+    )
+    .await
+    .expect("launch TestManager");
+
+    let clients = wallet_tests::devtool::build_clients(
+        test_manager
+            .zaino_grpc_listen_address
+            .expect("zaino enabled")
+            .port(),
+    )
+    .await;
+
+    (test_manager, clients)
+}
+
+/// Port of `connect_to_node_get_info` (wallet_to_validator, zebrad): the faucet
+/// and recipient wallets can report node/server info without erroring. Smoke
+/// test — the original discards the result. (`chain_name` is "test" for regtest
+/// and `server_uri` has no trailing slash, so this asserts neither.)
+async fn connect_to_node_get_info<Service>()
+where
+    Service: TestService,
+    IndexerError: From<<<Service as ZcashService>::Subscriber as ZcashIndexer>::Error>,
+    <Service as ZcashService>::Subscriber: PollableTip,
+{
+    let (mut test_manager, clients) = launch_and_build_clients::<Service>().await;
+
+    clients.get_info_faucet().await;
+    clients.get_info_recipient().await;
+
+    test_manager.close().await;
 }
 
 /// Port of `wallet_to_validator::check_received_mining_reward` (zebrad): the
@@ -1471,6 +1521,11 @@ mod zebrad {
         }
 
         #[tokio::test(flavor = "multi_thread")]
+        async fn connect_to_node_get_info() {
+            crate::connect_to_node_get_info::<FetchService>().await;
+        }
+
+        #[tokio::test(flavor = "multi_thread")]
         async fn send_to_orchard() {
             crate::send_to_pool::<FetchService>(wallet_tests::Pool::Orchard).await;
         }
@@ -1655,6 +1710,11 @@ mod zebrad {
         #[tokio::test(flavor = "multi_thread")]
         async fn receives_mining_reward() {
             crate::receives_mining_reward::<StateService>().await;
+        }
+
+        #[tokio::test(flavor = "multi_thread")]
+        async fn connect_to_node_get_info() {
+            crate::connect_to_node_get_info::<StateService>().await;
         }
 
         #[tokio::test(flavor = "multi_thread")]

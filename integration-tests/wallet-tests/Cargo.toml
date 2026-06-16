@@ -33,8 +33,8 @@ zingolib_testutils = { git = "https://github.com/zingolabs/zingolib.git", rev = 
 # adapter requires the AddressReceiver API added in this commit). Bump this rev
 # as the coordinated work advances; restore the release tags once tagged
 # upstream.
-zingo_test_vectors = { git = "https://github.com/zingolabs/infrastructure.git", rev = "97f35c99038eb9baf85ab25e8a5334bda7fb2c13" }
-zcash_local_net = { git = "https://github.com/zingolabs/infrastructure.git", rev = "97f35c99038eb9baf85ab25e8a5334bda7fb2c13" }
+zingo_test_vectors = { git = "https://github.com/zingolabs/infrastructure.git", rev = "0cc7dab7d12dd906c23deddd4e1fc3c42cf0f083" }
+zcash_local_net = { git = "https://github.com/zingolabs/infrastructure.git", rev = "0cc7dab7d12dd906c23deddd4e1fc3c42cf0f083" }
 
 # Zebra
 zebra-chain = "9.0.0"

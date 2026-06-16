@@ -13,16 +13,17 @@
 //!
 //! - **Unconfirmed (mempool) balances**: devtool sync is block-based;
 //!   `monitor_unverified_mempool` cannot swap backends.
-//! - **No `do_info` / transaction listing**: the two `do_info` smoke checks
-//!   and the `transaction_summaries` asserts in `get_address_utxos{,_stream}`
-//!   need raw-gRPC / demotion treatment before their tests swap.
+//! - **No transaction listing**: the `transaction_summaries` asserts in
+//!   `get_address_utxos{,_stream}` need raw-gRPC / demotion treatment before
+//!   their tests swap. (`do_info` is covered now: see
+//!   [`DevtoolClients::get_info_faucet`].)
 //! - **Fee constants**: ZIP-317 applies on both backends, but asserted
 //!   constants derived from zingolib note selection (e.g. 235_000 after
 //!   shielding 250_000) must be re-verified on first devtool runs.
 
 use zcash_local_net::client::{
     zcash_devtool::{ZcashDevtool, ZcashDevtoolConfig},
-    AddressReceiver, Client as _, WalletBalance,
+    AddressReceiver, Client as _, GetInfo, WalletBalance,
 };
 use zcash_primitives::transaction::TxId;
 
@@ -128,6 +129,24 @@ impl DevtoolClients {
             .balance()
             .await
             .unwrap_or_else(|e| panic!("balance for {who}: {e:?}"))
+    }
+
+    /// The faucet wallet's server/chain info (devtool `wallet get-info`).
+    /// The connect smoke test only asserts the call succeeds.
+    pub async fn get_info_faucet(&self) -> GetInfo {
+        Self::get_info(&self.faucet, "faucet").await
+    }
+
+    /// The recipient wallet's server/chain info (devtool `wallet get-info`).
+    pub async fn get_info_recipient(&self) -> GetInfo {
+        Self::get_info(&self.recipient, "recipient").await
+    }
+
+    async fn get_info(client: &ZcashDevtool, who: &str) -> GetInfo {
+        client
+            .get_info()
+            .await
+            .unwrap_or_else(|e| panic!("get_info for {who}: {e:?}"))
     }
 
     /// Send `amount` zatoshis from `client` to `address`. Shared by
