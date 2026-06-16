@@ -652,6 +652,59 @@ impl<T: BlockchainSource> Migration<T> for Migration1_0_0To1_1_0 {
     };
 }
 
+/// Flushes a buffered batch of `spent` entries (inserted in **sorted key order**) and advances the
+/// Stage B progress watermark to `up_to_height + 1`, all in one LMDB transaction, then forces
+/// durability.
+///
+/// Sorting turns the random-keyed `spent` B-tree inserts into a sequential sweep (each leaf faulted
+/// in once, filled, written once) instead of a random fault per insert — the cost that dominates
+/// once the DB exceeds RAM. Committing the watermark together with the entries keeps resumption
+/// exact: a crash resumes from the last committed height, re-doing only uncommitted work
+/// (idempotent via `NO_OVERWRITE` + verify-match). `buffer` is cleared on success.
+fn flush_migration_spent_batch(
+    env: &lmdb::Environment,
+    spent_db: lmdb::Database,
+    metadata_db: lmdb::Database,
+    progress_key: &[u8],
+    buffer: &mut Vec<(Vec<u8>, TxLocation)>,
+    up_to_height: Height,
+) -> Result<(), FinalisedStateError> {
+    buffer.sort_by(|a, b| a.0.cmp(&b.0));
+
+    let mut txn = env.begin_rw_txn()?;
+    for (outpoint_bytes, tx_location) in buffer.iter() {
+        let entry_bytes = StoredEntryFixed::new(outpoint_bytes, *tx_location).to_bytes()?;
+        match txn.put(spent_db, outpoint_bytes, &entry_bytes, WriteFlags::NO_OVERWRITE) {
+            Ok(()) => {}
+            Err(lmdb::Error::KeyExist) => {
+                let existing = txn
+                    .get(spent_db, outpoint_bytes)
+                    .map_err(FinalisedStateError::LmdbError)?;
+                if existing != entry_bytes {
+                    return Err(FinalisedStateError::Custom(format!(
+                        "conflicting existing spent entry during batched migration for outpoint {}",
+                        hex::encode(outpoint_bytes)
+                    )));
+                }
+            }
+            Err(error) => return Err(FinalisedStateError::LmdbError(error)),
+        }
+    }
+
+    let progress = StoredEntryFixed::new(progress_key, up_to_height + 1);
+    txn.put(
+        metadata_db,
+        &progress_key,
+        &progress.to_bytes()?,
+        WriteFlags::empty(),
+    )?;
+
+    txn.commit()?;
+    env.sync(true)?;
+    buffer.clear();
+    Ok(())
+}
+
 /// Minor migration: v1.1.0 → v1.2.0.
 ///
 /// Three stages, each rebuilt deterministically from the existing transparent block data:
@@ -688,7 +741,7 @@ impl<T: BlockchainSource> Migration<T> for Migration1_1_0To1_2_0 {
     async fn migrate(
         &self,
         router: Arc<Router>,
-        _cfg: BlockCacheConfig,
+        cfg: BlockCacheConfig,
         _source: T,
     ) -> Result<(), FinalisedStateError> {
         // Per-stage progress keys. Both are temporary metadata entries removed on completion.
@@ -925,6 +978,13 @@ impl<T: BlockchainSource> Migration<T> for Migration1_1_0To1_2_0 {
             );
             let stage_b_started = std::time::Instant::now();
 
+            // Buffer spent entries across heights, then flush them in sorted key order so the
+            // random-keyed `spent` B-tree fills via a sequential sweep instead of a random fault per
+            // insert. Each flush commits the entries together with the progress watermark.
+            let batch_budget = cfg.storage.database.sync_write_batch_bytes.max(1);
+            let mut spent_buffer: Vec<(Vec<u8>, TxLocation)> = Vec::new();
+            let mut spent_buffer_bytes: u64 = 0;
+
             while next_height_to_migrate <= db_tip {
                 let height = Height::try_from(next_height_to_migrate)
                     .map_err(|error| FinalisedStateError::Custom(error.to_string()))?;
@@ -989,73 +1049,28 @@ impl<T: BlockchainSource> Migration<T> for Migration1_1_0To1_2_0 {
                     }
                 }
 
-                // Write the height's spent entries and the Stage B progress watermark in the same
-                // LMDB transaction, so they never drift if the migration is stopped by a crash.
-                {
-                    let mut txn = env.begin_rw_txn()?;
-
-                    for (outpoint, tx_location) in &spent_map {
-                        let outpoint_bytes = outpoint.to_bytes()?;
-                        let tx_location_entry_bytes =
-                            StoredEntryFixed::new(&outpoint_bytes, *tx_location).to_bytes()?;
-
-                        match txn.put(
-                            spent_db,
-                            &outpoint_bytes,
-                            &tx_location_entry_bytes,
-                            WriteFlags::NO_OVERWRITE,
-                        ) {
-                            Ok(()) => {}
-
-                            Err(lmdb::Error::KeyExist) => {
-                                let existing_bytes = txn
-                                    .get(spent_db, &outpoint_bytes)
-                                    .map_err(FinalisedStateError::LmdbError)?;
-
-                                let existing_entry =
-                                    StoredEntryFixed::<TxLocation>::from_bytes(existing_bytes)
-                                        .map_err(|error| {
-                                            FinalisedStateError::Custom(format!(
-                                        "corrupt existing spent entry for outpoint {:?}: {error}",
-                                        outpoint
-                                    ))
-                                        })?;
-
-                                if !existing_entry.verify(&outpoint_bytes) {
-                                    return Err(FinalisedStateError::Custom(format!(
-                                        "existing spent entry checksum mismatch for outpoint {:?}",
-                                        outpoint
-                                    )));
-                                }
-
-                                if existing_entry.inner() != tx_location {
-                                    return Err(FinalisedStateError::Custom(format!(
-                                        "conflicting spent entry for outpoint {:?} at height {}",
-                                        outpoint, height.0
-                                    )));
-                                }
-                            }
-
-                            Err(error) => return Err(FinalisedStateError::LmdbError(error)),
-                        }
-                    }
-
-                    let progress = StoredEntryFixed::new(MIGRATION_SPENT_PROGRESS_KEY, height + 1);
-                    txn.put(
-                        metadata_db,
-                        &MIGRATION_SPENT_PROGRESS_KEY,
-                        &progress.to_bytes()?,
-                        WriteFlags::empty(),
-                    )?;
-
-                    txn.commit()?;
+                // Append this height's spent entries to the batch buffer. The flush (below) sorts
+                // them by key and commits them with the progress watermark in one transaction.
+                for (outpoint, tx_location) in &spent_map {
+                    let outpoint_bytes = outpoint.to_bytes()?;
+                    spent_buffer_bytes =
+                        spent_buffer_bytes.saturating_add(outpoint_bytes.len() as u64 + 64);
+                    spent_buffer.push((outpoint_bytes, *tx_location));
                 }
 
-                // Durability checkpoint (the env is opened with `NO_SYNC`): bound how much
-                // backfill a crash can discard. The lost tail is re-done idempotently from the
-                // Stage B progress key on resume.
-                if next_height_to_migrate % SYNC_CHECKPOINT_INTERVAL == 0 {
-                    env.sync(true)?;
+                // Flush a full batch: sorted `spent` insert + progress watermark = `height + 1`,
+                // committed atomically and fsynced (env is `NO_SYNC`). A crash resumes from the last
+                // committed height; re-done work is idempotent (`NO_OVERWRITE` + verify-match).
+                if spent_buffer_bytes >= batch_budget {
+                    flush_migration_spent_batch(
+                        &env,
+                        spent_db,
+                        metadata_db,
+                        MIGRATION_SPENT_PROGRESS_KEY,
+                        &mut spent_buffer,
+                        height,
+                    )?;
+                    spent_buffer_bytes = 0;
                 }
 
                 if next_height_to_migrate % 10_000 == 0 {
@@ -1068,6 +1083,20 @@ impl<T: BlockchainSource> Migration<T> for Migration1_1_0To1_2_0 {
                 }
 
                 next_height_to_migrate = height.0 + 1;
+            }
+
+            // Flush the trailing partial batch (progress watermark = db tip).
+            if !spent_buffer.is_empty() {
+                let tip_height = Height::try_from(db_tip)
+                    .map_err(|error| FinalisedStateError::Custom(error.to_string()))?;
+                flush_migration_spent_batch(
+                    &env,
+                    spent_db,
+                    metadata_db,
+                    MIGRATION_SPENT_PROGRESS_KEY,
+                    &mut spent_buffer,
+                    tip_height,
+                )?;
             }
 
             info!(

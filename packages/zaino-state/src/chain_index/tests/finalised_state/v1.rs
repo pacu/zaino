@@ -1090,6 +1090,70 @@ async fn write_path_advances_validated_tip() {
     );
 }
 
+/// Syncs the vector chain to height 200 with the given bulk-write batch budget and returns the
+/// resulting `(db tip, validated tip, txout-set accumulator)`.
+async fn sync_with_batch_budget(
+    blocks: Vec<TestVectorBlockData>,
+    sync_write_batch_bytes: u64,
+) -> (Height, u32, FinalisedTxOutSetInfoAccumulator) {
+    use crate::chain_index::finalised_state::capability::{
+        CapabilityRequest, DbRead, TransparentHistExt,
+    };
+
+    let source = build_mockchain_source(blocks);
+    let temp_dir: TempDir = tempfile::tempdir().unwrap();
+    let config = BlockCacheConfig {
+        storage: StorageConfig {
+            database: DatabaseConfig {
+                path: temp_dir.path().to_path_buf(),
+                sync_write_batch_bytes,
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+        db_version: 1,
+        network: Network::Regtest(ActivationHeights::default()),
+    };
+
+    let zaino_db = ZainoDB::spawn(config, source.clone()).await.unwrap();
+    zaino_db.sync_to_height(Height(200), &source).await.unwrap();
+
+    let backend = zaino_db
+        .backend_for_cap(CapabilityRequest::WriteCore)
+        .unwrap();
+    let db_tip = backend.db_height().await.unwrap().unwrap();
+    let validated_tip = backend.validated_tip_height();
+    let accumulator = backend.get_tx_out_set_info_accumulator().await.unwrap();
+
+    (db_tip, validated_tip, accumulator)
+}
+
+/// The bulk-sync result must be independent of the write-batch budget: a single huge batch and a
+/// one-block-per-batch sync of the same chain must produce an identical db tip, validated tip, and
+/// txout-set accumulator. This exercises the cross-batch continuity chaining, per-batch
+/// `validated_tip` advance, and sorted-insert flush boundaries that a single-batch sync does not.
+#[tokio::test(flavor = "multi_thread")]
+async fn batched_sync_is_batch_size_independent() {
+    init_tracing();
+
+    let blocks = load_test_vectors().unwrap().blocks;
+
+    // u64::MAX => the whole sync is one batch; 1 => every block exceeds the budget => one block per
+    // batch (a flush + commit + fsync after each block).
+    let single_batch = sync_with_batch_budget(blocks.clone(), u64::MAX).await;
+    let per_block_batches = sync_with_batch_budget(blocks, 1).await;
+
+    assert_eq!(single_batch.0, per_block_batches.0, "db tip must match");
+    assert_eq!(
+        single_batch.1, per_block_batches.1,
+        "validated tip must match"
+    );
+    assert_eq!(
+        single_batch.2, per_block_batches.2,
+        "txout-set accumulator must be independent of the write-batch budget"
+    );
+}
+
 /// Computes the canonical [`FinalisedTxOutSetInfoAccumulator`] for a fully-resolved UTXO set,
 /// used as the source of truth by the write/delete accumulator tests.
 fn accumulator_from_unspent_map(

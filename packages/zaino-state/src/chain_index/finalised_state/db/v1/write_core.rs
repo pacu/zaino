@@ -1,6 +1,26 @@
 //! ZainoDB::V1 core write functionality.
 
 use super::*;
+
+/// Cheap heap-size estimate for a buffered [`IndexedBlock`], used only to bound the bulk-sync write
+/// batch in [`DbV1::write_blocks_to_height`]. Exactness is not required — it just keeps the batch's
+/// peak memory roughly within the configured budget.
+#[cfg(not(feature = "transparent_address_history_experimental"))]
+fn approx_indexed_block_bytes(block: &IndexedBlock) -> u64 {
+    block
+        .transactions()
+        .iter()
+        .map(|tx| {
+            let transparent = tx.transparent();
+            let items = transparent.inputs().len()
+                + transparent.outputs().len()
+                + tx.sapling().spends().len()
+                + tx.sapling().outputs().len()
+                + tx.orchard().actions().len();
+            256 + items as u64 * 128
+        })
+        .sum()
+}
 #[cfg(test)]
 use crate::version;
 
@@ -74,19 +94,71 @@ impl DbWrite for DbV1 {
             height.0, network
         );
 
-        for height_int in start_height..=height.0 {
-            let block = build_indexed_block_from_source(
-                source,
-                network,
-                sapling_activation_height,
-                nu5_activation_height,
-                height_int,
-                parent_chainwork,
-            )
-            .await?;
-            parent_chainwork = block.context.chainwork;
+        // Bulk path: buffer blocks up to a byte budget, then write the whole batch in one
+        // transaction with the random-keyed `spent` / `txid_location` indexes inserted in sorted
+        // order (sequential B-tree sweep instead of random faults once the DB exceeds RAM). The
+        // address-history feature can't be batched (its prev-output resolution can't see
+        // earlier-in-batch uncommitted blocks), so it keeps the per-block path.
+        #[cfg(not(feature = "transparent_address_history_experimental"))]
+        {
+            let batch_budget = self.config.storage.database.sync_write_batch_bytes.max(1);
+            let mut next = start_height;
+            while next <= height.0 {
+                // Fetch blocks (async; an LMDB write txn is `!Send` and cannot be held across the
+                // await) until the byte budget is reached.
+                let mut batch: Vec<IndexedBlock> = Vec::new();
+                let mut batch_bytes: u64 = 0;
+                while next <= height.0 && batch_bytes < batch_budget {
+                    let block = build_indexed_block_from_source(
+                        source,
+                        network,
+                        sapling_activation_height,
+                        nu5_activation_height,
+                        next,
+                        parent_chainwork,
+                    )
+                    .await?;
+                    parent_chainwork = block.context.chainwork;
+                    batch_bytes = batch_bytes.saturating_add(approx_indexed_block_bytes(&block));
+                    batch.push(block);
+                    next += 1;
+                }
 
-            self.write_block_with_options(block, false).await?;
+                // Write + sort + commit the batch atomically, then force durability. The on-disk
+                // `headers` tip never runs ahead of the indexes, so resume is gap-free.
+                tokio::task::block_in_place(|| self.write_block_batch_blocking(&batch))?;
+                tokio::task::block_in_place(|| self.env.sync(true)).map_err(|e| {
+                    FinalisedStateError::Custom(format!("LMDB checkpoint sync failed: {e}"))
+                })?;
+
+                // Only after the batch is committed + synced do we advance the validated tip.
+                for block in &batch {
+                    self.mark_validated(block.context.index.height.0);
+                }
+                self.status.store(StatusType::Ready);
+                info!(
+                    "write_blocks_to_height: committed batch to height {} ({} blocks)",
+                    next - 1,
+                    batch.len()
+                );
+            }
+        }
+        #[cfg(feature = "transparent_address_history_experimental")]
+        {
+            for height_int in start_height..=height.0 {
+                let block = build_indexed_block_from_source(
+                    source,
+                    network,
+                    sapling_activation_height,
+                    nu5_activation_height,
+                    height_int,
+                    parent_chainwork,
+                )
+                .await?;
+                parent_chainwork = block.context.chainwork;
+
+                self.write_block_with_options(block, false).await?;
+            }
         }
 
         // Rebuild the deferred txout-set accumulator once, at the tip, via sequential scans.
@@ -883,6 +955,251 @@ impl DbV1 {
                 })
             }
         }
+    }
+
+    /// Writes a batch of strictly-consecutive blocks in a single LMDB transaction, inserting the
+    /// random-keyed `spent` and `txid_location` entries in **sorted key order**.
+    ///
+    /// Once the DB exceeds RAM, the per-block path's random-key inserts fault a different B-tree
+    /// leaf almost every time. Buffering a batch and inserting its index entries in ascending key
+    /// order turns that into a sequential sweep — each leaf is faulted in once, filled, and written
+    /// once. The height-keyed tables (`headers`/`txids`/`transparent`/`sapling`/`orchard`/
+    /// `commitment_tree_data`) are written per block in ascending height (already sequential).
+    ///
+    /// Crash-safety: the whole batch — every block's height-keyed tables **and** the batch's sorted
+    /// index entries — commits in one transaction, so the `headers` tip never runs ahead of the
+    /// indexes. A crash discards the uncommitted batch (and, under `NO_SYNC`, rolls back to the last
+    /// `env.sync`), leaving a consistent prefix the syncer resumes from. The txout-set accumulator
+    /// is **not** maintained here (deferred; the caller rebuilds it at the tip).
+    ///
+    /// Heights must be strictly consecutive and extend the current tip; this is the bulk-sync path,
+    /// which assumes a single writer. Re-writing identical data on resume is a no-op (idempotent
+    /// puts), so it is safe to re-run after an interrupted sync.
+    ///
+    /// WARNING: blocking — call from a blocking context. Only built when the experimental
+    /// address-history feature is **off**; that feature uses the per-block path (its prev-output
+    /// resolution cannot see earlier-in-batch uncommitted blocks).
+    #[cfg(not(feature = "transparent_address_history_experimental"))]
+    pub(crate) fn write_block_batch_blocking(
+        &self,
+        blocks: &[IndexedBlock],
+    ) -> Result<(), FinalisedStateError> {
+        use lmdb::Transaction as _;
+
+        if blocks.is_empty() {
+            return Ok(());
+        }
+
+        // Idempotent `NO_OVERWRITE` put: a re-seen key whose stored bytes are identical is a no-op
+        // (safe resume); a key with conflicting bytes is a genuine error.
+        fn put_idempotent(
+            txn: &mut lmdb::RwTransaction<'_>,
+            db: Database,
+            key: &[u8],
+            value: &[u8],
+        ) -> Result<(), FinalisedStateError> {
+            match txn.put(db, &key, &value, WriteFlags::NO_OVERWRITE) {
+                Ok(()) => Ok(()),
+                Err(lmdb::Error::KeyExist) => {
+                    let existing = txn.get(db, &key).map_err(FinalisedStateError::LmdbError)?;
+                    if existing == value {
+                        Ok(())
+                    } else {
+                        Err(FinalisedStateError::Custom(
+                            "conflicting existing entry during batched block write".to_string(),
+                        ))
+                    }
+                }
+                Err(e) => Err(FinalisedStateError::LmdbError(e)),
+            }
+        }
+
+        self.status.store(StatusType::Syncing);
+        let mut txn = self.env.begin_rw_txn()?;
+
+        // Seed the continuity chain from the current on-disk tip (genesis if empty).
+        let (mut prev_height, mut prev_hash): (Option<u32>, Option<BlockHash>) = {
+            let cursor = txn.open_ro_cursor(self.headers)?;
+            match cursor.get(None, None, lmdb_sys::MDB_LAST) {
+                Ok((last_height_bytes, last_header_bytes)) => {
+                    let last_height = Height::from_bytes(
+                        last_height_bytes.expect("Height is always some in the finalised state"),
+                    )?;
+                    let last_entry =
+                        StoredEntryVar::<BlockHeaderData>::from_bytes(last_header_bytes).map_err(
+                            |e| FinalisedStateError::Custom(format!("tip header decode error: {e}")),
+                        )?;
+                    (Some(last_height.0), Some(*last_entry.inner().context.hash()))
+                }
+                Err(lmdb::Error::NotFound) => (None, None),
+                Err(e) => return Err(FinalisedStateError::LmdbError(e)),
+            }
+        };
+
+        // Batch-level collectors for the random-keyed indexes; sorted before insertion below.
+        let mut spent_batch: Vec<(Vec<u8>, TxLocation)> = Vec::new();
+        let mut txid_location_batch: Vec<([u8; 32], TxLocation)> = Vec::new();
+
+        for block in blocks {
+            let block_hash = block.context.index.hash;
+            let block_hash_bytes = block_hash.to_bytes()?;
+            let block_height = block.context.index.height;
+            let block_height_bytes = block_height.to_bytes()?;
+
+            // Continuity: height = prev + 1 and parent extends the current tip (genesis if empty).
+            match prev_height {
+                Some(tip) => {
+                    if block_height.0 != tip + 1 {
+                        return Err(FinalisedStateError::Custom(format!(
+                            "cannot write block at height {block_height:?}; current tip is {tip}"
+                        )));
+                    }
+                    if Some(*block.context.parent_hash()) != prev_hash {
+                        return Err(FinalisedStateError::InvalidBlock {
+                            height: block_height.0,
+                            hash: block_hash,
+                            reason: "parent hash does not extend current tip".to_string(),
+                        });
+                    }
+                }
+                None => {
+                    if block_height.0 != GENESIS_HEIGHT.0 {
+                        return Err(FinalisedStateError::Custom(format!(
+                            "first block must be height 0, got {block_height:?}"
+                        )));
+                    }
+                }
+            }
+
+            let height_entry = StoredEntryFixed::new(&block_hash_bytes, block_height);
+            let header_entry = StoredEntryVar::new(
+                &block_height_bytes,
+                BlockHeaderData::new(block.context, *block.data()),
+            );
+            let commitment_tree_entry =
+                StoredEntryFixed::new(&block_height_bytes, *block.commitment_tree_data());
+
+            let tx_len = block.transactions().len();
+            let mut txids: Vec<TransactionHash> = Vec::with_capacity(tx_len);
+            let mut txid_set: HashSet<TransactionHash> = HashSet::with_capacity(tx_len);
+            let mut transparent: Vec<Option<TransparentCompactTx>> = Vec::with_capacity(tx_len);
+            let mut sapling = Vec::with_capacity(tx_len);
+            let mut orchard = Vec::with_capacity(tx_len);
+
+            for (tx_index, tx) in block.transactions().iter().enumerate() {
+                let hash = tx.txid();
+                if !txid_set.insert(*hash) {
+                    return Err(FinalisedStateError::InvalidBlock {
+                        height: block_height.0,
+                        hash: block_hash,
+                        reason: format!("duplicate transaction hash in block: {hash:?}"),
+                    });
+                }
+                txids.push(*hash);
+
+                let transparent_data = if tx.transparent().inputs().is_empty()
+                    && tx.transparent().outputs().is_empty()
+                {
+                    None
+                } else {
+                    Some(tx.transparent().clone())
+                };
+                transparent.push(transparent_data);
+
+                let sapling_data =
+                    if tx.sapling().spends().is_empty() && tx.sapling().outputs().is_empty() {
+                        None
+                    } else {
+                        Some(tx.sapling().clone())
+                    };
+                sapling.push(sapling_data);
+
+                let orchard_data = if tx.orchard().actions().is_empty() {
+                    None
+                } else {
+                    Some(tx.orchard().clone())
+                };
+                orchard.push(orchard_data);
+
+                let tx_index =
+                    u16::try_from(tx_index).map_err(|_| FinalisedStateError::InvalidBlock {
+                        height: block_height.0,
+                        hash: block_hash,
+                        reason: format!("transaction index {tx_index} does not fit into u16"),
+                    })?;
+                let tx_location = TxLocation::new(block_height.0, tx_index);
+
+                for input in tx.transparent().inputs().iter() {
+                    if input.is_null_prevout() {
+                        continue;
+                    }
+                    let prev_outpoint =
+                        Outpoint::new(*input.prevout_txid(), input.prevout_index());
+                    spent_batch.push((prev_outpoint.to_bytes()?, tx_location));
+                }
+
+                txid_location_batch.push(((*hash).into(), tx_location));
+            }
+
+            // Cheap in-memory correctness check: txids must reproduce the header merkle root.
+            let txid_bytes: Vec<[u8; 32]> = txids.iter().map(|t| t.0).collect();
+            let computed_merkle_root = Self::calculate_block_merkle_root(&txid_bytes);
+            if &computed_merkle_root != block.data().merkle_root() {
+                return Err(FinalisedStateError::InvalidBlock {
+                    height: block_height.0,
+                    hash: block_hash,
+                    reason: "header merkle root does not match block txids".to_string(),
+                });
+            }
+
+            let txid_entry = StoredEntryVar::new(&block_height_bytes, TxidList::new(txids));
+            let transparent_entry =
+                StoredEntryVar::new(&block_height_bytes, TransparentTxList::new(transparent));
+            let sapling_entry =
+                StoredEntryVar::new(&block_height_bytes, SaplingTxList::new(sapling));
+            let orchard_entry =
+                StoredEntryVar::new(&block_height_bytes, OrchardTxList::new(orchard));
+
+            // Height-keyed tables (+ the hash-keyed `heights`, one entry/block) written per block.
+            put_idempotent(&mut txn, self.headers, &block_height_bytes, &header_entry.to_bytes()?)?;
+            put_idempotent(&mut txn, self.heights, &block_hash_bytes, &height_entry.to_bytes()?)?;
+            put_idempotent(&mut txn, self.txids, &block_height_bytes, &txid_entry.to_bytes()?)?;
+            put_idempotent(
+                &mut txn,
+                self.transparent,
+                &block_height_bytes,
+                &transparent_entry.to_bytes()?,
+            )?;
+            put_idempotent(&mut txn, self.sapling, &block_height_bytes, &sapling_entry.to_bytes()?)?;
+            put_idempotent(&mut txn, self.orchard, &block_height_bytes, &orchard_entry.to_bytes()?)?;
+            put_idempotent(
+                &mut txn,
+                self.commitment_tree_data,
+                &block_height_bytes,
+                &commitment_tree_entry.to_bytes()?,
+            )?;
+
+            prev_height = Some(block_height.0);
+            prev_hash = Some(block_hash);
+        }
+
+        // Insert the random-keyed indexes in ascending key order so the B-tree is swept
+        // sequentially rather than faulting on scattered leaves. A duplicate key with a
+        // conflicting value (a double-spend / inconsistency) is rejected by `put_idempotent`.
+        spent_batch.sort_by(|a, b| a.0.cmp(&b.0));
+        for (key, tx_location) in &spent_batch {
+            let entry_bytes = StoredEntryFixed::new(key, *tx_location).to_bytes()?;
+            put_idempotent(&mut txn, self.spent, key, &entry_bytes)?;
+        }
+
+        txid_location_batch.sort_by(|a, b| a.0.cmp(&b.0));
+        for (key, tx_location) in &txid_location_batch {
+            let entry_bytes = StoredEntryFixed::new(key, *tx_location).to_bytes()?;
+            put_idempotent(&mut txn, self.txid_location, key, &entry_bytes)?;
+        }
+
+        txn.commit()?;
+        Ok(())
     }
 
     /// Deletes a block identified height from every finalised table.
