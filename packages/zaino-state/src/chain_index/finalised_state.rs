@@ -195,10 +195,7 @@ use crate::{
 };
 
 use std::{sync::Arc, time::Duration};
-use tokio::{
-    sync::watch,
-    time::{interval, MissedTickBehavior},
-};
+use tokio::time::{interval, MissedTickBehavior};
 
 /// Fetches the block at `height_int` from `source` and builds its [`IndexedBlock`], threading
 /// `parent_chainwork` into the block metadata.
@@ -577,47 +574,12 @@ impl ZainoDB {
     where
         T: BlockchainSource,
     {
-        let network = self.cfg.network;
-        let target_height = height.0;
-
-        // Shutdown signal for the reporter task.
-        let (shutdown_tx, mut shutdown_rx) = watch::channel(());
-        // Spawn a reporter that logs sync progress every 10s by polling the db tip, while the
-        // backend owns the ingestion loop below.
-        let reporter_db = Arc::clone(&self.db);
-        let reporter_handle = tokio::spawn(async move {
-            let mut interval = tokio::time::interval(Duration::from_secs(10));
-            loop {
-                tokio::select! {
-                    _ = interval.tick() => {
-                        let current = reporter_db
-                            .db_height()
-                            .await
-                            .ok()
-                            .flatten()
-                            .map_or(0, |height| height.0);
-                        tracing::info!(
-                            "sync_to_height: syncing height {current} / {target_height} on network = {:?}",
-                            network,
-                        );
-                    }
-                    // stop when we receive a shutdown signal
-                    _ = shutdown_rx.changed() => {
-                        break;
-                    }
-                }
-            }
-        });
-
         // Backends own the ingestion loop (fetch → build → write) so they can batch and defer
-        // secondary-index maintenance; see `DbWrite::write_blocks_to_height`.
+        // secondary-index maintenance; see `DbWrite::write_blocks_to_height`. Progress is logged
+        // from within that loop (in-flight height + per-batch commit), so there is no separate
+        // reporter task here — the previous one polled the *committed* db tip, which sits at 0 while
+        // the first batch is still being buffered and read as a stall.
         let result = self.db.write_blocks_to_height(height, source).await;
-
-        // Signal the reporter to shut down and wait for it to finish.
-        // Ignore send error if receiver already dropped.
-        let _ = shutdown_tx.send(());
-        // Await the reporter to ensure clean shutdown; ignore errors if it panicked/was aborted.
-        let _ = reporter_handle.await;
 
         // The env is opened with `NO_SYNC`, so the blocks written above are committed but may not
         // be on disk yet. Force a durability checkpoint at the end of a completed batch: a

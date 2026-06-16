@@ -21,6 +21,23 @@ fn approx_indexed_block_bytes(block: &IndexedBlock) -> u64 {
         })
         .sum()
 }
+
+/// Maximum number of blocks buffered in a single bulk-sync write batch, regardless of the byte
+/// budget. Early-chain blocks are tiny, so the byte budget alone could buffer an enormous number of
+/// blocks before the first commit — delaying durability/progress and inflating memory. This caps
+/// the time-to-first-commit and the crash-loss window.
+#[cfg(not(feature = "transparent_address_history_experimental"))]
+const SYNC_WRITE_BATCH_MAX_BLOCKS: usize = 100_000;
+
+/// Maximum wall-clock time spent buffering a single bulk-sync write batch before flushing, so
+/// commits (and progress) happen regularly even when block fetches are slow.
+#[cfg(not(feature = "transparent_address_history_experimental"))]
+const SYNC_WRITE_BATCH_MAX_INTERVAL: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// Interval between in-flight "syncing height" progress logs during bulk sync.
+#[cfg(not(feature = "transparent_address_history_experimental"))]
+const SYNC_PROGRESS_LOG_INTERVAL: std::time::Duration = std::time::Duration::from_secs(10);
+
 #[cfg(test)]
 use crate::version;
 
@@ -103,12 +120,21 @@ impl DbWrite for DbV1 {
         {
             let batch_budget = self.config.storage.database.sync_write_batch_bytes.max(1);
             let mut next = start_height;
+            let mut last_progress_log = std::time::Instant::now();
             while next <= height.0 {
                 // Fetch blocks (async; an LMDB write txn is `!Send` and cannot be held across the
-                // await) until the byte budget is reached.
+                // await) into a buffer, flushing on the *first* of: byte budget, block-count cap, or
+                // time cap. The count/time caps keep the first commit (and progress, and crash-loss
+                // window) prompt even on the tiny early-chain blocks, where the byte budget alone
+                // would buffer a huge number of blocks before committing.
                 let mut batch: Vec<IndexedBlock> = Vec::new();
                 let mut batch_bytes: u64 = 0;
-                while next <= height.0 && batch_bytes < batch_budget {
+                let batch_started = std::time::Instant::now();
+                while next <= height.0
+                    && batch_bytes < batch_budget
+                    && batch.len() < SYNC_WRITE_BATCH_MAX_BLOCKS
+                    && batch_started.elapsed() < SYNC_WRITE_BATCH_MAX_INTERVAL
+                {
                     let block = build_indexed_block_from_source(
                         source,
                         network,
@@ -122,6 +148,22 @@ impl DbWrite for DbV1 {
                     batch_bytes = batch_bytes.saturating_add(approx_indexed_block_bytes(&block));
                     batch.push(block);
                     next += 1;
+
+                    // In-flight progress: the block being fetched, throttled by time. (The committed
+                    // tip is reported by the per-batch commit log below.)
+                    if last_progress_log.elapsed() >= SYNC_PROGRESS_LOG_INTERVAL {
+                        info!(
+                            "write_blocks_to_height: syncing height {} / {} on {:?}",
+                            next - 1,
+                            height.0,
+                            network
+                        );
+                        last_progress_log = std::time::Instant::now();
+                    }
+                }
+
+                if batch.is_empty() {
+                    break;
                 }
 
                 // Write + sort + commit the batch atomically, then force durability. The on-disk
@@ -284,12 +326,14 @@ impl DbV1 {
                     // one of the two cheap, in-memory correctness checks (the other is the merkle
                     // root below) that justify marking the block validated after a successful write
                     // without the expensive post-commit re-read.
-                    let last_entry = StoredEntryVar::<BlockHeaderData>::from_bytes(last_header_bytes)
-                        .map_err(|e| {
-                            FinalisedStateError::Custom(format!(
-                                "tip header decode error during continuity check: {e}"
-                            ))
-                        })?;
+                    let last_entry = StoredEntryVar::<BlockHeaderData>::from_bytes(
+                        last_header_bytes,
+                    )
+                    .map_err(|e| {
+                        FinalisedStateError::Custom(format!(
+                            "tip header decode error during continuity check: {e}"
+                        ))
+                    })?;
                     if last_entry.inner().context.hash() != block.context.parent_hash() {
                         return Err(FinalisedStateError::InvalidBlock {
                             height: block_height.0,
@@ -1025,11 +1069,16 @@ impl DbV1 {
                     let last_height = Height::from_bytes(
                         last_height_bytes.expect("Height is always some in the finalised state"),
                     )?;
-                    let last_entry =
-                        StoredEntryVar::<BlockHeaderData>::from_bytes(last_header_bytes).map_err(
-                            |e| FinalisedStateError::Custom(format!("tip header decode error: {e}")),
-                        )?;
-                    (Some(last_height.0), Some(*last_entry.inner().context.hash()))
+                    let last_entry = StoredEntryVar::<BlockHeaderData>::from_bytes(
+                        last_header_bytes,
+                    )
+                    .map_err(|e| {
+                        FinalisedStateError::Custom(format!("tip header decode error: {e}"))
+                    })?;
+                    (
+                        Some(last_height.0),
+                        Some(*last_entry.inner().context.hash()),
+                    )
                 }
                 Err(lmdb::Error::NotFound) => (None, None),
                 Err(e) => return Err(FinalisedStateError::LmdbError(e)),
@@ -1133,8 +1182,7 @@ impl DbV1 {
                     if input.is_null_prevout() {
                         continue;
                     }
-                    let prev_outpoint =
-                        Outpoint::new(*input.prevout_txid(), input.prevout_index());
+                    let prev_outpoint = Outpoint::new(*input.prevout_txid(), input.prevout_index());
                     spent_batch.push((prev_outpoint.to_bytes()?, tx_location));
                 }
 
@@ -1161,17 +1209,42 @@ impl DbV1 {
                 StoredEntryVar::new(&block_height_bytes, OrchardTxList::new(orchard));
 
             // Height-keyed tables (+ the hash-keyed `heights`, one entry/block) written per block.
-            put_idempotent(&mut txn, self.headers, &block_height_bytes, &header_entry.to_bytes()?)?;
-            put_idempotent(&mut txn, self.heights, &block_hash_bytes, &height_entry.to_bytes()?)?;
-            put_idempotent(&mut txn, self.txids, &block_height_bytes, &txid_entry.to_bytes()?)?;
+            put_idempotent(
+                &mut txn,
+                self.headers,
+                &block_height_bytes,
+                &header_entry.to_bytes()?,
+            )?;
+            put_idempotent(
+                &mut txn,
+                self.heights,
+                &block_hash_bytes,
+                &height_entry.to_bytes()?,
+            )?;
+            put_idempotent(
+                &mut txn,
+                self.txids,
+                &block_height_bytes,
+                &txid_entry.to_bytes()?,
+            )?;
             put_idempotent(
                 &mut txn,
                 self.transparent,
                 &block_height_bytes,
                 &transparent_entry.to_bytes()?,
             )?;
-            put_idempotent(&mut txn, self.sapling, &block_height_bytes, &sapling_entry.to_bytes()?)?;
-            put_idempotent(&mut txn, self.orchard, &block_height_bytes, &orchard_entry.to_bytes()?)?;
+            put_idempotent(
+                &mut txn,
+                self.sapling,
+                &block_height_bytes,
+                &sapling_entry.to_bytes()?,
+            )?;
+            put_idempotent(
+                &mut txn,
+                self.orchard,
+                &block_height_bytes,
+                &orchard_entry.to_bytes()?,
+            )?;
             put_idempotent(
                 &mut txn,
                 self.commitment_tree_data,
@@ -1679,7 +1752,8 @@ impl DbV1 {
     /// Returns the current contiguous validated-tip height. Test hook for asserting that the write
     /// path advances the validated tip without relying on the background validator.
     pub(crate) fn validated_tip_height(&self) -> u32 {
-        self.validated_tip.load(std::sync::atomic::Ordering::Acquire)
+        self.validated_tip
+            .load(std::sync::atomic::Ordering::Acquire)
     }
 
     /// Writes a block using the v1.0.0 format.
