@@ -8,6 +8,11 @@ and this library adheres to Rust's notion of
 ## [Unreleased]
 
 ### Added
+- `StorageConfig::database.sync_write_batch_bytes` (default 4 GiB) — byte budget
+  for the finalised-state bulk-sync / migration write batch. Larger batches
+  insert the random-keyed `spent` / `txid_location` indexes in bigger sorted
+  sweeps (fewer random B-tree faults once the DB exceeds RAM), at the cost of
+  more RAM; raise it on large-RAM hosts.
 ### Changed
 ### Deprecated
 ### Removed

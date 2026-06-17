@@ -14,6 +14,8 @@ and this library adheres to Rust's notion of
   validator.
 
 ### Added
+- `storage.database.sync_write_batch_bytes` config (default 4 GiB) tunes the
+  finalised-state bulk-sync / migration write-batch size.
 - `zainod` gains an `allow_unencrypted_public_json_rpc_bind` build feature that
   lifts the new private-only JSON-RPC bind restriction for trusted
   private-network deployments (logs a `WARN` on startup when enabled).
@@ -24,6 +26,13 @@ and this library adheres to Rust's notion of
   `FinalisedTxOutSetInfoAccumulator` with the non-finalised state to produce
   the full `GetTxOutSetInfoResponse`.
 ### Changed
+- Finalised-state sync and the v1.1.0 -> v1.2.0 migration are substantially
+  faster on large/mainnet caches. The txout-set accumulator is built in bulk at
+  the tip instead of per block (removing an unbounded fan-out of random reads),
+  block validation is off the write path, and the random-keyed `spent` /
+  `txid_location` indexes are written in sorted batches — together removing the
+  random-fault stall around sandblast height. See the `zaino-state` changelog for
+  details; tune the write-batch size with `storage.database.sync_write_batch_bytes`.
 - The `zainod` JSON-RPC server now refuses to bind to public or unspecified
   (`0.0.0.0` / `::`) addresses by default; `check_config` enforces the same
   private/loopback rule already applied to gRPC. The unencrypted JSON-RPC
