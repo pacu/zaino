@@ -870,6 +870,21 @@ impl DbBackend {
         }
     }
 
+    /// Reads the height the persisted txout-set accumulator currently reflects (V1 only).
+    ///
+    /// `None` means it has never been built. Test hook for asserting the incremental range-update
+    /// path advances the watermark (and is therefore taken, rather than a silent rebuild fallback).
+    pub(crate) async fn read_tx_out_set_accumulator_built_height(
+        &self,
+    ) -> Result<Option<Height>, FinalisedStateError> {
+        match self {
+            Self::V1(database) => database.read_tx_out_set_accumulator_built_height().await,
+            Self::V0(_) => Err(FinalisedStateError::FeatureUnavailable(
+                "v1 txout-set accumulator builder",
+            )),
+        }
+    }
+
     /// Computes (without persisting) the bulk-built txout-set accumulator to `db_tip` (V1 only).
     ///
     /// Test hook for asserting the sequential bulk builder matches the incrementally-maintained

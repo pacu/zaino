@@ -143,15 +143,30 @@ pub(crate) const TX_OUT_SET_INFO_ACCUMULATOR_DATABASE_NAME: &str =
 /// Singleton key for the finalised txout-set accumulator table.
 pub(crate) const TX_OUT_SET_INFO_ACCUMULATOR_KEY: &[u8] = b"tx_out_set_info_accumulator";
 
-/// Metadata key recording the height the finalised txout-set accumulator was last *fully* built to.
+/// Metadata key recording the height the finalised txout-set accumulator currently reflects.
 ///
-/// Stored in the `metadata` table as `StoredEntryFixed<Height>`. The accumulator is no longer
-/// maintained per block on the sync write path; it is rebuilt in bulk (see
-/// [`DbV1::rebuild_tx_out_set_accumulator`]) once a sync run reaches the tip. This watermark lets
-/// readers detect a *stale* accumulator (watermark `<` db tip) after a sync was interrupted before
-/// the rebuild ran, rather than serving incorrect `gettxoutsetinfo` data.
+/// Stored in the `metadata` table as `StoredEntryFixed<Height>`. The accumulator is not maintained
+/// per block on the bulk-sync write path. After a catch-up run it is brought up to the tip either by
+/// a full from-genesis rebuild ([`DbV1::rebuild_tx_out_set_accumulator`], used for the first build /
+/// an unusually large gap) or, in steady state, by applying just the delta for the newly-written
+/// range ([`DbV1::update_tx_out_set_accumulator_for_range`]). Both advance this watermark to the new
+/// tip in the same transaction as the accumulator. It lets the dispatch pick the cheap incremental
+/// path and lets readers detect a *stale* accumulator (watermark `<` db tip) after a sync was
+/// interrupted before the accumulator step ran, rather than serving incorrect `gettxoutsetinfo` data.
 pub(crate) const TX_OUT_SET_ACCUMULATOR_BUILT_HEIGHT_KEY: &[u8] =
     b"_tx_out_set_accumulator_built_height";
+
+/// Maximum accumulator staleness (`db_tip - watermark`, in blocks) still updated incrementally.
+///
+/// Below this gap, [`DbV1::write_blocks_to_height`] advances the persisted txout-set accumulator by
+/// applying only the delta for the just-written range — O(range) work, independent of chain length.
+/// At or above it (the first build, or a sync interrupted far behind the on-disk tip) it falls back
+/// to the full from-genesis [`DbV1::rebuild_tx_out_set_accumulator`]. The incremental path does
+/// ~O(range outputs) random `spent`/prev-output lookups (page faults once the DB exceeds RAM), so
+/// this is set conservatively — well under the fixed full-scan cost — while still covering a
+/// multi-hour offline catch-up. It is a performance knob, not a correctness one:
+/// both paths produce the identical accumulator at the tip.
+pub(crate) const ACCUMULATOR_INCREMENTAL_MAX_GAP: u32 = 1_000;
 
 /// Number of txid-prefix shards used by the bulk txout-set accumulator builder.
 ///

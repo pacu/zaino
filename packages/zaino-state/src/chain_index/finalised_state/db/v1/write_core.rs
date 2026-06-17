@@ -203,12 +203,30 @@ impl DbWrite for DbV1 {
             }
         }
 
-        // Rebuild the deferred txout-set accumulator once, at the tip, via sequential scans.
-        info!(
-            "write_blocks_to_height: rebuilding txout-set accumulator to height {}",
-            height.0
-        );
-        self.rebuild_tx_out_set_accumulator().await?;
+        // Bring the deferred txout-set accumulator up to the new tip. The full from-genesis rebuild
+        // is a fixed chain-length scan, so running it on every catch-up poll stalls the sync loop
+        // once the chain is large. Use it only for the first build or an unusually large gap (e.g. a
+        // sync interrupted far behind the on-disk tip); in steady state apply just the delta for the
+        // blocks we wrote — O(range) work — which produces the identical accumulator at the tip.
+        match self.read_tx_out_set_accumulator_built_height().await? {
+            Some(built) if built.0 >= height.0 => {}
+            Some(built) if height.0.saturating_sub(built.0) <= ACCUMULATOR_INCREMENTAL_MAX_GAP => {
+                info!(
+                    "write_blocks_to_height: updating txout-set accumulator {}..={}",
+                    built.0 + 1,
+                    height.0
+                );
+                self.update_tx_out_set_accumulator_for_range(built, height)
+                    .await?;
+            }
+            _ => {
+                info!(
+                    "write_blocks_to_height: rebuilding txout-set accumulator to height {}",
+                    height.0
+                );
+                self.rebuild_tx_out_set_accumulator().await?;
+            }
+        }
 
         Ok(())
     }

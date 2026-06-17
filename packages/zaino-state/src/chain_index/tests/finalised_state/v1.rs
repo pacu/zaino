@@ -1154,6 +1154,82 @@ async fn batched_sync_is_batch_size_independent() {
     );
 }
 
+/// The incremental range-update path — taken when a catch-up advances an already-built accumulator
+/// by a small range (`write_blocks_to_height`'s steady-state branch) — must produce exactly the
+/// accumulator a full from-genesis rebuild produces at the same tip, for all five fields. This is
+/// the correctness gate for `update_tx_out_set_accumulator_for_range`: with regtest coinbase
+/// maturity of 100, splitting the sync at height 100 guarantees the second segment spends outputs
+/// created in the first (exercising the `transactions` "Set B" decrement) as well as outputs both
+/// created and spent within the range (the XOR-cancel case).
+#[tokio::test(flavor = "multi_thread")]
+async fn incremental_accumulator_update_matches_full_rebuild() {
+    init_tracing();
+
+    use crate::chain_index::finalised_state::capability::{
+        CapabilityRequest, DbRead, TransparentHistExt,
+    };
+
+    let blocks = load_test_vectors().unwrap().blocks;
+    let source = build_mockchain_source(blocks);
+    let temp_dir: TempDir = tempfile::tempdir().unwrap();
+    let config = BlockCacheConfig {
+        storage: StorageConfig {
+            database: DatabaseConfig {
+                path: temp_dir.path().to_path_buf(),
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+        db_version: 1,
+        network: Network::Regtest(ActivationHeights::default()),
+    };
+
+    let zaino_db = ZainoDB::spawn(config, source.clone()).await.unwrap();
+
+    // First segment builds the accumulator to height 100 (no watermark yet => full rebuild),
+    // the second advances it by a 100-block range => the incremental update path under test.
+    zaino_db.sync_to_height(Height(100), &source).await.unwrap();
+
+    let backend = zaino_db
+        .backend_for_cap(CapabilityRequest::WriteCore)
+        .unwrap();
+
+    // The watermark must sit at 100 here: that (together with gap 100 <= the incremental cap)
+    // pins the next sync to the incremental branch rather than a silent rebuild fallback that
+    // would make the comparison below trivial.
+    assert_eq!(
+        backend
+            .read_tx_out_set_accumulator_built_height()
+            .await
+            .unwrap(),
+        Some(Height(100)),
+        "first segment must leave the accumulator watermark at the synced tip"
+    );
+
+    zaino_db.sync_to_height(Height(200), &source).await.unwrap();
+
+    let db_tip = backend.db_height().await.unwrap().unwrap();
+    assert_eq!(db_tip, Height(200), "both segments must have been synced");
+    assert_eq!(
+        backend
+            .read_tx_out_set_accumulator_built_height()
+            .await
+            .unwrap(),
+        Some(Height(200)),
+        "incremental update must advance the watermark to the new tip"
+    );
+
+    let incremental = backend.get_tx_out_set_info_accumulator().await.unwrap();
+    let from_genesis =
+        tokio::task::block_in_place(|| backend.build_tx_out_set_accumulator_blocking(db_tip, 1))
+            .unwrap();
+
+    assert_eq!(
+        incremental, from_genesis,
+        "incremental range-update accumulator must equal the from-genesis rebuild at the tip"
+    );
+}
+
 /// Computes the canonical [`FinalisedTxOutSetInfoAccumulator`] for a fully-resolved UTXO set,
 /// used as the source of truth by the write/delete accumulator tests.
 fn accumulator_from_unspent_map(

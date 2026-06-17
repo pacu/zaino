@@ -60,12 +60,16 @@ and this library adheres to Rust's notion of
   and a time cap; each batch commits and fsyncs atomically, so sync and migration
   stay crash-safe and resume gap-free.
 - The finalised txout-set accumulator is no longer maintained per block during
-  bulk sync or migration. It is deferred and rebuilt once at the tip via
-  sequential table scans (`DbV1::rebuild_tx_out_set_accumulator`), removing an
-  unbounded fan-out of random `spent` reads per block that stalled sync around
-  sandblast height. Single-block appends (`write_block`) still maintain it
-  incrementally; a `_tx_out_set_accumulator_built_height` watermark tracks
-  freshness.
+  bulk sync or migration. It is deferred and brought up to the tip after a
+  catch-up run: the first build (or an unusually large gap) does a full
+  sequential-scan rebuild (`DbV1::rebuild_tx_out_set_accumulator`), while a
+  steady-state catch-up applies just the delta for the newly-written range
+  (`DbV1::update_tx_out_set_accumulator_for_range`) — O(range) work that yields
+  the identical accumulator. This removes an unbounded fan-out of random `spent`
+  reads per block that stalled sync around sandblast height. Single-block appends
+  (`write_block`) still maintain it incrementally; a
+  `_tx_out_set_accumulator_built_height` watermark tracks freshness and selects
+  the rebuild-vs-incremental path.
 - Block validation moved off the write hot path: `write_block` now performs cheap
   in-memory parent-hash continuity and merkle-root checks and advances
   `validated_tip` directly, instead of a post-commit read-back. The full
@@ -74,6 +78,13 @@ and this library adheres to Rust's notion of
 ### Deprecated
 ### Removed
 ### Fixed
+- Finalised-state catch-up no longer rebuilds the txout-set accumulator from
+  genesis on every poll. Because `write_blocks_to_height` rebuilt it
+  unconditionally at the end of each run, every newly-finalised block triggered a
+  full-chain scan (~45 min on mainnet once the DB exceeds RAM), so the node could
+  never reach the tip and stayed stuck "Syncing". The accumulator is now advanced
+  incrementally over just the written range in steady state, falling back to the
+  full rebuild only for the first build or a large gap.
 - Finalised-state DB v1.2.0: added a reverse transaction-id index
   (`txid_location`) so previous-output resolution is an O(log n) point lookup
   instead of a full scan of the `txids` table. This fixes a near-quadratic
