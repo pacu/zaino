@@ -1412,6 +1412,72 @@ async fn get_taddress_balance_faucet_fetch_vs_state() {
     svc.test_manager.close().await;
 }
 
+/// Port of `state_service_…::get_address_utxos` (faucet cluster, zebrad): the
+/// fetch and state indexers agree on `get_address_utxos` over the faucet's
+/// coinbase taddr. The non-vacuity probe replaces the original's zingolib
+/// `transaction_summaries` wallet cross-check (devtool has no transaction
+/// listing) and confirms the faucet taddr actually holds coinbase utxos.
+async fn get_address_utxos_faucet_fetch_vs_state() {
+    let (mut svc, faucet_taddr) = launch_transparent_and_faucet_taddr(5).await;
+
+    let request = GetAddressUtxosArg {
+        addresses: vec![faucet_taddr],
+        start_height: 2,
+        max_entries: 3,
+    };
+    let fetch = svc
+        .fetch_subscriber
+        .get_address_utxos(request.clone())
+        .await
+        .unwrap();
+    let state = svc
+        .state_subscriber
+        .get_address_utxos(request)
+        .await
+        .unwrap();
+
+    assert!(!fetch.address_utxos.is_empty());
+    assert_eq!(fetch, state);
+
+    svc.test_manager.close().await;
+}
+
+/// Port of `state_service_…::get_address_utxos_stream` (faucet cluster, zebrad):
+/// the streamed `get_address_utxos_stream` agrees between the fetch and state
+/// indexers over the faucet's coinbase taddr.
+async fn get_address_utxos_stream_faucet_fetch_vs_state() {
+    use futures::StreamExt as _;
+
+    let (mut svc, faucet_taddr) = launch_transparent_and_faucet_taddr(5).await;
+
+    let request = GetAddressUtxosArg {
+        addresses: vec![faucet_taddr],
+        start_height: 2,
+        max_entries: 3,
+    };
+    let fetch = svc
+        .fetch_subscriber
+        .get_address_utxos_stream(request.clone())
+        .await
+        .unwrap()
+        .map(Result::unwrap)
+        .collect::<Vec<_>>()
+        .await;
+    let state = svc
+        .state_subscriber
+        .get_address_utxos_stream(request)
+        .await
+        .unwrap()
+        .map(Result::unwrap)
+        .collect::<Vec<_>>()
+        .await;
+
+    assert!(!fetch.is_empty());
+    assert_eq!(fetch, state);
+
+    svc.test_manager.close().await;
+}
+
 /// Launch transparent-mining state+fetch services and mine up to chain height
 /// 100 — the dual-backend, devtool analogue of `launch_transparent_with_known_tip`.
 /// The block-range edge tests need a known 100-block tip and no wallet client.
@@ -1686,6 +1752,16 @@ mod zebrad {
     #[tokio::test(flavor = "multi_thread")]
     async fn get_taddress_balance_faucet_fetch_vs_state() {
         crate::get_taddress_balance_faucet_fetch_vs_state().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn get_address_utxos_faucet_fetch_vs_state() {
+        crate::get_address_utxos_faucet_fetch_vs_state().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn get_address_utxos_stream_faucet_fetch_vs_state() {
+        crate::get_address_utxos_stream_faucet_fetch_vs_state().await;
     }
 
     #[tokio::test(flavor = "multi_thread")]
