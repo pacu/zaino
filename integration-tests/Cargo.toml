@@ -17,15 +17,18 @@ version = "0.2.0"
 
 [workspace.dependencies]
 # Workspace members
-zaino-testutils = { path = "zaino-testutils" }
+# default-features = false so the default-on `zcashd_support` feature can be
+# dropped via `--no-default-features`; consumers re-enable it by forwarding
+# `zcashd_support`. See docs/adr/0001-zcashd-support-feature-gate.md.
+zaino-testutils = { path = "zaino-testutils", default-features = false }
 
 # Non-member path deps (from parent workspace)
 zaino-proto = { path = "../packages/zaino-proto" }
-zaino-state = { path = "../packages/zaino-state" }
-zaino-serve = { path = "../packages/zaino-serve" }
+zaino-state = { path = "../packages/zaino-state", default-features = false }
+zaino-serve = { path = "../packages/zaino-serve", default-features = false }
 zaino-common = { path = "../packages/zaino-common" }
-zaino-fetch = { path = "../packages/zaino-fetch" }
-zainod = { path = "../packages/zainod" }
+zaino-fetch = { path = "../packages/zaino-fetch", default-features = false }
+zainod = { path = "../packages/zainod", default-features = false }
 
 # Zingo-infra (validator launcher; not a wallet dep)
 # TEMPORARY (zingolabs/infrastructure#269): pinned to a specific commit on the
