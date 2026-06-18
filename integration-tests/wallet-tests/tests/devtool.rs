@@ -1634,6 +1634,151 @@ where
     test_manager.close().await;
 }
 
+/// Port of `zebra::get::address_deltas` (zebrad): `getaddressdeltas` over a
+/// transparent-mined chain where the faucet shields its matured transparent
+/// coinbase, then sends transparent to the recipient.
+///
+/// This is the optimistic port of a round-2-P1-gated test: it funds via
+/// **transparent** coinbase (proofless, cheap) and calls `shield_faucet`, which
+/// requires the devtool wallet to detect + spend its own transparent coinbase.
+/// If devtool can't, the shield fails here and pinpoints the gap; if it can,
+/// the excision's last real blocker is closed. Heights are derived from the
+/// live chain (not the original's hardcoded 102/104) so the only failure mode
+/// is the shield capability, not setup-height drift.
+async fn address_deltas() {
+    use zaino_fetch::jsonrpsee::response::address_deltas::{
+        GetAddressDeltasParams, GetAddressDeltasResponse,
+    };
+
+    const NON_EXISTENT_ADDRESS: &str = "tmVqEASZxBNKFTbmASZikGa5fPLkd68iJyx";
+
+    let mut svc = zaino_testutils::launch_state_and_fetch_services_mining_to::<Zebrad>(
+        // The deltas under test are the faucet taddr's coinbase credits and the
+        // shield's debit — coinbase must land on the miner taddr.
+        zaino_testutils::PoolType::Transparent,
+        &ValidatorKind::Zebrad,
+        None,
+        true,
+        Some(zebra_chain::parameters::NetworkKind::Regtest),
+    )
+    .await;
+    let mut clients = wallet_tests::devtool::build_clients(
+        svc.test_manager
+            .zaino_grpc_listen_address
+            .expect("zaino enabled")
+            .port(),
+    )
+    .await;
+
+    let recipient_taddr = clients.get_recipient_address("transparent").await;
+    let faucet_taddr = clients.get_faucet_address("transparent").await;
+
+    // Mature the faucet's transparent coinbase past the 100-block maturity, then
+    // shield it (the shield's debit on the faucet taddr is a delta under test,
+    // and shielding transparent coinbase is the devtool capability exercised).
+    svc.generate_blocks_and_wait_for_tips(105).await;
+    clients.sync_faucet().await;
+    clients.shield_faucet().await;
+    svc.generate_blocks_and_wait_for_tips(1).await;
+
+    clients.send_from_faucet(&recipient_taddr, 250_000).await;
+    svc.generate_blocks_and_wait_for_tips(1).await;
+    clients.sync_recipient().await;
+
+    // Derived heights: the send lands in the tip block.
+    let chain_tip = svc.fetch_subscriber.tip_height().await as u32;
+    let tx_height = chain_tip;
+    let height_beyond_tip = chain_tip + 100;
+
+    // 1) Simple query (single address) -> Simple variant with the send delta.
+    let response = svc
+        .state_subscriber
+        .get_address_deltas(GetAddressDeltasParams::Address(recipient_taddr.clone()))
+        .await
+        .unwrap();
+    let GetAddressDeltasResponse::Simple(deltas) = response else {
+        panic!("Expected Simple variant");
+    };
+    let recipient_delta = deltas
+        .iter()
+        .find(|d| d.height >= tx_height)
+        .expect("Should find recipient transaction delta");
+    assert_eq!(recipient_delta.index, 0, "Expected output index 0");
+
+    // 2) Filtered with start=0 -> Simple variant, deltas from both addresses.
+    let response = svc
+        .state_subscriber
+        .get_address_deltas(GetAddressDeltasParams::Filtered {
+            addresses: vec![recipient_taddr.clone(), faucet_taddr.clone()],
+            start: 0,
+            end: chain_tip,
+            chain_info: true,
+        })
+        .await
+        .unwrap();
+    let GetAddressDeltasResponse::Simple(deltas) = response else {
+        panic!("Expected Simple variant for start=0");
+    };
+    assert!(deltas.len() >= 2, "Expected deltas from multiple addresses");
+
+    // 3) Filtered with start>0 and chain_info -> WithChainInfo variant.
+    let response = svc
+        .state_subscriber
+        .get_address_deltas(GetAddressDeltasParams::Filtered {
+            addresses: vec![recipient_taddr.clone(), faucet_taddr.clone()],
+            start: 1,
+            end: chain_tip,
+            chain_info: true,
+        })
+        .await
+        .unwrap();
+    let GetAddressDeltasResponse::WithChainInfo { deltas, start, end } = response else {
+        panic!("Expected WithChainInfo variant");
+    };
+    assert!(!deltas.is_empty(), "Expected deltas with chain info");
+    assert_eq!(start.height, 1, "Start block should match request");
+    assert_eq!(end.height, chain_tip, "End block should match request");
+
+    // 4) Height clamping: end beyond the tip is clamped down to the tip.
+    let response = svc
+        .state_subscriber
+        .get_address_deltas(GetAddressDeltasParams::Filtered {
+            addresses: vec![recipient_taddr, faucet_taddr],
+            start: 1,
+            end: height_beyond_tip,
+            chain_info: true,
+        })
+        .await
+        .unwrap();
+    let GetAddressDeltasResponse::WithChainInfo { deltas, start, end } = response else {
+        panic!("Expected WithChainInfo variant");
+    };
+    assert!(!deltas.is_empty(), "Expected deltas with clamped range");
+    assert_eq!(start.height, 1, "Start should match request");
+    assert!(
+        end.height < height_beyond_tip,
+        "End height should be clamped below the requested value"
+    );
+
+    // 5) Non-existent address -> empty deltas.
+    let response = svc
+        .state_subscriber
+        .get_address_deltas(GetAddressDeltasParams::Filtered {
+            addresses: vec![NON_EXISTENT_ADDRESS.to_string()],
+            start: 1,
+            end: height_beyond_tip,
+            chain_info: true,
+        })
+        .await
+        .unwrap();
+    let GetAddressDeltasResponse::WithChainInfo { deltas, .. } = response else {
+        panic!("Expected WithChainInfo variant");
+    };
+    assert!(deltas.is_empty(), "Non-existent address should have no deltas");
+
+    svc.test_manager.close().await;
+}
+
 mod zebrad {
     // FetchService is a deprecated re-export; the deprecation fires at the
     // turbofish use sites below, so the allow covers the whole module.
@@ -1828,6 +1973,11 @@ mod zebrad {
     #[tokio::test(flavor = "multi_thread")]
     async fn get_address_utxos_stream_faucet_fetch_vs_state() {
         crate::get_address_utxos_stream_faucet_fetch_vs_state().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn address_deltas() {
+        crate::address_deltas().await;
     }
 
     #[tokio::test(flavor = "multi_thread")]
