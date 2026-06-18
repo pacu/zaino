@@ -10,7 +10,7 @@
 
 use nonempty::NonEmpty;
 use std::path::PathBuf;
-use zaino_common::network::{ActivationHeights, ZEBRAD_DEFAULT_ACTIVATION_HEIGHTS};
+use zaino_common::network::ActivationHeights;
 use zaino_proto::proto::compact_formats::CompactBlock;
 use zaino_state::{ZcashIndexer, ZcashService};
 use zaino_testutils::{PollableTip, TestManager, TestService, ValidatorExt, ValidatorKind};
@@ -218,11 +218,11 @@ pub fn build_clients(
 /// validator (i.e. when launched with `activation_heights: None`). Relocated
 /// wallet helpers that are generic over the validator use this to build clients
 /// whose view matches the launched chain.
+///
+/// Delegates to [`ValidatorKind::default_activation_heights`] so the per-kind
+/// selection (and its `zcashd_support` gating) lives in one place.
 pub fn default_heights(validator: &ValidatorKind) -> ActivationHeights {
-    match validator {
-        ValidatorKind::Zcashd => ActivationHeights::default(),
-        ValidatorKind::Zebrad => ZEBRAD_DEFAULT_ACTIVATION_HEIGHTS,
-    }
+    validator.default_activation_heights()
 }
 
 /// Build faucet/recipient lightclients pointed at `test_manager`'s gRPC
@@ -748,6 +748,7 @@ mod launch_clients {
         }
     }
 
+    #[cfg(feature = "zcashd_support")]
     mod zcashd {
         use super::*;
         #[allow(deprecated)]
