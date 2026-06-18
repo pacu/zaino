@@ -1574,6 +1574,66 @@ async fn get_block_range_out_of_range_lower_bound() {
     services.test_manager.close().await;
 }
 
+/// Port of `send_to_transparent` (wallet_to_validator, heavy/finalization,
+/// zebrad): a transparent send to the recipient returns the same address txids
+/// whether served from the non-finalized chain (just mined) or after the
+/// 99-block advance pushes the send past the finalization boundary
+/// (NON_FINALIZED_DEPTH = 100).
+///
+/// `#[ignore]`d (gated): the load-bearing 99-block advance mines orchard
+/// coinbase here — the devtool faucet funds via orchard, since the original's
+/// transparent-mine + shield path needs devtool transparent-coinbase shielding
+/// (round-2 P1) — so it costs ~99 halo2 proofs, against the net-speedup
+/// criterion. The miner pool is fixed at launch and `generate_blocks` has no
+/// per-call override, so the advance can't be cheap transparent filler until
+/// per-call filler mining (round-3 P2) lands; un-ignore and mine the advance to
+/// a transparent throwaway then.
+async fn send_to_transparent_finalization<Service>()
+where
+    Service: TestService,
+    IndexerError: From<<<Service as ZcashService>::Subscriber as ZcashIndexer>::Error>,
+    <Service as ZcashService>::Subscriber: PollableTip,
+{
+    let (mut test_manager, mut clients) = launch_and_fund_faucet::<Service>(1).await;
+
+    let recipient_taddr = clients.get_recipient_address("transparent").await;
+    clients.send_from_faucet(&recipient_taddr, 250_000).await;
+    test_manager
+        .generate_blocks_and_wait_for_tip(1, test_manager.subscriber())
+        .await;
+
+    let fetch_service = test_manager.full_node_jsonrpc_connector().await;
+    let height = fetch_service.get_blockchain_info().await.unwrap().blocks.0;
+    let unfinalised_transactions = fetch_service
+        .get_address_txids(vec![recipient_taddr.clone()], height, height)
+        .await
+        .unwrap();
+
+    // The load-bearing advance: 99 blocks push the send below NON_FINALIZED_DEPTH
+    // into the finalized DB. Orchard coinbase here (see #[ignore] rationale).
+    test_manager
+        .generate_blocks_bulk_and_wait_for_tips(
+            99,
+            test_manager.subscriber(),
+            test_manager.subscriber(),
+        )
+        .await;
+
+    let finalised_transactions = fetch_service
+        .get_address_txids(vec![recipient_taddr], height, height)
+        .await
+        .unwrap();
+
+    clients.sync_recipient().await;
+    assert_eq!(
+        wallet_tests::Pool::Transparent.spendable_balance(&clients.recipient_balance().await),
+        250_000
+    );
+    assert_eq!(unfinalised_transactions, finalised_transactions);
+
+    test_manager.close().await;
+}
+
 mod zebrad {
     // FetchService is a deprecated re-export; the deprecation fires at the
     // turbofish use sites below, so the allow covers the whole module.
@@ -1614,6 +1674,12 @@ mod zebrad {
         #[tokio::test(flavor = "multi_thread")]
         async fn shield_for_validator() {
             crate::shield_for_validator::<FetchService>().await;
+        }
+
+        #[tokio::test(flavor = "multi_thread")]
+        #[ignore = "heavy: 99-block orchard advance (~99 halo2 proofs); un-ignore + transparent filler when round-3 P2 lands"]
+        async fn send_to_transparent_finalization() {
+            crate::send_to_transparent_finalization::<FetchService>().await;
         }
 
         #[tokio::test(flavor = "multi_thread")]
@@ -1816,6 +1882,12 @@ mod zebrad {
         #[tokio::test(flavor = "multi_thread")]
         async fn shield_for_validator() {
             crate::shield_for_validator::<StateService>().await;
+        }
+
+        #[tokio::test(flavor = "multi_thread")]
+        #[ignore = "heavy: 99-block orchard advance (~99 halo2 proofs); un-ignore + transparent filler when round-3 P2 lands"]
+        async fn send_to_transparent_finalization() {
+            crate::send_to_transparent_finalization::<StateService>().await;
         }
 
         #[tokio::test(flavor = "multi_thread")]
