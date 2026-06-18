@@ -164,8 +164,12 @@ mod json_server {
     async fn z_get_address_balance() {
         let (mut services, mut clients) = create_zcashd_devtool_services().await;
 
-        let (recipient_taddr, _recipient_ua, _txid) =
-            jsonrpc_fund(&services, &mut clients, Some(wallet_tests::Pool::Transparent)).await;
+        let (recipient_taddr, _recipient_ua, _txid) = jsonrpc_fund(
+            &services,
+            &mut clients,
+            Some(wallet_tests::Pool::Transparent),
+        )
+        .await;
 
         let zcashd_service_balance = services
             .zcashd_subscriber
@@ -305,8 +309,12 @@ mod json_server {
     async fn get_tx_out() {
         let (mut services, mut clients) = create_zcashd_devtool_services().await;
 
-        let (recipient_taddr, _recipient_ua, _txid) =
-            jsonrpc_fund(&services, &mut clients, Some(wallet_tests::Pool::Transparent)).await;
+        let (recipient_taddr, _recipient_ua, _txid) = jsonrpc_fund(
+            &services,
+            &mut clients,
+            Some(wallet_tests::Pool::Transparent),
+        )
+        .await;
 
         let zcashd_utxos = services
             .zcashd_subscriber
@@ -348,8 +356,12 @@ mod json_server {
     async fn get_address_tx_ids() {
         let (mut services, mut clients) = create_zcashd_devtool_services().await;
 
-        let (recipient_taddr, _recipient_ua, tx) =
-            jsonrpc_fund(&services, &mut clients, Some(wallet_tests::Pool::Transparent)).await;
+        let (recipient_taddr, _recipient_ua, tx) = jsonrpc_fund(
+            &services,
+            &mut clients,
+            Some(wallet_tests::Pool::Transparent),
+        )
+        .await;
         let tx = tx.expect("jsonrpc_fund sends a tx when given Some(pool)");
 
         let chain_height: u32 = {
@@ -392,8 +404,12 @@ mod json_server {
     async fn z_get_address_utxos() {
         let (mut services, mut clients) = create_zcashd_devtool_services().await;
 
-        let (recipient_taddr, _recipient_ua, txid_1) =
-            jsonrpc_fund(&services, &mut clients, Some(wallet_tests::Pool::Transparent)).await;
+        let (recipient_taddr, _recipient_ua, txid_1) = jsonrpc_fund(
+            &services,
+            &mut clients,
+            Some(wallet_tests::Pool::Transparent),
+        )
+        .await;
         let txid_1 = txid_1.expect("jsonrpc_fund sends a tx when given Some(pool)");
 
         clients.sync_faucet().await;
