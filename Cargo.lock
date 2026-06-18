@@ -5682,7 +5682,7 @@ dependencies = [
 
 [[package]]
 name = "zaino-common"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "hex",
  "nu-ansi-term",
@@ -5726,7 +5726,7 @@ dependencies = [
 
 [[package]]
 name = "zaino-proto"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "prost",
  "tonic",
@@ -5739,7 +5739,7 @@ dependencies = [
 
 [[package]]
 name = "zaino-serve"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "futures",
  "jsonrpsee",
