@@ -186,17 +186,17 @@ use super::{
 use crate::{
     chain_index::{
         finalised_state::{
-            capability::{BlockTransparentExt as _, CapabilityRequest, DbMetadata},
-            db::v1::{DB_VERSION_V1, TX_OUT_SET_INFO_ACCUMULATOR_KEY},
+            capability::{CapabilityRequest, DbMetadata},
+            db::v1::{DB_VERSION_V1, SYNC_CHECKPOINT_INTERVAL},
             entry::{StoredEntryFixed, StoredEntryVar},
         },
         source::BlockchainSource,
-        types::{db::metadata::FinalisedTxOutSetInfoAccumulator, GENESIS_HEIGHT},
+        types::GENESIS_HEIGHT,
     },
     config::BlockCacheConfig,
     error::FinalisedStateError,
     BlockHash, BlockMetadata, BlockWithMetadata, ChainWork, Height, IndexedBlock, Outpoint,
-    TransactionHash, TransparentCompactTx, TxLocation, TxidList, ZainoVersionedSerde as _,
+    TransparentTxList, TxLocation, TxidList, ZainoVersionedSerde as _,
 };
 
 use lmdb::{Transaction, WriteFlags};
@@ -575,6 +575,12 @@ impl<T: BlockchainSource> Migration<T> for Migration0To1 {
 
         info!("promoting v1 database to primary.");
 
+        // The migrated v1 data is about to become primary and v0 is wiped below. Under `NO_SYNC`
+        // the shadow's tail blocks and its `Complete` status may not be on disk yet; force them
+        // durable now so a crash during or after promotion can never lose migrated blocks that
+        // exist only in v1 (v0 is removed and cannot serve as a fallback).
+        shadow.env().sync(true)?;
+
         // Promote V1 to primary
         let db_v0 = router.promote_shadow()?;
 
@@ -646,14 +652,80 @@ impl<T: BlockchainSource> Migration<T> for Migration1_0_0To1_1_0 {
     };
 }
 
+/// Flushes a buffered batch of `spent` entries (inserted in **sorted key order**) and advances the
+/// Stage B progress watermark to `up_to_height + 1`, all in one LMDB transaction, then forces
+/// durability.
+///
+/// Sorting turns the random-keyed `spent` B-tree inserts into a sequential sweep (each leaf faulted
+/// in once, filled, written once) instead of a random fault per insert — the cost that dominates
+/// once the DB exceeds RAM. Committing the watermark together with the entries keeps resumption
+/// exact: a crash resumes from the last committed height, re-doing only uncommitted work
+/// (idempotent via `NO_OVERWRITE` + verify-match). `buffer` is cleared on success.
+fn flush_migration_spent_batch(
+    env: &lmdb::Environment,
+    spent_db: lmdb::Database,
+    metadata_db: lmdb::Database,
+    progress_key: &[u8],
+    buffer: &mut Vec<(Vec<u8>, TxLocation)>,
+    up_to_height: Height,
+) -> Result<(), FinalisedStateError> {
+    buffer.sort_by(|a, b| a.0.cmp(&b.0));
+
+    let mut txn = env.begin_rw_txn()?;
+    for (outpoint_bytes, tx_location) in buffer.iter() {
+        let entry_bytes = StoredEntryFixed::new(outpoint_bytes, *tx_location).to_bytes()?;
+        match txn.put(
+            spent_db,
+            outpoint_bytes,
+            &entry_bytes,
+            WriteFlags::NO_OVERWRITE,
+        ) {
+            Ok(()) => {}
+            Err(lmdb::Error::KeyExist) => {
+                let existing = txn
+                    .get(spent_db, outpoint_bytes)
+                    .map_err(FinalisedStateError::LmdbError)?;
+                if existing != entry_bytes {
+                    return Err(FinalisedStateError::Custom(format!(
+                        "conflicting existing spent entry during batched migration for outpoint {}",
+                        hex::encode(outpoint_bytes)
+                    )));
+                }
+            }
+            Err(error) => return Err(FinalisedStateError::LmdbError(error)),
+        }
+    }
+
+    let progress = StoredEntryFixed::new(progress_key, up_to_height + 1);
+    txn.put(
+        metadata_db,
+        &progress_key,
+        &progress.to_bytes()?,
+        WriteFlags::empty(),
+    )?;
+
+    txn.commit()?;
+    env.sync(true)?;
+    buffer.clear();
+    Ok(())
+}
+
 /// Minor migration: v1.1.0 → v1.2.0.
 ///
+/// Three stages, each rebuilt deterministically from the existing transparent block data:
+/// - **Stage A** — build the `txid_location` reverse index.
+/// - **Stage B** — build the `spent` outpoint index.
+/// - **Stage C** — build the txout-set accumulator in bulk (sequential scans) once Stage B is
+///   complete, via [`DbBackend::rebuild_tx_out_set_accumulator`].
+///
 /// Safety and resumability:
-/// - Deterministic: rebuilds the spent outpoint index and txout-set accumulator from the existing
-///   transparent block data.
-/// - Resumable: stores the next height to migrate in the metadata DB under a temporary migration key.
-/// - Crash-safe: each block's spent entries, txout-set accumulator, and progress update are
-///   committed in the same LMDB transaction.
+/// - Stages A and B are resumable from per-stage progress watermarks in the metadata DB; each
+///   height's index entries and its progress update commit in the same LMDB transaction.
+/// - Stage C **always recomputes the accumulator from scratch** from the finalised `transparent` +
+///   `spent` tables and overwrites the singleton atomically. It therefore never trusts a partial or
+///   stale accumulator — including one left behind by an interrupted *original* 2-stage migration
+///   that maintained the accumulator per block — so a partial run of either the old or new
+///   migration converges to a correct, uncorrupted result.
 /// - No shadow database.
 struct Migration1_1_0To1_2_0;
 
@@ -674,12 +746,13 @@ impl<T: BlockchainSource> Migration<T> for Migration1_1_0To1_2_0 {
     async fn migrate(
         &self,
         router: Arc<Router>,
-        _cfg: BlockCacheConfig,
+        cfg: BlockCacheConfig,
         _source: T,
     ) -> Result<(), FinalisedStateError> {
         // Per-stage progress keys. Both are temporary metadata entries removed on completion.
-        // Stage A (`txid_location`) and Stage B (`spent` + accumulator) are tracked independently
-        // so a crash, or a part-built 0.4.0-alpha.1 cache, resumes each stage from its own marker.
+        // Stage A (`txid_location`) and Stage B (`spent`) are tracked independently so a crash, or a
+        // part-built 0.4.0-alpha.1 cache, resumes each stage from its own marker. Stage C (the
+        // accumulator) needs no progress key: it is an idempotent full rebuild keyed off the tip.
         const MIGRATION_TXID_LOCATION_PROGRESS_KEY: &[u8] =
             b"_migration_txid_location_progress_1_2_0_next_height";
         const MIGRATION_SPENT_PROGRESS_KEY: &[u8] = b"_migration_spent_progress_1_2_0_next_height";
@@ -694,9 +767,9 @@ impl<T: BlockchainSource> Migration<T> for Migration1_1_0To1_2_0 {
         let env = backend.env();
         let metadata_db = backend.metadata_db()?;
         let txids_db = backend.txids_db()?;
+        let transparent_db = backend.transparent_db()?;
         let spent_db = backend.spent_db()?;
         let txid_location_db = backend.txid_location_db()?;
-        let tx_out_set_info_accumulator_db = backend.tx_out_set_info_accumulator_db()?;
 
         // Record that a migration is in progress (observability only; the migration resumes from
         // the per-stage progress keys below, not from `migration_status`).
@@ -842,6 +915,13 @@ impl<T: BlockchainSource> Migration<T> for Migration1_1_0To1_2_0 {
                     txn.commit()?;
                 }
 
+                // Durability checkpoint (the env is opened with `NO_SYNC`): bound how much
+                // backfill a crash can discard. The lost tail is re-done idempotently from the
+                // Stage A progress key on resume.
+                if next_height % SYNC_CHECKPOINT_INTERVAL == 0 {
+                    env.sync(true)?;
+                }
+
                 if next_height % 50_000 == 0 {
                     info!(
                         height = next_height,
@@ -854,17 +934,23 @@ impl<T: BlockchainSource> Migration<T> for Migration1_1_0To1_2_0 {
                 next_height = height.0 + 1;
             }
 
+            // Make the completed `txid_location` index a durable boundary so a crash during
+            // Stage B never has to re-run Stage A.
+            env.sync(true)?;
+
             info!(
                 db_tip,
                 elapsed = ?stage_a_started.elapsed(),
                 "v1.2.0 migration Stage A complete"
             );
 
-            // ===== Stage B: backfill `spent` + txout-set accumulator. =====
+            // ===== Stage B: backfill the `spent` outpoint index. =====
             //
-            // Resumes from its own progress key, preserving partial work from an interrupted alpha
+            // Resumes from its own progress key, preserving partial work from an interrupted
             // migration. If the key is absent (fresh, or a completed alpha cache rolled back to
-            // v1.1.0) it starts at genesis with an empty accumulator.
+            // v1.1.0) it starts at genesis. The accumulator is intentionally *not* touched here — it
+            // is built in full by Stage C below, so an interrupted original 2-stage migration that
+            // left a partial per-block accumulator is simply overwritten, never trusted.
             let mut next_height_to_migrate = match read_progress(MIGRATION_SPENT_PROGRESS_KEY)? {
                 Some(height) => height,
                 None => {
@@ -876,17 +962,6 @@ impl<T: BlockchainSource> Migration<T> for Migration1_1_0To1_2_0 {
                         metadata_db,
                         &MIGRATION_SPENT_PROGRESS_KEY,
                         &progress.to_bytes()?,
-                        WriteFlags::empty(),
-                    )?;
-
-                    let accumulator = StoredEntryFixed::new(
-                        TX_OUT_SET_INFO_ACCUMULATOR_KEY,
-                        FinalisedTxOutSetInfoAccumulator::empty(),
-                    );
-                    txn.put(
-                        tx_out_set_info_accumulator_db,
-                        &TX_OUT_SET_INFO_ACCUMULATOR_KEY,
-                        &accumulator.to_bytes()?,
                         WriteFlags::empty(),
                     )?;
 
@@ -908,37 +983,43 @@ impl<T: BlockchainSource> Migration<T> for Migration1_1_0To1_2_0 {
             );
             let stage_b_started = std::time::Instant::now();
 
+            // Buffer spent entries across heights, then flush them in sorted key order so the
+            // random-keyed `spent` B-tree fills via a sequential sweep instead of a random fault per
+            // insert. Each flush commits the entries together with the progress watermark.
+            let batch_budget = cfg.storage.database.sync_write_batch_bytes.max(1);
+            let mut spent_buffer: Vec<(Vec<u8>, TxLocation)> = Vec::new();
+            let mut spent_buffer_bytes: u64 = 0;
+
             while next_height_to_migrate <= db_tip {
                 let height = Height::try_from(next_height_to_migrate)
                     .map_err(|error| FinalisedStateError::Custom(error.to_string()))?;
+                let height_bytes = height.to_bytes()?;
 
-                let transparent_tx_list = router
-                    .backend(CapabilityRequest::BlockTransparentExt)?
-                    .get_block_transparent(height)
-                    .await?;
-
-                let txids = {
-                    let mut txids = Vec::with_capacity(transparent_tx_list.tx().len());
-
-                    for tx_index in 0..transparent_tx_list.tx().len() {
-                        let tx_index = u16::try_from(tx_index).map_err(|_| {
+                // Read the stored transparent list directly from the table. This intentionally
+                // bypasses the `BlockTransparentExt` accessor, which routes through
+                // `resolve_validated_hash_or_height` → `validate_block_blocking` (merkle-root
+                // recompute + full-payload checksum verification) for every height above
+                // `validated_tip`. During migration `validated_tip` is still climbing on the
+                // background validator, so that path would re-validate the whole chain inside the
+                // backfill loop — pure redundant CPU. The data here is already on disk and trusted;
+                // Stage A reads `txids` the same raw way.
+                let transparent_tx_list = {
+                    let txn = env.begin_ro_txn()?;
+                    let raw = txn
+                        .get(transparent_db, &height_bytes)
+                        .map_err(FinalisedStateError::LmdbError)?;
+                    let entry =
+                        StoredEntryVar::<TransparentTxList>::from_bytes(raw).map_err(|error| {
                             FinalisedStateError::Custom(format!(
-                                "transaction index out of range at height {}",
-                                height.0
+                                "transparent corrupt data: {error}"
                             ))
                         })?;
-
-                        let tx_location = TxLocation::new(height.0, tx_index);
-
-                        let txid = router
-                            .backend(CapabilityRequest::BlockCoreExt)?
-                            .get_txid(tx_location)
-                            .await?;
-
-                        txids.push(txid);
+                    if !entry.verify(&height_bytes) {
+                        return Err(FinalisedStateError::Custom(
+                            "transparent checksum mismatch".to_string(),
+                        ));
                     }
-
-                    txids
+                    entry.inner().clone()
                 };
 
                 let transparent = transparent_tx_list.tx().to_vec();
@@ -975,103 +1056,28 @@ impl<T: BlockchainSource> Migration<T> for Migration1_1_0To1_2_0 {
                     }
                 }
 
-                let tx_out_set_info_accumulator = match backend.as_ref() {
-                    DbBackend::V1(database) => {
-                        // Pair `txids` and `transparent` for the accumulator API.
-                        let transactions: Vec<(TransactionHash, Option<TransparentCompactTx>)> =
-                            txids
-                                .iter()
-                                .copied()
-                                .zip(transparent.iter().cloned())
-                                .collect();
+                // Append this height's spent entries to the batch buffer. The flush (below) sorts
+                // them by key and commits them with the progress watermark in one transaction.
+                for (outpoint, tx_location) in &spent_map {
+                    let outpoint_bytes = outpoint.to_bytes()?;
+                    spent_buffer_bytes =
+                        spent_buffer_bytes.saturating_add(outpoint_bytes.len() as u64 + 64);
+                    spent_buffer.push((outpoint_bytes, *tx_location));
+                }
 
-                        database
-                            .calculate_tx_out_set_info_accumulator_after_block(
-                                height,
-                                &transactions,
-                                &spent_map,
-                            )
-                            .await?
-                    }
-                    DbBackend::V0(_) => {
-                        return Err(FinalisedStateError::FeatureUnavailable(
-                            "v1 txout-set accumulator migration",
-                        ));
-                    }
-                };
-
-                // Write spent data, txout-set accumulator, and Stage B progress in the same LMDB
-                // transaction, ensuring they never drift if migration is stopped by a system crash.
-                {
-                    let mut txn = env.begin_rw_txn()?;
-
-                    for (outpoint, tx_location) in &spent_map {
-                        let outpoint_bytes = outpoint.to_bytes()?;
-                        let tx_location_entry_bytes =
-                            StoredEntryFixed::new(&outpoint_bytes, *tx_location).to_bytes()?;
-
-                        match txn.put(
-                            spent_db,
-                            &outpoint_bytes,
-                            &tx_location_entry_bytes,
-                            WriteFlags::NO_OVERWRITE,
-                        ) {
-                            Ok(()) => {}
-
-                            Err(lmdb::Error::KeyExist) => {
-                                let existing_bytes = txn
-                                    .get(spent_db, &outpoint_bytes)
-                                    .map_err(FinalisedStateError::LmdbError)?;
-
-                                let existing_entry =
-                                    StoredEntryFixed::<TxLocation>::from_bytes(existing_bytes)
-                                        .map_err(|error| {
-                                            FinalisedStateError::Custom(format!(
-                                        "corrupt existing spent entry for outpoint {:?}: {error}",
-                                        outpoint
-                                    ))
-                                        })?;
-
-                                if !existing_entry.verify(&outpoint_bytes) {
-                                    return Err(FinalisedStateError::Custom(format!(
-                                        "existing spent entry checksum mismatch for outpoint {:?}",
-                                        outpoint
-                                    )));
-                                }
-
-                                if existing_entry.inner() != tx_location {
-                                    return Err(FinalisedStateError::Custom(format!(
-                                        "conflicting spent entry for outpoint {:?} at height {}",
-                                        outpoint, height.0
-                                    )));
-                                }
-                            }
-
-                            Err(error) => return Err(FinalisedStateError::LmdbError(error)),
-                        }
-                    }
-
-                    let tx_out_set_info_accumulator_entry = StoredEntryFixed::new(
-                        TX_OUT_SET_INFO_ACCUMULATOR_KEY,
-                        tx_out_set_info_accumulator,
-                    );
-
-                    txn.put(
-                        tx_out_set_info_accumulator_db,
-                        &TX_OUT_SET_INFO_ACCUMULATOR_KEY,
-                        &tx_out_set_info_accumulator_entry.to_bytes()?,
-                        WriteFlags::empty(),
-                    )?;
-
-                    let progress = StoredEntryFixed::new(MIGRATION_SPENT_PROGRESS_KEY, height + 1);
-                    txn.put(
+                // Flush a full batch: sorted `spent` insert + progress watermark = `height + 1`,
+                // committed atomically and fsynced (env is `NO_SYNC`). A crash resumes from the last
+                // committed height; re-done work is idempotent (`NO_OVERWRITE` + verify-match).
+                if spent_buffer_bytes >= batch_budget {
+                    flush_migration_spent_batch(
+                        &env,
+                        spent_db,
                         metadata_db,
-                        &MIGRATION_SPENT_PROGRESS_KEY,
-                        &progress.to_bytes()?,
-                        WriteFlags::empty(),
+                        MIGRATION_SPENT_PROGRESS_KEY,
+                        &mut spent_buffer,
+                        height,
                     )?;
-
-                    txn.commit()?;
+                    spent_buffer_bytes = 0;
                 }
 
                 if next_height_to_migrate % 10_000 == 0 {
@@ -1086,14 +1092,70 @@ impl<T: BlockchainSource> Migration<T> for Migration1_1_0To1_2_0 {
                 next_height_to_migrate = height.0 + 1;
             }
 
+            // Flush the trailing partial batch (progress watermark = db tip).
+            if !spent_buffer.is_empty() {
+                let tip_height = Height::try_from(db_tip)
+                    .map_err(|error| FinalisedStateError::Custom(error.to_string()))?;
+                flush_migration_spent_batch(
+                    &env,
+                    spent_db,
+                    metadata_db,
+                    MIGRATION_SPENT_PROGRESS_KEY,
+                    &mut spent_buffer,
+                    tip_height,
+                )?;
+            }
+
             info!(
                 db_tip,
                 elapsed = ?stage_b_started.elapsed(),
                 "v1.2.0 migration Stage B complete"
             );
+
+            // ===== Stage C: build the txout-set accumulator in bulk. =====
+            //
+            // Recomputes the accumulator from scratch over the finalised `transparent` + `spent`
+            // tables (built by Stage B) and overwrites the singleton atomically. This is the step
+            // that makes the migration robust to partial prior runs: it never reads or trusts an
+            // existing accumulator, so a stale per-block accumulator from an interrupted original
+            // migration is discarded and replaced with a correct value. It is idempotent, so a crash
+            // mid-Stage-C is recovered by simply re-running the (skipped) earlier stages and
+            // rebuilding again.
+            let stage_c_started = std::time::Instant::now();
+            info!(
+                db_tip,
+                "v1.2.0 migration Stage C: building txout-set accumulator"
+            );
+            backend.rebuild_tx_out_set_accumulator().await?;
+            info!(
+                db_tip,
+                elapsed = ?stage_c_started.elapsed(),
+                "v1.2.0 migration Stage C complete"
+            );
         }
 
-        // ===== Finalise: remove both progress keys and advance metadata to v1.2.0. =====
+        // ===== Finalise: advance metadata to v1.2.0, then remove the progress keys. =====
+        //
+        // Ordering matters under `NO_SYNC`. The recorded version is the migration's completion
+        // gate, so it must become durable *before* the progress keys are removed:
+        //
+        // 1. Flush all backfilled `spent` / accumulator work so the version we are about to
+        //    record truthfully reflects on-disk state.
+        // 2. Record version v1.2.0 and force it durable. A crash before this leaves the version
+        //    < v1.2.0 with the progress keys intact, so the migration is re-selected and resumes
+        //    cheaply (the stages skip past `db_tip`, then re-finalise).
+        // 3. Only now remove the progress keys: the version gate is durably set, so they are
+        //    dead metadata. Removing them last guarantees a crash never leaves "keys deleted but
+        //    version still v1.1.0", which would force a full, wasteful re-migration.
+        env.sync(true)?;
+
+        let mut metadata: DbMetadata = router.get_metadata().await?;
+        metadata.version = <Self as Migration<T>>::TO_VERSION;
+        metadata.schema_hash = crate::chain_index::finalised_state::db::v1::DB_SCHEMA_V1_HASH;
+        metadata.migration_status = MigrationStatus::Empty;
+        router.update_metadata(metadata).await?;
+        env.sync(true)?;
+
         {
             let mut txn = env.begin_rw_txn()?;
 
@@ -1109,12 +1171,7 @@ impl<T: BlockchainSource> Migration<T> for Migration1_1_0To1_2_0 {
 
             txn.commit()?;
         }
-
-        let mut metadata: DbMetadata = router.get_metadata().await?;
-        metadata.version = <Self as Migration<T>>::TO_VERSION;
-        metadata.schema_hash = crate::chain_index::finalised_state::db::v1::DB_SCHEMA_V1_HASH;
-        metadata.migration_status = MigrationStatus::Empty;
-        router.update_metadata(metadata).await?;
+        env.sync(true)?;
 
         // Turn transparent history extension back on now the indices are built.
         router.extend_primary_caps(Capability::TRANSPARENT_HIST_EXT);
