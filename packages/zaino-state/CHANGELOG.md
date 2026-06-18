@@ -8,6 +8,37 @@ and this library adheres to Rust's notion of
 ## [Unreleased]
 
 ### Added
+- Optional ("ephemeral") finalised state: with `ChainIndexConfig::ephemeral`,
+  no finalised database is opened. Finalised reads are served by an ephemeral
+  passthrough (`finalised_source::ephemeral::EphemeralFinalisedState`) directly
+  from the backing `BlockchainSource`; `sync_to_height` is a no-op and
+  `db_height` reports `0`.
+- Background finalised-state sync and migration: `FinalisedState::sync_to_height`
+  runs inline for small ranges but spawns for large ones, and version migrations
+  run in the background, in both cases serving reads from an ephemeral passthrough
+  meanwhile. Failed background work retries and escalates to `CriticalError`.
+- `FinalisedState::wait_until_synced` — waits for in-progress background
+  sync/migration to reach its target (distinct from `wait_until_ready`, which
+  reflects serving-readiness).
+### Changed
+- `chain_index::finalised_state` renames (internal, `pub(crate)`):
+  - facade type `ZainoDB` -> `FinalisedState`
+  - module `db` -> `finalised_source`; enum `DbBackend` -> `FinalisedSource`
+    (variant `Stateless` -> `Ephemeral`), reflecting that the backing source is
+    not necessarily a database
+  - stateless impl `StatelessFinalisedState` -> `EphemeralFinalisedState`
+    (`db/stateless.rs` -> `finalised_source/ephemeral.rs`)
+- `chain_index::non_finalised_state` now caps in-memory retention at
+  `MAX_NFS_DEPTH` blocks below the tip, so the cache cannot grow unbounded when
+  the finalised `db_height` lags (background sync) or is pinned at `0`
+  (ephemeral mode).
+### Deprecated
+### Removed
+### Fixed
+
+## [0.3.0] - 2026-06-17
+
+### Added
 - `gettxoutsetinfo` is now served indexer-side via Zaino's own UTXO-set
   accumulator:
   - `chain_index::types::db::metadata::FinalisedTxOutSetInfoAccumulator` —
@@ -50,16 +81,57 @@ and this library adheres to Rust's notion of
   `transactions`, `txouts`, `total_amount`, `height` and `bestblock` agree
   with zcashd's RPC; `bytes_serialized` and `hash_serialized` follow Zaino's
   own deterministic spec.
+- Finalised-state catch-up sync now ingests via `DbWrite::write_blocks_to_height`
+  (the tip->height fetch/build/write loop moved into the backend) and writes the
+  random-keyed `spent` / `txid_location` indexes in **sorted batches** within a
+  single transaction — a sequential B-tree sweep instead of a random fault per
+  insert once the DB exceeds RAM. The v1.1.0 -> v1.2.0 migration's `spent`
+  backfill does the same. Batches are bounded by
+  `storage.database.sync_write_batch_bytes` (default 4 GiB), a block-count cap,
+  and a time cap; each batch commits and fsyncs atomically, so sync and migration
+  stay crash-safe and resume gap-free.
+- The finalised txout-set accumulator is no longer maintained per block during
+  bulk sync or migration. It is deferred and brought up to the tip after a
+  catch-up run: the first build (or an unusually large gap) does a full
+  sequential-scan rebuild (`DbV1::rebuild_tx_out_set_accumulator`), while a
+  steady-state catch-up applies just the delta for the newly-written range
+  (`DbV1::update_tx_out_set_accumulator_for_range`) — O(range) work that yields
+  the identical accumulator. This removes an unbounded fan-out of random `spent`
+  reads per block that stalled sync around sandblast height. Single-block appends
+  (`write_block`) still maintain it incrementally; a
+  `_tx_out_set_accumulator_built_height` watermark tracks freshness and selects
+  the rebuild-vs-incremental path.
+- Block validation moved off the write hot path: `write_block` now performs cheap
+  in-memory parent-hash continuity and merkle-root checks and advances
+  `validated_tip` directly, instead of a post-commit read-back. The full
+  `validate_block_blocking` re-read runs at startup only (the integrity gate for
+  untrusted on-disk data).
+- `get_address_utxos` now bounds the number of addresses fanned out per request,
+  preventing an unbounded multi-address query from amplifying backend load
+  (#974).
 ### Deprecated
 ### Removed
 ### Fixed
+- Finalised-state catch-up no longer rebuilds the txout-set accumulator from
+  genesis on every poll. Because `write_blocks_to_height` rebuilt it
+  unconditionally at the end of each run, every newly-finalised block triggered a
+  full-chain scan (~45 min on mainnet once the DB exceeds RAM), so the node could
+  never reach the tip and stayed stuck "Syncing". The accumulator is now advanced
+  incrementally over just the written range in steady state, falling back to the
+  full rebuild only for the first build or a large gap.
 - Finalised-state DB v1.2.0: added a reverse transaction-id index
   (`txid_location`) so previous-output resolution is an O(log n) point lookup
   instead of a full scan of the `txids` table. This fixes a near-quadratic
   slowdown that made the v1.1.0 -> v1.2.0 migration appear to hang on large
   caches and progressively slowed clean sync. The migration is now a re-entrant
-  two-stage backfill (build `txid_location`, then `spent` + accumulator) with
-  per-stage progress trackers and progress logging.
+  **three-stage** backfill (build `txid_location`, then `spent`, then a bulk
+  txout-set accumulator rebuild) with per-stage progress trackers and progress
+  logging. Stage C never trusts an existing accumulator, so a partially-run
+  original migration is recomputed correctly rather than corrupted.
+- Finalised-state startup validation now scans blocks in ascending height order
+  (previously block-hash order via the `heights` table), so `validated_tip`
+  advances monotonically, gaps surface immediately, and startup no longer
+  thrashes the page cache with random-access reads.
 - Finalised-state DB v1.2.0: caches built by 0.4.0-alpha.1 (recorded at v1.2.0
   with an unbuilt `txid_location` index) are detected on open and self-heal by
   rolling back to v1.1.0 and rebuilding the indices in place (temporary shim,

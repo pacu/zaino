@@ -663,9 +663,11 @@ where
                         ..Default::default()
                     },
                 },
+                ephemeral_finalised_state: false,
                 zebra_db_path,
                 network: zaino_network_kind,
                 donation_address: None,
+                metrics_endpoint: None,
             };
 
             let (handle, service_subscriber) = Indexer::<Service>::launch_inner(
@@ -1055,6 +1057,7 @@ pub async fn launch_state_and_fetch_services_mining_to<V: ValidatorExt>(
             },
             ..Default::default()
         },
+        false, // ephemeral_finalised_state: tests use a persistent finalised DB
         network_type,
         None,
     ))
@@ -1096,6 +1099,7 @@ async fn spawn_fetch_service(
             },
             ..Default::default()
         },
+        false, // ephemeral_finalised_state: tests use a persistent finalised DB
         network,
         None,
     ))

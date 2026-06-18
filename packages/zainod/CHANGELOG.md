@@ -9,11 +9,23 @@ and this crate adheres to Rust's notion of
 ## [Unreleased]
 
 ### Added
+### Changed
+### Deprecated
+### Removed
+### Fixed
+
+## [0.4.0] - 2026-06-17
+
+### Added
 - New `allow_unencrypted_public_json_rpc_bind` build feature. The JSON-RPC
   interface has no transport encryption and is now restricted to private /
   loopback bind addresses by default; this feature lifts that restriction for
   deployments on trusted private networks where encryption is handled
   externally. It logs a `WARN` on startup when enabled.
+- New `ephemeral_finalised_state` config option (default `false`). When `true`,
+  Zaino runs without a persistent finalised-state database: finalised reads are
+  served directly from the backing validator via an ephemeral passthrough. Useful
+  for disk-constrained or disposable deployments.
 ### Changed
 ### Deprecated
 ### Removed
