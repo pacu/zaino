@@ -1,4 +1,8 @@
 //! Tests that compare the output of both `zcashd` and `zainod` through `FetchService`.
+//!
+//! Entirely gated on `zcashd_support`: every test launches the zcashd-backed
+//! dual fetch services. See docs/adr/0001-zcashd-support-feature-gate.md.
+#![cfg(feature = "zcashd_support")]
 
 use nonempty::NonEmpty;
 #[allow(deprecated)]
