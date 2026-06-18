@@ -144,6 +144,17 @@ script = 'source "./tools/scripts/integration-test-summary.sh"'
 
 # -------------------------------------------------------------------
 
+[tasks.zcashd_test]
+description = "Run ALL tests (production workspace + both integration-test workspaces) WITH the deprecated zcashd_support feature compiled in"
+# Export CONTAINER_TEST_WITH_ZCASHD=1 once, then run the same container-test /
+# integration-test flows. container-test.sh honours the var for every nested
+# `cargo nextest run` (the env is inherited by the makers subprocesses that
+# integration-test spawns), so the whole suite builds with default features on.
+env = { CONTAINER_TEST_WITH_ZCASHD = "1" }
+run_task = { name = ["container-test", "integration-test"] }
+
+# -------------------------------------------------------------------
+
 [tasks.check-matching-zebras]
 description = "Check that zebra versions in .env.testing-artifacts match what's in Cargo.toml"
 extend = "base-script"
