@@ -248,7 +248,7 @@ impl DbV1 {
 
             // ----- Construct CompactBlock -----
             Ok(zaino_proto::proto::compact_formats::CompactBlock {
-                proto_version: 4,
+                proto_version: 0,
                 height: header.context.height().0 as u64,
                 hash: header.context.hash().0.to_vec(),
                 prev_hash: header.context.parent_hash().0.to_vec(),
@@ -331,8 +331,9 @@ impl DbV1 {
             orchard: self.orchard,
             commitment_tree_data: self.commitment_tree_data,
             heights: self.heights,
-            #[cfg(feature = "transparent_address_history_experimental")]
             spent: self.spent,
+            txid_location: self.txid_location,
+            tx_out_set_info_accumulator: self.tx_out_set_info_accumulator,
             #[cfg(feature = "transparent_address_history_experimental")]
             address_history: self.address_history,
             metadata: self.metadata,
@@ -1107,7 +1108,7 @@ impl DbV1 {
                     };
 
                     let compact_block = zaino_proto::proto::compact_formats::CompactBlock {
-                        proto_version: 4,
+                        proto_version: 0,
                         height: header.context.height().0 as u64,
                         hash: header.context.hash().0.to_vec(),
                         prev_hash: header.context.parent_hash().0.to_vec(),

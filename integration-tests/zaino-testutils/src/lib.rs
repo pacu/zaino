@@ -7,9 +7,9 @@ use once_cell::sync::Lazy;
 use std::{
     future::Future,
     net::{IpAddr, Ipv4Addr, SocketAddr},
-    num::{NonZero, NonZeroU32},
     path::PathBuf,
 };
+#[cfg(test)]
 use tonic::transport::Channel;
 use tracing::{debug, info, instrument};
 use zaino_common::{
@@ -21,8 +21,9 @@ use zaino_common::{
 };
 use zaino_serve::server::config::{GrpcServerConfig, JsonRpcServerConfig};
 use zaino_state::{
-    BackendType, ChainIndex, LightWalletIndexer, LightWalletService,
-    NodeBackedChainIndexSubscriber, ZcashIndexer, ZcashService,
+    BackendType, BlockchainSource, ChainIndex, FetchServiceSubscriber, LightWalletIndexer,
+    LightWalletService, NodeBackedChainIndexSubscriber, StateServiceSubscriber, ZcashIndexer,
+    ZcashService,
 };
 use zainodlib::{config::ZainodConfig, error::IndexerError, indexer::Indexer};
 pub use zcash_local_net as services;
@@ -35,18 +36,14 @@ use zcash_local_net::{
     validator::zcashd::{Zcashd, ZcashdConfig},
 };
 use zcash_local_net::{logs::LogsToStdoutAndStderr, process::Process};
-use zebra_chain::parameters::NetworkKind;
+use zebra_chain::parameters::{testnet::ConfiguredActivationHeights, NetworkKind};
+#[cfg(test)]
 use zingo_netutils::{GetClientError, GrpcIndexer};
 use zingo_test_vectors::seeds;
 pub use zingolib::get_base_address_macro;
 pub use zingolib::lightclient::LightClient;
 pub use zingolib::testutils::lightclient::from_inputs;
-use zingolib::{config::WalletConfig, wallet::SyncConfig};
 use zingolib_testutils::scenarios::ClientBuilder;
-
-use zcash_client_backend::proto::service::{
-    compact_tx_streamer_client::CompactTxStreamerClient, ChainSpec,
-};
 
 /// Helper to get the test binary path from the TEST_BINARIES_DIR env var.
 fn binary_path(binary_name: &str) -> Option<PathBuf> {
@@ -92,6 +89,95 @@ pub async fn poll_until_ready(
     result
 }
 
+/// Source of "current tip height" for the unified block-and-wait helper.
+///
+/// Implementors are anything a test wants to wait on: a Zaino service
+/// subscriber or a `NodeBackedChainIndexSubscriber`.
+///
+/// [`Status`] (and through it [`Liveness`] / [`Readiness`] via the blanket
+/// impls in `zaino_common::status`) is a supertrait so a single
+/// `T: PollableTip` bound is everything the unified helper needs — it can
+/// poll for height, fail fast on a dead backend, and wait for readiness
+/// once the target height is reached.
+///
+/// Impls are listed explicitly rather than blanket-impl'd over
+/// `LightWalletIndexer` so the compiler can rule out coherence conflicts
+/// with the `NodeBackedChainIndexSubscriber` impl (Rust's orphan rules
+/// can't otherwise prove a foreign type won't grow an upstream
+/// `LightWalletIndexer` impl). Add a new impl per pollable type.
+pub trait PollableTip: Status + Sync {
+    /// Current observable tip height, in absolute block-height units.
+    fn tip_height(&self) -> impl std::future::Future<Output = u64>;
+}
+
+impl PollableTip for FetchServiceSubscriber {
+    async fn tip_height(&self) -> u64 {
+        self.get_latest_block()
+            .await
+            .expect("PollableTip: FetchServiceSubscriber::get_latest_block failed")
+            .height
+    }
+}
+
+impl PollableTip for StateServiceSubscriber {
+    async fn tip_height(&self) -> u64 {
+        self.get_latest_block()
+            .await
+            .expect("PollableTip: StateServiceSubscriber::get_latest_block failed")
+            .height
+    }
+}
+
+impl<Source: BlockchainSource> PollableTip for NodeBackedChainIndexSubscriber<Source> {
+    async fn tip_height(&self) -> u64 {
+        let snapshot = self
+            .snapshot_nonfinalized_state()
+            .await
+            .expect("PollableTip: chain-index snapshot_nonfinalized_state failed");
+        u64::from(u32::from(
+            self.best_chaintip(&snapshot)
+                .await
+                .expect("PollableTip: chain-index best_chaintip failed")
+                .height,
+        ))
+    }
+}
+
+/// Marker trait bundling the `Self`-relative constraints every
+/// integration test needs on the `Service` type parameter of
+/// [`TestManager`].
+///
+/// Lets a generic test function write `Service: TestService` instead
+/// of restating these bounds in every `where`-clause:
+/// - [`LightWalletService`] + `Send + Sync + 'static`
+/// - `Service::Config: TryFrom<ZainodConfig, Error = IndexerError>`
+/// - `Service::Subscriber: PollableTip`
+///
+/// **Not** bundled: the reverse bound
+/// `IndexerError: From<Service::Subscriber::Error>`. Rust does not
+/// propagate non-`Self` bounds declared in a trait's `where`-clause
+/// through a `T: TestService` constraint, so call sites that touch
+/// `TestManager::launch` (or anything else exercising
+/// `Indexer::launch_inner`'s `?` propagation) must still restate that
+/// one bound explicitly. Everything else collapses to `TestService`.
+pub trait TestService:
+    LightWalletService<Config: TryFrom<ZainodConfig, Error = IndexerError>, Subscriber: PollableTip>
+    + Send
+    + Sync
+    + 'static
+{
+}
+
+impl<T> TestService for T where
+    T: LightWalletService<
+            Config: TryFrom<ZainodConfig, Error = IndexerError>,
+            Subscriber: PollableTip,
+        > + Send
+        + Sync
+        + 'static
+{
+}
+
 // temporary until activation heights are unified to zebra-chain type.
 // from/into impls not added in zaino-common to avoid unecessary addition of zcash-protocol dep to non-test code
 /// Convert zaino activation heights into zcash protocol type.
@@ -122,6 +208,9 @@ pub fn local_network_from_activation_heights(
             .map(zcash_protocol::consensus::BlockHeight::from),
         nu6_1: activation_heights
             .nu6_1
+            .map(zcash_protocol::consensus::BlockHeight::from),
+        nu6_2: activation_heights
+            .nu6_2
             .map(zcash_protocol::consensus::BlockHeight::from),
     }
 }
@@ -283,10 +372,22 @@ impl ValidatorExt for Zcashd {
 impl<C, Service> TestManager<C, Service>
 where
     C: ValidatorExt,
-    Service: LightWalletService + Send + Sync + 'static,
-    Service::Config: TryFrom<ZainodConfig, Error = IndexerError>,
+    Service: TestService,
     IndexerError: From<<<Service as ZcashService>::Subscriber as ZcashIndexer>::Error>,
+    <Service as ZcashService>::Subscriber: PollableTip,
 {
+    /// Returns the service subscriber, panicking if zaino wasn't enabled at launch.
+    ///
+    /// Convenience for tests that always pass `enable_zaino: true` and want to
+    /// hand the subscriber to [`Self::generate_blocks_and_wait_for_tip`] without
+    /// repeating `.service_subscriber.as_ref().unwrap()` at every call site.
+    pub fn subscriber(&self) -> &Service::Subscriber {
+        self.service_subscriber
+            .as_ref()
+            .expect("TestManager::subscriber called but service_subscriber is None (zaino disabled at launch?)")
+    }
+
+    #[cfg(test)]
     pub(crate) fn grpc_socket_to_uri(&self) -> http::Uri {
         http::Uri::builder()
             .scheme("http")
@@ -453,21 +554,15 @@ where
                 tempfile::tempdir().unwrap(),
             );
 
-            let config = WalletConfig::MnemonicPhrase {
-                mnemonic_phrase: seeds::HOSPITAL_MUSEUM_SEED.to_string(),
-                no_of_accounts: NonZeroU32::new(1).expect("this should not fail"),
-                birthday: 1,
-                wallet_settings: zingolib::wallet::WalletSettings {
-                    sync_config: SyncConfig::default(),
-                    min_confirmations: NonZero::<u32>::new(1).expect("this should not fail"),
-                },
-            };
-            let faucet = client_builder
-                .build_faucet(true, activation_heights.into())
-                .await;
-            let recipient = client_builder
-                .build_client(config, true, activation_heights.into())
-                .await;
+            let configured_activation_heights: ConfiguredActivationHeights =
+                activation_heights.into();
+            let faucet = client_builder.build_faucet(true, configured_activation_heights);
+            let recipient = client_builder.build_client(
+                seeds::HOSPITAL_MUSEUM_SEED.to_string(),
+                1,
+                true,
+                configured_activation_heights,
+            );
             Some(Clients {
                 client_builder,
                 faucet,
@@ -500,109 +595,72 @@ where
 
     /// Waits for zaino to be ready, then generates a block to activate NU5/NU6.
     ///
-    /// Must be called after construction because `generate_blocks_and_poll`
-    /// connects to the gRPC server, which must be listening first.
+    /// Must be called after construction so the indexer subscriber is live
+    /// before the first block-and-wait round-trip.
     async fn activate_nu5_nu6(&self, enable_zaino: bool) {
-        if let Some(ref subscriber) = self.service_subscriber {
-            debug!("[TEST] Waiting for Zaino to be ready");
-            poll_until_ready(
-                subscriber,
-                std::time::Duration::from_millis(100),
-                std::time::Duration::from_secs(30),
-            )
-            .await;
-        }
-
         // Generate an extra block to turn on NU5 and NU6,
         // as they currently must be turned on at block height = 2.
-        if enable_zaino {
-            self.generate_blocks_and_poll(1).await;
-        } else {
-            self.local_net.generate_blocks(1).await.unwrap();
+        match (enable_zaino, self.service_subscriber.as_ref()) {
+            (true, Some(subscriber)) => {
+                debug!("[TEST] Waiting for Zaino to be ready");
+                poll_until_ready(
+                    subscriber,
+                    std::time::Duration::from_millis(100),
+                    std::time::Duration::from_secs(30),
+                )
+                .await;
+                self.generate_blocks_and_wait_for_tip(1, subscriber).await;
+            }
+            _ => {
+                self.local_net.generate_blocks(1).await.unwrap();
+            }
         }
 
         debug!("[TEST] Test environment ready");
     }
 
-    /// Generate `n` blocks for the local network and poll zaino via gRPC until the chain index is synced to the target height.
-    pub async fn generate_blocks_and_poll(&self, n: u32) {
-        let mut grpc_client = build_client(self.grpc_socket_to_uri()).await.unwrap();
-        let chain_height = self.local_net.get_chain_height().await;
-        let mut next_block_height = u64::from(chain_height) + 1;
-        let mut interval = tokio::time::interval(std::time::Duration::from_millis(200));
-        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-        interval.tick().await;
-        while grpc_client
-            .get_latest_block(tonic::Request::new(ChainSpec {}))
-            .await
-            .unwrap()
-            .into_inner()
-            .height
-            < u64::from(chain_height) + n as u64
-        {
-            if n == 0 {
-                interval.tick().await;
-            } else {
-                self.local_net.generate_blocks(1).await.unwrap();
-                while grpc_client
-                    .get_latest_block(tonic::Request::new(ChainSpec {}))
-                    .await
-                    .unwrap()
-                    .into_inner()
-                    .height
-                    != next_block_height
-                {
-                    interval.tick().await;
+    /// Generate `n` blocks and wait for `pollable` to observe each new tip.
+    ///
+    /// Anything implementing [`PollableTip`] (a Zaino service subscriber, a
+    /// `NodeBackedChainIndexSubscriber`, or any future pollable) can be
+    /// passed. Fails fast (panics) if `pollable` reports non-live status.
+    pub async fn generate_blocks_and_wait_for_tip<P: PollableTip>(&self, n: u32, pollable: &P) {
+        fn assert_live<S: Status>(pollable: &S, waiting_for: Option<u64>) {
+            if !pollable.is_live() {
+                let status = pollable.status();
+                match waiting_for {
+                    Some(h) => panic!(
+                        "Pollable is not live while waiting for block {h} (status: {status:?})."
+                    ),
+                    None => panic!(
+                        "Pollable is not live (status: {status:?}). \
+                         The backing validator may have crashed or become unreachable."
+                    ),
                 }
-                next_block_height += 1;
             }
         }
-    }
 
-    /// Generate `n` blocks for the local network and poll zaino's fetch/state subscriber until the chain index is synced to the target height.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the indexer is not live (Offline or CriticalError), indicating the
-    /// backing validator has crashed or become unreachable.
-    pub async fn generate_blocks_and_poll_indexer<I>(&self, n: u32, indexer: &I)
-    where
-        I: LightWalletIndexer + Liveness + Status,
-    {
-        let chain_height = self.local_net.get_chain_height().await;
-        let target_height = u64::from(chain_height) + n as u64;
-        let mut next_block_height = u64::from(chain_height) + 1;
-        let mut interval = tokio::time::interval(std::time::Duration::from_millis(200));
+        let chain_height = u64::from(self.local_net.get_chain_height().await);
+        let target_height = chain_height + n as u64;
+        let mut next_block_height = chain_height + 1;
+        let mut interval = tokio::time::interval(std::time::Duration::from_millis(50));
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         interval.tick().await;
 
         // NOTE: readstate service seems to not be functioning correctly when generate multiple blocks at once and polling the latest block.
         // commented out a fall back to `get_block` to query the cache directly if needed in the future.
         // while indexer.get_block(zaino_proto::proto::service::BlockId {
-        //     height: u64::from(chain_height) + n as u64,
+        //     height: target_height,
         //     hash: vec![],
         // }).await.is_err()
-        while indexer.get_latest_block().await.unwrap().height < target_height {
-            // Check liveness - fail fast if the indexer is dead
-            if !indexer.is_live() {
-                let status = indexer.status();
-                panic!(
-                    "Indexer is not live (status: {status:?}). \
-                     The backing validator may have crashed or become unreachable."
-                );
-            }
-
+        while pollable.tip_height().await < target_height {
+            assert_live(pollable, None);
             if n == 0 {
                 interval.tick().await;
             } else {
                 self.local_net.generate_blocks(1).await.unwrap();
-                while indexer.get_latest_block().await.unwrap().height != next_block_height {
-                    if !indexer.is_live() {
-                        let status = indexer.status();
-                        panic!(
-                            "Indexer is not live while waiting for block {next_block_height} (status: {status:?})."
-                        );
-                    }
+                while pollable.tip_height().await != next_block_height {
+                    assert_live(pollable, Some(next_block_height));
                     interval.tick().await;
                 }
                 next_block_height += 1;
@@ -610,77 +668,10 @@ where
         }
 
         // After height is reached, wait for readiness and measure if it adds time
-        if !indexer.is_ready() {
+        if !pollable.is_ready() {
             let start = std::time::Instant::now();
             poll_until_ready(
-                indexer,
-                std::time::Duration::from_millis(50),
-                std::time::Duration::from_secs(30),
-            )
-            .await;
-            let elapsed = start.elapsed();
-            if elapsed.as_millis() > 0 {
-                info!(
-                    "Readiness wait after height poll took {:?} (height polling alone was insufficient)",
-                    elapsed
-                );
-            }
-        }
-    }
-
-    /// Generate `n` blocks for the local network and poll zaino's chain index until the chain index is synced to the target height.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the chain index is not live (Offline or CriticalError), indicating the
-    /// backing validator has crashed or become unreachable.
-    pub async fn generate_blocks_and_poll_chain_index(
-        &self,
-        n: u32,
-        chain_index: &NodeBackedChainIndexSubscriber,
-    ) {
-        async fn current_tip_height(chain_index: &NodeBackedChainIndexSubscriber) -> u32 {
-            let snapshot = chain_index.snapshot_nonfinalized_state().await.unwrap();
-            u32::from(chain_index.best_chaintip(&snapshot).await.unwrap().height)
-        }
-
-        let chain_height = self.local_net.get_chain_height().await;
-        let mut next_block_height = chain_height + 1;
-        let mut interval = tokio::time::interval(std::time::Duration::from_millis(200));
-        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-        interval.tick().await;
-        while current_tip_height(chain_index).await < chain_height + n {
-            // Check liveness - fail fast if the chain index is dead
-            if !chain_index.is_live() {
-                let status = chain_index.combined_status();
-                panic!(
-                    "Chain index is not live (status: {status:?}). \
-                     The backing validator may have crashed or become unreachable."
-                );
-            }
-
-            if n == 0 {
-                interval.tick().await;
-            } else {
-                self.local_net.generate_blocks(1).await.unwrap();
-                while current_tip_height(chain_index).await != next_block_height {
-                    if !chain_index.is_live() {
-                        let status = chain_index.combined_status();
-                        panic!(
-                            "Chain index is not live while waiting for block {next_block_height} (status: {status:?})."
-                        );
-                    }
-                    interval.tick().await;
-                }
-                next_block_height += 1;
-            }
-        }
-
-        // After height is reached, wait for readiness and measure if it adds time
-        if !chain_index.is_ready() {
-            let start = std::time::Instant::now();
-            poll_until_ready(
-                chain_index,
+                pollable,
                 std::time::Duration::from_millis(50),
                 std::time::Duration::from_secs(30),
             )
@@ -717,8 +708,12 @@ impl<C: Validator, Service: LightWalletService + Send + Sync + 'static> Drop
 }
 
 /// Builds a client for creating RPC requests to the indexer/light-node
-async fn build_client(uri: http::Uri) -> Result<CompactTxStreamerClient<Channel>, GetClientError> {
-    GrpcIndexer::new(uri)?.get_zcb_client().await
+#[cfg(test)]
+async fn build_client(
+    uri: http::Uri,
+) -> Result<zingo_netutils::lightwallet_protocol::CompactTxStreamerClient<Channel>, GetClientError>
+{
+    Ok(GrpcIndexer::new(uri).await?.get_clear_net_client().await)
 }
 
 #[cfg(test)]
@@ -1013,7 +1008,9 @@ mod launch_testmanager {
                     .await
                     .unwrap());
 
-                test_manager.generate_blocks_and_poll(100).await;
+                test_manager
+                    .generate_blocks_and_wait_for_tip(100, test_manager.subscriber())
+                    .await;
                 clients.faucet.sync_and_await().await.unwrap();
                 dbg!(clients
                     .faucet
@@ -1051,7 +1048,9 @@ mod launch_testmanager {
                     .take()
                     .expect("Clients are not initialized");
 
-                test_manager.generate_blocks_and_poll(100).await;
+                test_manager
+                    .generate_blocks_and_wait_for_tip(100, test_manager.subscriber())
+                    .await;
                 clients.faucet.sync_and_await().await.unwrap();
                 dbg!(clients
                     .faucet
@@ -1082,7 +1081,9 @@ mod launch_testmanager {
 
                 // *Send all transparent funds to own orchard address.
                 clients.faucet.quick_shield(AccountId::ZERO).await.unwrap();
-                test_manager.generate_blocks_and_poll(1).await;
+                test_manager
+                    .generate_blocks_and_wait_for_tip(1, test_manager.subscriber())
+                    .await;
                 clients.faucet.sync_and_await().await.unwrap();
                 dbg!(clients
                     .faucet
@@ -1105,7 +1106,9 @@ mod launch_testmanager {
                 .await
                 .unwrap();
 
-                test_manager.generate_blocks_and_poll(1).await;
+                test_manager
+                    .generate_blocks_and_wait_for_tip(1, test_manager.subscriber())
+                    .await;
                 tokio::time::sleep(std::time::Duration::from_millis(500)).await;
                 clients.recipient.sync_and_await().await.unwrap();
                 dbg!(clients
@@ -1290,7 +1293,9 @@ mod launch_testmanager {
                     .await
                     .unwrap());
 
-                test_manager.generate_blocks_and_poll(100).await;
+                test_manager
+                    .generate_blocks_and_wait_for_tip(100, test_manager.subscriber())
+                    .await;
                 clients.faucet.sync_and_await().await.unwrap();
                 dbg!(clients
                     .faucet
@@ -1329,7 +1334,9 @@ mod launch_testmanager {
                     .take()
                     .expect("Clients are not initialized");
 
-                test_manager.generate_blocks_and_poll(100).await;
+                test_manager
+                    .generate_blocks_and_wait_for_tip(100, test_manager.subscriber())
+                    .await;
                 clients.faucet.sync_and_await().await.unwrap();
                 dbg!(clients
                     .faucet
@@ -1360,7 +1367,9 @@ mod launch_testmanager {
 
                 // *Send all transparent funds to own orchard address.
                 clients.faucet.quick_shield(AccountId::ZERO).await.unwrap();
-                test_manager.generate_blocks_and_poll(1).await;
+                test_manager
+                    .generate_blocks_and_wait_for_tip(1, test_manager.subscriber())
+                    .await;
                 clients.faucet.sync_and_await().await.unwrap();
                 dbg!(clients
                     .faucet
@@ -1383,7 +1392,9 @@ mod launch_testmanager {
                 .await
                 .unwrap();
 
-                test_manager.generate_blocks_and_poll(1).await;
+                test_manager
+                    .generate_blocks_and_wait_for_tip(1, test_manager.subscriber())
+                    .await;
                 clients.recipient.sync_and_await().await.unwrap();
                 dbg!(clients
                     .recipient

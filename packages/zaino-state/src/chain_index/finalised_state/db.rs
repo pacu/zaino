@@ -64,19 +64,19 @@ use crate::{
     chain_index::{
         finalised_state::capability::{
             BlockCoreExt, BlockShieldedExt, BlockTransparentExt, CompactBlockExt, DbCore,
-            DbMetadata, DbRead, DbWrite, IndexedBlockExt,
+            DbMetadata, DbRead, DbWrite, IndexedBlockExt, TransparentHistExt,
         },
-        types::TransactionHash,
+        types::{db::metadata::FinalisedTxOutSetInfoAccumulator, TransactionHash},
     },
     config::BlockCacheConfig,
     error::FinalisedStateError,
     BlockHash, BlockHeaderData, CommitmentTreeData, CompactBlockStream, Height, IndexedBlock,
-    NamedAtomicStatus, OrchardCompactTx, OrchardTxList, SaplingCompactTx, SaplingTxList,
-    StatusType, TransparentCompactTx, TransparentTxList, TxLocation, TxidList,
+    NamedAtomicStatus, OrchardCompactTx, OrchardTxList, Outpoint, SaplingCompactTx, SaplingTxList,
+    StatusType, TransparentCompactTx, TransparentTxList, TxLocation, TxOutCompact, TxidList,
 };
 
 #[cfg(feature = "transparent_address_history_experimental")]
-use crate::{chain_index::finalised_state::capability::TransparentHistExt, AddrScript, Outpoint};
+use crate::AddrScript;
 
 use async_trait::async_trait;
 use lmdb::{Database, DatabaseFlags, Environment};
@@ -277,6 +277,84 @@ impl DbBackend {
             Self::V1(_) => Capability::LATEST,
         }
     }
+
+    /// Return an arc clone of the underlying LMDB environment, used during some DB migrations.
+    pub(crate) fn env(&self) -> Arc<Environment> {
+        match self {
+            Self::V1(db) => Arc::clone(db.env()),
+            Self::V0(db) => Arc::clone(db.env()),
+        }
+    }
+
+    /// Provides access to the metadata DB table, enabling the migration manager
+    /// to use this DB table to store temporary migration metadata.
+    pub(crate) fn metadata_db(&self) -> Result<Database, FinalisedStateError> {
+        match self {
+            Self::V1(db) => Ok(db.metadata_db()),
+            Self::V0(_) => Err(FinalisedStateError::FeatureUnavailable("v1 metadata db")),
+        }
+    }
+
+    /// Provudes access to the spent DB table, required for Migration1_1_0To1_2_0.
+    pub(crate) fn spent_db(&self) -> Result<Database, FinalisedStateError> {
+        match self {
+            Self::V1(db) => Ok(db.spent_db()),
+            Self::V0(_) => Err(FinalisedStateError::FeatureUnavailable("v1 spent db")),
+        }
+    }
+
+    /// Provides access to the reverse txid-index DB table, required for Migration1_1_0To1_2_0.
+    pub(crate) fn txid_location_db(&self) -> Result<Database, FinalisedStateError> {
+        match self {
+            Self::V1(db) => Ok(db.txid_location_db()),
+            Self::V0(_) => Err(FinalisedStateError::FeatureUnavailable(
+                "v1 txid_location db",
+            )),
+        }
+    }
+
+    /// Provides access to the txids DB table, required for Migration1_1_0To1_2_0.
+    pub(crate) fn txids_db(&self) -> Result<Database, FinalisedStateError> {
+        match self {
+            Self::V1(db) => Ok(db.txids_db()),
+            Self::V0(_) => Err(FinalisedStateError::FeatureUnavailable("v1 txids db")),
+        }
+    }
+
+    /// Provides access to the transparent DB table, required for Migration1_1_0To1_2_0 Stage B to
+    /// read block transparent data directly (bypassing per-height block re-validation).
+    pub(crate) fn transparent_db(&self) -> Result<Database, FinalisedStateError> {
+        match self {
+            Self::V1(db) => Ok(db.transparent_db()),
+            Self::V0(_) => Err(FinalisedStateError::FeatureUnavailable("v1 transparent db")),
+        }
+    }
+
+    /// Provides access to the finalised txout-set accumulator DB table.
+    pub(crate) fn tx_out_set_info_accumulator_db(&self) -> Result<Database, FinalisedStateError> {
+        match self {
+            Self::V1(database) => Ok(database.tx_out_set_info_accumulator_db()),
+            Self::V0(_) => Err(FinalisedStateError::FeatureUnavailable(
+                "v1 tx_out_set_info_accumulator db",
+            )),
+        }
+    }
+
+    /// Bulk-rebuilds the finalised txout-set accumulator to the current tip and persists it (V1
+    /// only).
+    ///
+    /// Recomputes the accumulator from the finalised `transparent` + `spent` tables via sequential
+    /// scans and writes the singleton plus its freshness watermark. Replaces the per-block
+    /// accumulator maintenance that dominated sync time at sandblast height; used by
+    /// `sync_to_height` after a catch-up run and by the v1.2 migration's accumulator stage.
+    pub(crate) async fn rebuild_tx_out_set_accumulator(&self) -> Result<(), FinalisedStateError> {
+        match self {
+            Self::V1(database) => database.rebuild_tx_out_set_accumulator().await,
+            Self::V0(_) => Err(FinalisedStateError::FeatureUnavailable(
+                "v1 txout-set accumulator builder",
+            )),
+        }
+    }
 }
 
 impl From<DbV0> for DbBackend {
@@ -375,6 +453,18 @@ impl DbWrite for DbBackend {
         match self {
             Self::V0(db) => db.write_block(block).await,
             Self::V1(db) => db.write_block(block).await,
+        }
+    }
+
+    /// Bulk catch-up ingestion, delegated to the concrete backend's strategy.
+    async fn write_blocks_to_height<S: crate::chain_index::source::BlockchainSource>(
+        &self,
+        height: Height,
+        source: &S,
+    ) -> Result<(), FinalisedStateError> {
+        match self {
+            Self::V0(db) => db.write_blocks_to_height(height, source).await,
+            Self::V1(db) => db.write_blocks_to_height(height, source).await,
         }
     }
 
@@ -511,6 +601,16 @@ impl BlockTransparentExt for DbBackend {
             _ => Err(FinalisedStateError::FeatureUnavailable("block_transparent")),
         }
     }
+
+    async fn get_previous_output(
+        &self,
+        outpoint: Outpoint,
+    ) -> Result<TxOutCompact, FinalisedStateError> {
+        match self {
+            Self::V1(db) => <DbV1 as BlockTransparentExt>::get_previous_output(db, outpoint).await,
+            _ => Err(FinalisedStateError::FeatureUnavailable("block_transparent")),
+        }
+    }
 }
 
 #[async_trait]
@@ -642,9 +742,9 @@ impl IndexedBlockExt for DbBackend {
     }
 }
 
-#[cfg(feature = "transparent_address_history_experimental")]
 #[async_trait]
 impl TransparentHistExt for DbBackend {
+    #[cfg(feature = "transparent_address_history_experimental")]
     async fn addr_records(
         &self,
         script: AddrScript,
@@ -657,6 +757,7 @@ impl TransparentHistExt for DbBackend {
         }
     }
 
+    #[cfg(feature = "transparent_address_history_experimental")]
     async fn addr_and_index_records(
         &self,
         script: AddrScript,
@@ -670,6 +771,7 @@ impl TransparentHistExt for DbBackend {
         }
     }
 
+    #[cfg(feature = "transparent_address_history_experimental")]
     async fn addr_tx_locations_by_range(
         &self,
         script: AddrScript,
@@ -684,6 +786,7 @@ impl TransparentHistExt for DbBackend {
         }
     }
 
+    #[cfg(feature = "transparent_address_history_experimental")]
     async fn addr_utxos_by_range(
         &self,
         script: AddrScript,
@@ -698,6 +801,7 @@ impl TransparentHistExt for DbBackend {
         }
     }
 
+    #[cfg(feature = "transparent_address_history_experimental")]
     async fn addr_balance_by_range(
         &self,
         script: AddrScript,
@@ -732,6 +836,87 @@ impl TransparentHistExt for DbBackend {
             Self::V1(db) => db.get_outpoint_spenders(outpoints).await,
             _ => Err(FinalisedStateError::FeatureUnavailable(
                 "transparent_history",
+            )),
+        }
+    }
+
+    async fn get_tx_out_set_info_accumulator(
+        &self,
+    ) -> Result<FinalisedTxOutSetInfoAccumulator, FinalisedStateError> {
+        match self {
+            Self::V1(database) => database.get_tx_out_set_info_accumulator().await,
+            _ => Err(FinalisedStateError::FeatureUnavailable(
+                "transparent_history",
+            )),
+        }
+    }
+}
+
+#[cfg(test)]
+impl DbBackend {
+    /// Spawn a test-only v1 backend initialized as a v1.0.0 database.
+    ///
+    /// Used by migration tests to create a historical v1.0.0 database fixture before reopening it
+    /// through the current startup / migration path.
+    pub(crate) async fn spawn_v1_0_0(cfg: &BlockCacheConfig) -> Result<Self, FinalisedStateError> {
+        Ok(Self::V1(DbV1::spawn_v1_0_0(cfg).await?))
+    }
+
+    /// Current contiguous validated-tip height (v1 only; 0 for v0). Test hook.
+    pub(crate) fn validated_tip_height(&self) -> u32 {
+        match self {
+            Self::V1(db) => db.validated_tip_height(),
+            Self::V0(_) => 0,
+        }
+    }
+
+    /// Reads the height the persisted txout-set accumulator currently reflects (V1 only).
+    ///
+    /// `None` means it has never been built. Test hook for asserting the incremental range-update
+    /// path advances the watermark (and is therefore taken, rather than a silent rebuild fallback).
+    pub(crate) async fn read_tx_out_set_accumulator_built_height(
+        &self,
+    ) -> Result<Option<Height>, FinalisedStateError> {
+        match self {
+            Self::V1(database) => database.read_tx_out_set_accumulator_built_height().await,
+            Self::V0(_) => Err(FinalisedStateError::FeatureUnavailable(
+                "v1 txout-set accumulator builder",
+            )),
+        }
+    }
+
+    /// Computes (without persisting) the bulk-built txout-set accumulator to `db_tip` (V1 only).
+    ///
+    /// Test hook for asserting the sequential bulk builder matches the incrementally-maintained
+    /// accumulator across shard counts.
+    pub(crate) fn build_tx_out_set_accumulator_blocking(
+        &self,
+        db_tip: Height,
+        shards: u16,
+    ) -> Result<FinalisedTxOutSetInfoAccumulator, FinalisedStateError> {
+        match self {
+            Self::V1(database) => database.build_tx_out_set_accumulator_blocking(db_tip, shards),
+            Self::V0(_) => Err(FinalisedStateError::FeatureUnavailable(
+                "v1 txout-set accumulator builder",
+            )),
+        }
+    }
+
+    /// Writes a block using the v1.0.0 format.
+    ///
+    /// This intentionally writes only the core v1 tables and uses v1 item encodings.
+    ///
+    /// This method does not perform safety checks and must not be used in production code.
+    ///
+    /// Used for migration tests.
+    pub(crate) async fn write_block_v1_0_0(
+        &self,
+        block: IndexedBlock,
+    ) -> Result<(), FinalisedStateError> {
+        match self {
+            Self::V1(db) => db.write_block_v1_0_0(block).await,
+            Self::V0(_) => Err(FinalisedStateError::Custom(
+                "v1.0.0 test fixture writer requires a v1 backend".to_string(),
             )),
         }
     }

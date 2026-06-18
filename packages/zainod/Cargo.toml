@@ -6,7 +6,7 @@ repository = { workspace = true }
 homepage = { workspace = true }
 edition = { workspace = true }
 license = { workspace = true }
-version = "0.3.1"
+version = "0.4.0"
 
 [[bin]]
 name = "zainod"
@@ -19,6 +19,14 @@ path = "src/lib.rs"
 [features]
 # Removes network restrictions.
 no_tls_use_unencrypted_traffic = ["zaino-serve/no_tls_use_unencrypted_traffic"]
+
+# DANGER: allows the JSON-RPC server to bind to a public (non-private,
+# non-loopback) address. The JSON-RPC interface has NO transport encryption and
+# is intended for loopback or trusted private networks only. Enabling this
+# exposes unencrypted RPC to whatever network the bind address reaches. Only use
+# for deployments on trusted private networks (e.g. containers behind a
+# mesh/proxy that terminates encryption).
+allow_unencrypted_public_json_rpc_bind = []
 
 # **Experimental and alpha features**
 # Exposes the **complete** set of experimental / alpha features currently implemented in Zaino.

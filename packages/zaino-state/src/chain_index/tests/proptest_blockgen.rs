@@ -27,6 +27,7 @@ use zebra_state::{FromDisk, HashOrHeight, IntoDisk as _};
 
 use crate::{
     chain_index::{
+        finalized_height_floor,
         non_finalised_state::ChainIndexSnapshot,
         source::{BlockchainSourceResult, GetTransactionLocation},
         tests::{init_tracing, poll::poll_until, proptest_blockgen::proptest_helpers::add_segment},
@@ -260,9 +261,8 @@ fn passthrough_best_chaintip() {
                 .last()
                 .unwrap()
                 .coinbase_height()
+                .map(|h| finalized_height_floor(h.0).0)
                 .unwrap()
-                .0
-                .saturating_sub(100)
         );
     })
 }
@@ -360,6 +360,15 @@ fn passthrough_get_block_range() {
     })
 }
 
+// Ignored: this drives the full indexer over `partial_chain_strategy` blocks, whose headers carry
+// arbitrary (invalid) merkle roots. The finalised state now validates blocks on the write path
+// (cheap merkle + parent-continuity checks), so it correctly rejects these blocks once the indexer's
+// finalised-sync reaches them. These proptest chains are not a valid input for the finalised state;
+// MockchainSource-backed tests (chain_index::tests::finalised_state::v1 + migrations) cover the
+// finalised state with valid blocks. Re-enable once the optional-db PR lands, which lets these
+// passthrough proptests run without engaging the finalised state.
+#[ignore = "proptest blocks have invalid merkle roots; finalised state rejects them. \
+            Re-enable when the optional db PR lands. Covered by MockchainSource finalised_state tests."]
 #[test]
 fn make_chain() {
     init_tracing();
@@ -400,9 +409,19 @@ fn make_chain() {
             let indexer = NodeBackedChainIndex::new(mockchain.clone(), config)
                 .await
                 .unwrap();
-            tokio::time::sleep(Duration::from_secs(5)).await;
             let index_reader = indexer.subscriber();
-            let snapshot = index_reader.snapshot_nonfinalized_state().await.unwrap();
+            let expected_block_count = segment_length * (branch_count + 1);
+            let snapshot = poll_until(
+                "indexer to ingest the full proptest chain",
+                Duration::from_secs(10),
+                Duration::from_millis(25),
+                || async {
+                    let snapshot = index_reader.snapshot_nonfinalized_state().await.ok()?;
+                    (snapshot.get_nfs_snapshot()?.blocks.len() == expected_block_count)
+                        .then_some(snapshot)
+                },
+            )
+            .await;
             let non_finalized_snapshot = snapshot.get_nfs_snapshot().expect("not synced");
             let best_tip_hash = non_finalized_snapshot.best_tip.hash;
             let best_tip_block = non_finalized_snapshot
@@ -442,6 +461,7 @@ struct ProptestMockchain {
     /// call. Replaces the O(N_blocks × M_txs) linear scan that recomputed
     /// `transaction.hash()` on every iteration — the dominant cost in the
     /// tx-iterating passthrough tests.
+    #[allow(clippy::type_complexity)]
     tx_index: Arc<
         std::sync::OnceLock<
             std::collections::HashMap<
