@@ -1987,9 +1987,10 @@ impl DbV1 {
 
             // Load the accumulator the stored watermark refers to (it must exist on this path).
             let mut accumulator = {
-                let raw = match txn
-                    .get(self.tx_out_set_info_accumulator, &TX_OUT_SET_INFO_ACCUMULATOR_KEY)
-                {
+                let raw = match txn.get(
+                    self.tx_out_set_info_accumulator,
+                    &TX_OUT_SET_INFO_ACCUMULATOR_KEY,
+                ) {
                     Ok(value) => value,
                     Err(lmdb::Error::NotFound) => {
                         return Err(FinalisedStateError::Custom(
@@ -1998,13 +1999,12 @@ impl DbV1 {
                     }
                     Err(error) => return Err(FinalisedStateError::LmdbError(error)),
                 };
-                let entry =
-                    StoredEntryFixed::<FinalisedTxOutSetInfoAccumulator>::from_bytes(raw)
-                        .map_err(|error| {
-                            FinalisedStateError::Custom(format!(
-                                "txout-set accumulator decode error: {error}"
-                            ))
-                        })?;
+                let entry = StoredEntryFixed::<FinalisedTxOutSetInfoAccumulator>::from_bytes(raw)
+                    .map_err(|error| {
+                    FinalisedStateError::Custom(format!(
+                        "txout-set accumulator decode error: {error}"
+                    ))
+                })?;
                 if !entry.verify(TX_OUT_SET_INFO_ACCUMULATOR_KEY) {
                     return Err(FinalisedStateError::Custom(
                         "txout-set accumulator checksum mismatch".to_string(),
@@ -2032,8 +2032,8 @@ impl DbV1 {
                     let raw = txn
                         .get(self.transparent, &height_bytes)
                         .map_err(FinalisedStateError::LmdbError)?;
-                    let entry = StoredEntryVar::<TransparentTxList>::from_bytes(raw)
-                        .map_err(|error| {
+                    let entry =
+                        StoredEntryVar::<TransparentTxList>::from_bytes(raw).map_err(|error| {
                             FinalisedStateError::Custom(format!(
                                 "transparent corrupt data: {error}"
                             ))

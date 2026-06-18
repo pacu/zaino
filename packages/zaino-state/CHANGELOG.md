@@ -8,6 +8,14 @@ and this library adheres to Rust's notion of
 ## [Unreleased]
 
 ### Added
+### Changed
+### Deprecated
+### Removed
+### Fixed
+
+## [0.3.0] - 2026-06-17
+
+### Added
 - `gettxoutsetinfo` is now served indexer-side via Zaino's own UTXO-set
   accumulator:
   - `chain_index::types::db::metadata::FinalisedTxOutSetInfoAccumulator` —
@@ -75,6 +83,9 @@ and this library adheres to Rust's notion of
   `validated_tip` directly, instead of a post-commit read-back. The full
   `validate_block_blocking` re-read runs at startup only (the integrity gate for
   untrusted on-disk data).
+- `get_address_utxos` now bounds the number of addresses fanned out per request,
+  preventing an unbounded multi-address query from amplifying backend load
+  (#974).
 ### Deprecated
 ### Removed
 ### Fixed
