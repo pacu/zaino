@@ -1779,6 +1779,71 @@ async fn address_deltas() {
     svc.test_manager.close().await;
 }
 
+/// Port of `test_get_mempool_info` (fetch_service, zebrad): `get_mempool_info`
+/// matches values recomputed from the fetch subscriber's mempool internals.
+/// FetchService-only — the recompute reads `FetchServiceSubscriber.indexer`.
+#[allow(deprecated)] // FetchService is a deprecated re-export.
+async fn get_mempool_info_fetch() {
+    use hex::ToHex as _;
+    use zaino_state::ChainIndex as _;
+
+    let (mut test_manager, _transparent_txid, _unified_txid) =
+        fund_and_fill_mempool::<zaino_state::FetchService>().await;
+
+    let subscriber = test_manager.subscriber();
+    let info = subscriber.get_mempool_info().await.unwrap();
+    let keys = subscriber.indexer.get_mempool_txids().await.unwrap();
+    let values = subscriber
+        .indexer
+        .get_mempool_transactions(Vec::new())
+        .await
+        .unwrap();
+
+    assert_eq!(info.size, values.len() as u64);
+    assert!(info.size >= 1);
+
+    let expected_bytes: u64 = values.iter().map(|entry| entry.len() as u64).sum();
+    let expected_key_heap_bytes: u64 = keys
+        .iter()
+        .map(|key| key.encode_hex::<String>().capacity() as u64)
+        .sum();
+    let expected_usage = expected_bytes.saturating_add(expected_key_heap_bytes);
+
+    assert!(info.bytes > 0);
+    assert_eq!(info.bytes, expected_bytes);
+    assert!(info.usage >= info.bytes);
+    assert_eq!(info.usage, expected_usage);
+
+    test_manager.close().await;
+}
+
+/// Port of `state_service_…::get_mempool_info` (zebrad): `get_mempool_info`
+/// matches values recomputed from the state subscriber's mempool internals.
+/// StateService-only — the recompute reads `StateServiceSubscriber.mempool`.
+async fn get_mempool_info_state() {
+    let mut svc = fund_and_fill_mempool_dual().await;
+
+    let info = svc.state_subscriber.get_mempool_info().await.unwrap();
+    let entries = svc.state_subscriber.mempool.get_mempool().await;
+
+    assert_eq!(entries.len() as u64, info.size);
+    assert!(info.size >= 1);
+
+    let expected_bytes: u64 = entries
+        .iter()
+        .map(|(_, v)| v.serialized_tx.as_ref().as_ref().len() as u64)
+        .sum();
+    let expected_key_heap_bytes: u64 = entries.iter().map(|(k, _)| k.txid.capacity() as u64).sum();
+    let expected_usage = expected_bytes.saturating_add(expected_key_heap_bytes);
+
+    assert!(info.bytes > 0);
+    assert_eq!(info.bytes, expected_bytes);
+    assert!(info.usage >= info.bytes);
+    assert_eq!(info.usage, expected_usage);
+
+    svc.test_manager.close().await;
+}
+
 mod zebrad {
     // FetchService is a deprecated re-export; the deprecation fires at the
     // turbofish use sites below, so the allow covers the whole module.
@@ -1845,6 +1910,11 @@ mod zebrad {
         #[tokio::test(flavor = "multi_thread")]
         async fn get_mempool_stream() {
             crate::get_mempool_stream::<FetchService>().await;
+        }
+
+        #[tokio::test(flavor = "multi_thread")]
+        async fn get_mempool_info() {
+            crate::get_mempool_info_fetch().await;
         }
 
         #[tokio::test(flavor = "multi_thread")]
@@ -2048,6 +2118,11 @@ mod zebrad {
         #[tokio::test(flavor = "multi_thread")]
         async fn get_raw_mempool() {
             crate::get_raw_mempool::<StateService>().await;
+        }
+
+        #[tokio::test(flavor = "multi_thread")]
+        async fn get_mempool_info() {
+            crate::get_mempool_info_state().await;
         }
 
         // No get_mempool_tx here: the state backend returns mempool-tx txids
