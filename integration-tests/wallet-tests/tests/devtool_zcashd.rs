@@ -528,4 +528,95 @@ mod wallet_to_validator {
     async fn shield() {
         shield_for_validator().await;
     }
+
+    /// zcashd analogue of devtool.rs's gated `send_to_transparent_finalization`:
+    /// a transparent send returns the same address txids from the non-finalized
+    /// chain and after the 99-block advance into the finalized DB. `#[ignore]`d
+    /// for the same reason — the advance mines orchard coinbase (~99 halo2
+    /// proofs) until per-call cheap filler mining (round-3 P2) lands.
+    #[tokio::test(flavor = "multi_thread")]
+    #[ignore = "heavy: 99-block orchard advance (~99 halo2 proofs); un-ignore + transparent filler when round-3 P2 lands"]
+    async fn send_to_transparent_finalization() {
+        let (mut test_manager, mut clients) = launch_and_fund_zcashd_faucet(1).await;
+
+        let recipient_taddr = clients.get_recipient_address("transparent").await;
+        clients.send_from_faucet(&recipient_taddr, 250_000).await;
+        test_manager
+            .generate_blocks_and_wait_for_tip(1, test_manager.subscriber())
+            .await;
+
+        let fetch_service = test_manager.full_node_jsonrpc_connector().await;
+        let height = fetch_service.get_blockchain_info().await.unwrap().blocks.0;
+        let unfinalised_transactions = fetch_service
+            .get_address_txids(vec![recipient_taddr.clone()], height, height)
+            .await
+            .unwrap();
+
+        test_manager
+            .generate_blocks_bulk_and_wait_for_tips(
+                99,
+                test_manager.subscriber(),
+                test_manager.subscriber(),
+            )
+            .await;
+
+        let finalised_transactions = fetch_service
+            .get_address_txids(vec![recipient_taddr], height, height)
+            .await
+            .unwrap();
+
+        clients.sync_recipient().await;
+        assert_eq!(
+            wallet_tests::Pool::Transparent.spendable_balance(&clients.recipient_balance().await),
+            250_000
+        );
+        assert_eq!(unfinalised_transactions, finalised_transactions);
+
+        test_manager.close().await;
+    }
+
+    /// zcashd port of `sent_to::all` (heavy): one faucet funds a send to all
+    /// three pools, then a 100-block advance, and each recipient pool reports
+    /// 250_000. `#[ignore]`d: the 100-block advance mines orchard coinbase
+    /// (~100 halo2 proofs). The advance is faithful to the original but not
+    /// load-bearing for the per-pool balance asserts (the sends confirm in one
+    /// block), so this could be re-ported light (like the zebrad `send_to_all`)
+    /// instead of gated, if preferred.
+    #[tokio::test(flavor = "multi_thread")]
+    #[ignore = "heavy: 100-block orchard advance (~100 halo2 proofs); re-port light or un-ignore with transparent filler (round-3 P2)"]
+    async fn send_to_all() {
+        let (mut test_manager, mut clients) = launch_and_fund_zcashd_faucet(3).await;
+
+        let recipient_ua = clients.get_recipient_address("unified").await;
+        let recipient_zaddr = clients.get_recipient_address("sapling").await;
+        let recipient_taddr = clients.get_recipient_address("transparent").await;
+        clients.send_from_faucet(&recipient_ua, 250_000).await;
+        clients.send_from_faucet(&recipient_zaddr, 250_000).await;
+        clients.send_from_faucet(&recipient_taddr, 250_000).await;
+
+        test_manager
+            .generate_blocks_bulk_and_wait_for_tips(
+                100,
+                test_manager.subscriber(),
+                test_manager.subscriber(),
+            )
+            .await;
+        clients.sync_recipient().await;
+
+        let balance = clients.recipient_balance().await;
+        assert_eq!(
+            wallet_tests::Pool::Orchard.spendable_balance(&balance),
+            250_000
+        );
+        assert_eq!(
+            wallet_tests::Pool::Sapling.spendable_balance(&balance),
+            250_000
+        );
+        assert_eq!(
+            wallet_tests::Pool::Transparent.spendable_balance(&balance),
+            250_000
+        );
+
+        test_manager.close().await;
+    }
 }
