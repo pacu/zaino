@@ -75,13 +75,14 @@ async fn create_200_block_regtest_chain_vectors() {
     let recipient_saddr = clients.get_recipient_address("sapling").await;
     let recipient_uaddr = clients.get_recipient_address("unified").await;
 
-    // *** Mine 100 blocks to finalise first block reward, shield it, and mine
-    // the shield in ***
+    // *** Mine past coinbase maturity, shield the first reward, and mine it in ***
     // Mature the faucet's transparent coinbase (100-block maturity) and shield
-    // it. Devtool analogue of `shield_faucet_rounds`; requires the devtool
-    // wallet to spend its own transparent coinbase (round-2 P1, see #[ignore]).
+    // it. Devtool analogue of `shield_faucet_rounds`; requires the devtool wallet
+    // to spend its own transparent coinbase (round-2 P1, see #[ignore]). Mine
+    // generously (150) so the earliest coinbase — a few blocks past genesis — is
+    // comfortably mature before the shield, regardless of startup height.
     test_manager
-        .generate_blocks_and_wait_for_tip(100, &state_service_subscriber)
+        .generate_blocks_and_wait_for_tip(150, &state_service_subscriber)
         .await;
     clients.sync_faucet().await;
     clients.shield_faucet().await;
