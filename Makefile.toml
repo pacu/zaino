@@ -184,3 +184,34 @@ script.post = "makers notify"
 description = "Exercise every Makefile.toml task for correctness (idempotent)"
 script_runner = "bash"
 script = 'source "./tools/scripts/verify-all.sh"'
+
+# -------------------------------------------------------------------
+
+# Verify the no-zcashd build compiles: the default-on `zcashd_support` feature
+# is being deprecated, so its OFF state must stay green or it bit-rots. Each
+# of the three workspaces is checked with --no-default-features. See
+# docs/adr/0001-zcashd-support-feature-gate.md.
+[tasks.check-no-zcashd-packages]
+description = "cargo check --no-default-features for the production workspace (zcashd_support off)"
+command = "cargo"
+args = ["check", "--workspace", "--all-targets", "--no-default-features"]
+
+[tasks.check-no-zcashd-walletless]
+description = "cargo check --no-default-features for the integration-tests workspace (zcashd_support off)"
+command = "cargo"
+args = ["check", "--workspace", "--all-targets", "--no-default-features"]
+cwd = "integration-tests"
+
+[tasks.check-no-zcashd-wallet]
+description = "cargo check --no-default-features for the wallet-tests workspace (zcashd_support off)"
+command = "cargo"
+args = ["check", "--all-targets", "--no-default-features"]
+cwd = "integration-tests/wallet-tests"
+
+[tasks.check-no-zcashd]
+description = "Verify the no-zcashd (--no-default-features) build compiles across all three workspaces"
+dependencies = [
+  "check-no-zcashd-packages",
+  "check-no-zcashd-walletless",
+  "check-no-zcashd-wallet",
+]

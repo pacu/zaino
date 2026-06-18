@@ -81,9 +81,20 @@ polarity).
 
 ## Consequences
 
-- A `--no-default-features` build of the production chain (and a corresponding
-  check of `zaino-testutils`) must be added to CI so the no-zcashd build is
-  enforced green from day one. Without it, the disabled state bit-rots and the
-  deprecation path becomes fiction.
+- The no-zcashd build is enforced by `makers check-no-zcashd`, which runs
+  `cargo check --no-default-features --all-targets` across all three workspaces
+  (production `packages/`, `integration-tests/`, `integration-tests/wallet-tests/`).
+  A `no-zcashd-build` job in `.github/workflows/ci.yml` invokes it. Without this
+  the disabled state would bit-rot and the deprecation path would become fiction.
+- Because a default-on feature only drops out when every consumer pulls the
+  carrier crates with `default-features = false`, the `[workspace.dependencies]`
+  tables of all three workspaces set `default-features = false` on the zaino
+  crates that carry `zcashd_support`; each consumer re-enables it by forwarding
+  the feature in its own `default`.
+- Per-validator behaviour that was matched inline (the default activation-height
+  selection, duplicated in `zaino-testutils` and `wallet-tests`) is now a single
+  `ValidatorKind::default_activation_heights` method, so the `Zcashd` match arm
+  is gated in exactly one place and the enum stays exhaustive when the variant
+  is compiled out.
 - The stale branches `depgregate_zcashd` and `zcashd_depgregate` (typos of the
   effort name) can be deleted; the live branch is `zcashd_support`.
