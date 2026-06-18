@@ -38,7 +38,7 @@ macro_rules! expected_read_response {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "Not a test: builds test-vector data for zaino_state::chain_index unit tests. Also funds via transparent-coinbase shielding (round-2 P1) — un-ignore to regenerate vectors once devtool can shield its own transparent coinbase (tracked by tests/devtool.rs's address_deltas)."]
+#[cfg_attr(not(feature = "devtool-incompatible"), ignore = "Not a test: builds test-vector data for zaino_state::chain_index unit tests. Also funds via transparent-coinbase shielding (round-2 P1) — un-ignore to regenerate vectors once devtool can shield its own transparent coinbase (tracked by tests/devtool.rs's address_deltas).")]
 #[allow(deprecated)]
 async fn create_200_block_regtest_chain_vectors() {
     // The committed unit-test vectors encode a mixed-pool chain built by

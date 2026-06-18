@@ -535,7 +535,7 @@ mod wallet_to_validator {
     /// for the same reason — the advance mines orchard coinbase (~99 halo2
     /// proofs) until per-call cheap filler mining (round-3 P2) lands.
     #[tokio::test(flavor = "multi_thread")]
-    #[ignore = "heavy: 99-block orchard advance (~99 halo2 proofs); un-ignore + transparent filler when round-3 P2 lands"]
+    #[cfg_attr(not(feature = "devtool-incompatible"), ignore = "heavy: 99-block orchard advance (~99 halo2 proofs); un-ignore + transparent filler when round-3 P2 lands")]
     async fn send_to_transparent_finalization() {
         let (mut test_manager, mut clients) = launch_and_fund_zcashd_faucet(1).await;
 
@@ -583,7 +583,7 @@ mod wallet_to_validator {
     /// block), so this could be re-ported light (like the zebrad `send_to_all`)
     /// instead of gated, if preferred.
     #[tokio::test(flavor = "multi_thread")]
-    #[ignore = "heavy: 100-block orchard advance (~100 halo2 proofs); re-port light or un-ignore with transparent filler (round-3 P2)"]
+    #[cfg_attr(not(feature = "devtool-incompatible"), ignore = "heavy: 100-block orchard advance (~100 halo2 proofs); re-port light or un-ignore with transparent filler (round-3 P2)")]
     async fn send_to_all() {
         let (mut test_manager, mut clients) = launch_and_fund_zcashd_faucet(3).await;
 
@@ -616,6 +616,65 @@ mod wallet_to_validator {
             wallet_tests::Pool::Transparent.spendable_balance(&balance),
             250_000
         );
+
+        test_manager.close().await;
+    }
+
+    /// zcashd analogue of devtool.rs's `monitor_unverified_mempool`. `#[ignore]`d
+    /// with the balance assertions commented out — devtool's WalletBalance has
+    /// no unconfirmed_*/confirmed_* fields (block-based sync, no mempool scan).
+    #[tokio::test(flavor = "multi_thread")]
+    #[cfg_attr(not(feature = "devtool-incompatible"), ignore = "devtool WalletBalance has no unconfirmed_*/confirmed_* fields; balance asserts commented out — restore + un-ignore when devtool surfaces unconfirmed balances")]
+    async fn monitor_unverified_mempool() {
+        let (mut test_manager, mut clients) = launch_and_fund_zcashd_faucet(2).await;
+
+        let recipient_ua = clients.get_recipient_address("unified").await;
+        let txid_1 = clients.send_from_faucet(&recipient_ua, 250_000).await;
+        let recipient_zaddr = clients.get_recipient_address("sapling").await;
+        let txid_2 = clients.send_from_faucet(&recipient_zaddr, 250_000).await;
+
+        clients.rescan_recipient().await;
+
+        let fetch_service = test_manager.full_node_jsonrpc_connector().await;
+        let mempool_txids = fetch_service.get_raw_mempool().await.unwrap();
+        dbg!(txid_1);
+        dbg!(txid_2);
+        dbg!(mempool_txids.clone());
+
+        let _transaction_1 = dbg!(
+            fetch_service
+                .get_raw_transaction(mempool_txids.transactions[0].clone(), Some(1))
+                .await
+        );
+        let _transaction_2 = dbg!(
+            fetch_service
+                .get_raw_transaction(mempool_txids.transactions[1].clone(), Some(1))
+                .await
+        );
+
+        // Unconfirmed (mempool) balances — devtool's WalletBalance has no
+        // unconfirmed_* fields:
+        // assert_eq!(clients.recipient_balance().await.unconfirmed_orchard_balance.unwrap().into_u64(), 250_000);
+        // assert_eq!(clients.recipient_balance().await.unconfirmed_sapling_balance.unwrap().into_u64(), 250_000);
+
+        test_manager
+            .generate_blocks_and_wait_for_tip(1, test_manager.subscriber())
+            .await;
+
+        let _transaction_1 = dbg!(
+            fetch_service
+                .get_raw_transaction(mempool_txids.transactions[0].clone(), Some(1))
+                .await
+        );
+        let _transaction_2 = dbg!(
+            fetch_service
+                .get_raw_transaction(mempool_txids.transactions[1].clone(), Some(1))
+                .await
+        );
+
+        clients.sync_recipient().await;
+
+        // Confirmed balances — restore as Pool::Orchard.spendable_balance(...) when un-ignoring.
 
         test_manager.close().await;
     }

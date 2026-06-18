@@ -12,6 +12,14 @@ edition = "2021"
 license = "Apache-2.0"
 publish = false
 
+[features]
+# Single non-default gate for every devtool-incompatible / heavy test (the
+# finalization heavies, send_to_all, monitor_unverified_mempool, the
+# test-vector builder). They compile by default but are `#[ignore]`'d unless
+# this feature is on; run them with `--features devtool-incompatible`. Each
+# gated test's doc comment explains why it's here.
+devtool-incompatible = []
+
 [dependencies]
 # Zaino test harness (zingolib-free) + packages
 zaino-testutils = { path = "../zaino-testutils" }
