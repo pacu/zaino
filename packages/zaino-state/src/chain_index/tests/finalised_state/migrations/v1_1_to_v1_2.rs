@@ -432,7 +432,7 @@ async fn v1_1_to_v1_2_spent_index_backfill_from_old_version() {
             .await
             .unwrap();
 
-    old_database.wait_until_ready().await;
+    old_database.wait_until_synced().await;
 
     let old_metadata = old_database.get_metadata().await.unwrap();
     assert_eq!(old_metadata.version, v1_1_0());
@@ -453,7 +453,7 @@ async fn v1_1_to_v1_2_spent_index_backfill_from_old_version() {
     .await
     .unwrap();
 
-    migrated_database.wait_until_ready().await;
+    migrated_database.wait_until_synced().await;
 
     assert_v1_2_migration_complete(&migrated_database).await;
 
@@ -504,7 +504,7 @@ async fn v1_1_to_v1_2_spent_index_migration_resumes_after_crash() {
             .await
             .unwrap();
 
-    old_database.wait_until_ready().await;
+    old_database.wait_until_synced().await;
 
     let old_metadata = old_database.get_metadata().await.unwrap();
     assert_eq!(old_metadata.version, v1_1_0());
@@ -522,7 +522,7 @@ async fn v1_1_to_v1_2_spent_index_migration_resumes_after_crash() {
     .await
     .unwrap();
 
-    complete_migration_database.wait_until_ready().await;
+    complete_migration_database.wait_until_synced().await;
 
     assert_v1_2_migration_complete(&complete_migration_database).await;
 
@@ -550,7 +550,7 @@ async fn v1_1_to_v1_2_spent_index_migration_resumes_after_crash() {
     .await
     .unwrap();
 
-    resumed_database.wait_until_ready().await;
+    resumed_database.wait_until_synced().await;
 
     assert_v1_2_migration_complete(&resumed_database).await;
 
@@ -603,7 +603,7 @@ async fn v1_2_0_cache_missing_txid_location_index_is_rebuilt() {
         FinalisedState::build_db_to_version(database_config.clone(), source.clone(), v1_1_0())
             .await
             .unwrap();
-    old_database.wait_until_ready().await;
+    old_database.wait_until_synced().await;
     old_database.shutdown().await.unwrap();
     drop(old_database);
 
@@ -614,7 +614,7 @@ async fn v1_2_0_cache_missing_txid_location_index_is_rebuilt() {
     )
     .await
     .unwrap();
-    migrated_database.wait_until_ready().await;
+    migrated_database.wait_until_synced().await;
     assert_v1_2_migration_complete(&migrated_database).await;
 
     // Simulate the alpha cache: drop the reverse index but leave the recorded version at v1.2.0.
@@ -636,7 +636,7 @@ async fn v1_2_0_cache_missing_txid_location_index_is_rebuilt() {
     )
     .await
     .unwrap();
-    healed_database.wait_until_ready().await;
+    healed_database.wait_until_synced().await;
 
     assert_v1_2_migration_complete(&healed_database).await;
 

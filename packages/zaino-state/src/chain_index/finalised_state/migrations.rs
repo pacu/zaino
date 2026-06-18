@@ -172,7 +172,7 @@ use super::{
 use crate::{
     chain_index::{
         finalised_state::{
-            capability::{CapabilityRequest, DbMetadata},
+            capability::DbMetadata,
             entry::{StoredEntryFixed, StoredEntryVar},
             finalised_source::v1::{DB_VERSION_V1, SYNC_CHECKPOINT_INTERVAL},
             router::EphemeralMode,
@@ -791,7 +791,10 @@ impl<T: BlockchainSource> Migration<T> for Migration1_1_0To1_2_0 {
         // an ephemeral passthrough so finalised reads are served from the source while the
         // indices below are (re)built; no per-capability toggle is needed here.
 
-        let backend = router.backend(CapabilityRequest::WriteCore)?;
+        // Use the persistent primary directly, not capability routing: the orchestrator has an
+        // ephemeral passthrough installed for the migration's duration, and `backend(WriteCore)`
+        // would route there (no LMDB env). The migration must write to the primary database.
+        let backend = router.primary_backend();
         let env = backend.env()?;
         let metadata_db = backend.metadata_db()?;
         let txids_db = backend.txids_db()?;

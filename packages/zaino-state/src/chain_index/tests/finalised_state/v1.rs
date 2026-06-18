@@ -1126,6 +1126,9 @@ async fn sync_with_batch_budget(
 
     let zaino_db = FinalisedState::spawn(config, source.clone()).await.unwrap();
     zaino_db.sync_to_height(Height(200), &source).await.unwrap();
+    // Catch-up of >LONG_RUNNING_SYNC_THRESHOLD blocks runs in the background; wait for the
+    // persistent DB to actually reach the tip before reading it back.
+    zaino_db.wait_until_synced().await;
 
     let backend = zaino_db
         .backend_for_cap(CapabilityRequest::WriteCore)
@@ -1199,6 +1202,8 @@ async fn incremental_accumulator_update_matches_full_rebuild() {
     // First segment builds the accumulator to height 100 (no watermark yet => full rebuild),
     // the second advances it by a 100-block range => the incremental update path under test.
     zaino_db.sync_to_height(Height(100), &source).await.unwrap();
+    // Background catch-up (>LONG_RUNNING_SYNC_THRESHOLD); wait for the persistent build + watermark.
+    zaino_db.wait_until_synced().await;
 
     let backend = zaino_db
         .backend_for_cap(CapabilityRequest::WriteCore)
@@ -1217,6 +1222,8 @@ async fn incremental_accumulator_update_matches_full_rebuild() {
     );
 
     zaino_db.sync_to_height(Height(200), &source).await.unwrap();
+    // Background catch-up; wait for the incremental accumulator update to advance the watermark.
+    zaino_db.wait_until_synced().await;
 
     let db_tip = backend.db_height().await.unwrap().unwrap();
     assert_eq!(db_tip, Height(200), "both segments must have been synced");

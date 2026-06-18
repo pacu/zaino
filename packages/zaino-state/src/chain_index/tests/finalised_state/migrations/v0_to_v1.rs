@@ -143,7 +143,8 @@ async fn v0_to_v1_interrupted() {
 
     // Open v1 database and check migration.
     let zaino_db_2 = FinalisedState::spawn(v1_config, source).await.unwrap();
-    zaino_db_2.wait_until_ready().await;
+    // Catch-up to the tip runs in the background; wait for the persistent DB to reach it.
+    zaino_db_2.wait_until_synced().await;
     dbg!(zaino_db_2.status());
     let db_height = dbg!(zaino_db_2.db_height().await.unwrap()).unwrap();
     assert_eq!(db_height.0, 200);
@@ -216,7 +217,8 @@ async fn v0_to_v1_partial() {
 
     // Open v1 database and check migration.
     let zaino_db_2 = FinalisedState::spawn(v1_config, source).await.unwrap();
-    zaino_db_2.wait_until_ready().await;
+    // Catch-up to the tip runs in the background; wait for the persistent DB to reach it.
+    zaino_db_2.wait_until_synced().await;
     dbg!(zaino_db_2.status());
     let db_height = dbg!(zaino_db_2.db_height().await.unwrap()).unwrap();
     assert_eq!(db_height.0, 200);
