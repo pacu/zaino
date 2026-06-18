@@ -3,7 +3,7 @@ members = [
     "walletless-tests",
     "zaino-testutils",
 ]
-# wallet-tests is its own workspace (zingolib stack, separate Cargo.lock).
+# wallet-tests is its own workspace (devtool wallet-client stack, separate Cargo.lock).
 exclude = ["wallet-tests"]
 resolver = "2"
 
