@@ -28,12 +28,14 @@ use zebra_chain::subtree::NoteCommitmentSubtreeIndex;
 use zebra_rpc::client::GetAddressBalanceRequest;
 use zebra_rpc::methods::GetAddressTxIdsRequest;
 
-/// Launch zcashd (orchard-mining) at the devtool-compatible activation heights,
-/// build the devtool faucet against the resulting Zaino, mine two orchard
-/// coinbase notes, and assert the faucet sees them.
-#[tokio::test(flavor = "multi_thread")]
-async fn faucet_receives_zcashd_orchard_reward() {
-    let mut test_manager = TestManager::<Zcashd, FetchService>::launch_mining_to(
+/// Launch zcashd (orchard-mining) at the devtool-compatible activation heights
+/// (`ZEBRAD_DEFAULT_ACTIVATION_HEIGHTS`, which the PoC below proves zcashd
+/// accepts and the devtool wallet requires) and build the devtool
+/// faucet/recipient wallets against the resulting Zaino, without mining or
+/// syncing. The zcashd analogue of devtool.rs's `launch_and_build_clients`,
+/// concrete on zcashd (which has no StateService backend).
+async fn launch_zcashd_and_build_clients() -> (TestManager<Zcashd, FetchService>, DevtoolClients) {
+    let test_manager = TestManager::<Zcashd, FetchService>::launch_mining_to(
         zaino_testutils::SHIELDED_FUNDING_POOL, // ORCHARD
         &ValidatorKind::Zcashd,
         None, // network -> Regtest
@@ -41,19 +43,45 @@ async fn faucet_receives_zcashd_orchard_reward() {
         Some(zaino_common::network::ZEBRAD_DEFAULT_ACTIVATION_HEIGHTS),
         None,  // no chain cache: build fresh at these heights
         true,  // enable zaino
-        false, // no json-rpc server (not needed for this smoke)
+        false, // no json-rpc server
         false, // no clients (the devtool wallet is built separately)
     )
     .await
     .expect("launch zcashd TestManager");
 
-    let mut clients = wallet_tests::devtool::build_clients(
+    let clients = wallet_tests::devtool::build_clients(
         test_manager
             .zaino_grpc_listen_address
             .expect("zaino enabled")
             .port(),
     )
     .await;
+
+    (test_manager, clients)
+}
+
+/// [`launch_zcashd_and_build_clients`] plus `orchard_notes` orchard coinbase
+/// notes for the faucet, synced. One block more than `orchard_notes` is mined
+/// because the height-1 coinbase is sapling at nu5=2 (orchard accrues from
+/// height 2). The send/shield analogue of devtool.rs's `launch_and_fund_faucet`.
+async fn launch_and_fund_zcashd_faucet(
+    orchard_notes: u32,
+) -> (TestManager<Zcashd, FetchService>, DevtoolClients) {
+    let (test_manager, mut clients) = launch_zcashd_and_build_clients().await;
+    test_manager
+        .generate_blocks_and_wait_for_tip(orchard_notes + 1, test_manager.subscriber())
+        .await;
+    clients.sync_faucet().await;
+    (test_manager, clients)
+}
+
+/// Launch zcashd, fund the faucet with two orchard coinbase notes, and assert
+/// the faucet sees them — the PoC that proved zcashd accepts the
+/// devtool-compatible heights (no NU6.1 lockbox rejection) and the abandon-art
+/// faucet sees zcashd's orchard coinbase.
+#[tokio::test(flavor = "multi_thread")]
+async fn faucet_receives_zcashd_orchard_reward() {
+    let (mut test_manager, mut clients) = launch_zcashd_and_build_clients().await;
 
     // Two orchard coinbase notes for the abandon-art faucet.
     test_manager
@@ -392,5 +420,96 @@ mod json_server {
         assert_eq!(zcashd_txid.to_string(), zaino_txid.to_string());
 
         services.test_manager.close().await;
+    }
+}
+
+/// zcashd analogue of devtool.rs's `send_to_pool`: the faucet sends 250_000 to
+/// the recipient's `pool` address and the recipient sees it.
+async fn send_to_pool(pool: wallet_tests::Pool) {
+    let (mut test_manager, mut clients) = launch_and_fund_zcashd_faucet(1).await;
+
+    let recipient = clients.get_recipient_address(pool.address_kind()).await;
+    let txid = clients.send_from_faucet(&recipient, 250_000).await;
+    dbg!(txid);
+
+    test_manager
+        .generate_blocks_and_wait_for_tip(1, test_manager.subscriber())
+        .await;
+    clients.sync_recipient().await;
+
+    assert_eq!(
+        pool.spendable_balance(&clients.recipient_balance().await),
+        250_000
+    );
+
+    test_manager.close().await;
+}
+
+/// zcashd analogue of devtool.rs's `shield_for_validator`: the recipient
+/// receives a transparent send, then shields it into orchard (235_000 after the
+/// ZIP-317 shielding fee).
+async fn shield_for_validator() {
+    let (mut test_manager, mut clients) = launch_and_fund_zcashd_faucet(1).await;
+
+    let recipient_taddr = clients.get_recipient_address("transparent").await;
+    clients.send_from_faucet(&recipient_taddr, 250_000).await;
+    test_manager
+        .generate_blocks_and_wait_for_tip(1, test_manager.subscriber())
+        .await;
+    clients.sync_recipient().await;
+
+    assert_eq!(
+        wallet_tests::Pool::Transparent.spendable_balance(&clients.recipient_balance().await),
+        250_000
+    );
+
+    clients.shield_recipient().await;
+    test_manager
+        .generate_blocks_and_wait_for_tip(1, test_manager.subscriber())
+        .await;
+    clients.sync_recipient().await;
+
+    assert_eq!(
+        wallet_tests::Pool::Orchard.spendable_balance(&clients.recipient_balance().await),
+        235_000
+    );
+
+    test_manager.close().await;
+}
+
+/// Devtool ports of `wallet_to_validator`'s `mod zcashd` send/shield/get-info
+/// column. Deferred: the heavy finalization send (`sent_to::transparent`'s
+/// 99-block mine, round-3 P2), `sent_to::all`, and `monitor_unverified_mempool`
+/// (round-3 P3). `send_to_transparent` here is the light send, matching the
+/// zebrad devtool port.
+mod wallet_to_validator {
+    use super::*;
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn connect_to_node_get_info() {
+        let (mut test_manager, clients) = launch_zcashd_and_build_clients().await;
+        clients.get_info_faucet().await;
+        clients.get_info_recipient().await;
+        test_manager.close().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn send_to_orchard() {
+        send_to_pool(wallet_tests::Pool::Orchard).await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn send_to_sapling() {
+        send_to_pool(wallet_tests::Pool::Sapling).await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn send_to_transparent() {
+        send_to_pool(wallet_tests::Pool::Transparent).await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn shield() {
+        shield_for_validator().await;
     }
 }
