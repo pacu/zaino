@@ -102,7 +102,10 @@ async fn jsonrpc_fund(
     clients: &mut DevtoolClients,
     send: Option<wallet_tests::Pool>,
 ) -> (String, String, Option<String>) {
-    let notes: u32 = if send.is_some() { 1 } else { 2 };
+    // At nu5=2 the height-1 coinbase is sapling and orchard notes only accrue
+    // from height 2, so mine one block more than the orchard notes needed (1 per
+    // send: a Some(pool) test spends one note, the send=None mempool tests two).
+    let notes: u32 = if send.is_some() { 2 } else { 3 };
     services.generate_blocks_and_wait_for_tips(notes).await;
     clients.sync_faucet().await;
 
