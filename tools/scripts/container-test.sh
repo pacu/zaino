@@ -17,8 +17,8 @@
 # zcashd-backed tests are compiled out and the suite exercises the zebrad-only
 # world. All downstream tasks (walletless-/wallet-integration-test,
 # integration-test) run through this script and inherit the default. To run the
-# zcashd-backed suite, use `makers container-test-with-zcashd`, which sets
-# CONTAINER_TEST_WITH_ZCASHD=1. See docs/adr/0001-zcashd-support-feature-gate.md.
+# zcashd-backed suite, pass `--with-zcashd` (or set CONTAINER_TEST_WITH_ZCASHD=1).
+# See docs/adr/0001-zcashd-support-feature-gate.md.
 
 set -euo pipefail
 
@@ -33,10 +33,24 @@ info "-- TAG               = $TAG"
 # from script scope and stops the right container on EXIT/INT/TERM.
 CONTAINER_NAME="zaino-testing-$$"
 
+# Parse --with-zcashd from args so callers can use a single unified command:
+#   makers container-test               (zebra-only, default)
+#   makers container-test --with-zcashd  (includes zcashd-backed tests)
+# The CONTAINER_TEST_WITH_ZCASHD env var is also honoured for programmatic use.
+REMAINING_ARGS=()
+for arg in "$@"; do
+  if [ "$arg" = "--with-zcashd" ]; then
+    CONTAINER_TEST_WITH_ZCASHD=1
+  else
+    REMAINING_ARGS+=("$arg")
+  fi
+done
+set -- ${REMAINING_ARGS[@]+"${REMAINING_ARGS[@]}"}
+
 # Feature selection. zcashd is being deprecated, so the suite compiles it out
 # by default (`--no-default-features` turns off the default-on `zcashd_support`
-# feature). The `container-test-with-zcashd` task sets CONTAINER_TEST_WITH_ZCASHD=1
-# to run with default features on and exercise the zcashd-backed tests.
+# feature). Pass `--with-zcashd` or set CONTAINER_TEST_WITH_ZCASHD=1 to run
+# with default features on and exercise the zcashd-backed tests.
 # Single token or empty, so the unquoted expansion below is intentional.
 NO_DEFAULT_FEATURES="--no-default-features"
 if [ "${CONTAINER_TEST_WITH_ZCASHD:-0}" = "1" ]; then
