@@ -1,4 +1,4 @@
-//! ZainoDB Finalised State (Schema V1)
+//! Finalised State persistent database (Schema V1)
 //!
 //! This module provides the **V1** implementation of Zaino’s LMDB-backed finalised-state database.
 //! It stores a validated, append-only view of the best chain and exposes a set of capability traits
@@ -36,7 +36,7 @@ use crate::{
         },
         types::{TransactionHash, GENESIS_HEIGHT},
     },
-    config::BlockCacheConfig,
+    config::ChainIndexConfig,
     error::FinalisedStateError,
     BlockHash, BlockHeaderData, CommitmentTreeData, CompactBlockStream, CompactOrchardAction,
     CompactSaplingOutput, CompactSaplingSpend, CompactSize, CompactTxData, FixedEncodedLen as _,
@@ -133,7 +133,7 @@ pub(crate) const DB_SCHEMA_V1_HASH: [u8; 32] = [
 pub(crate) const DB_VERSION_V1: DbVersion = DbVersion {
     major: 1,
     minor: 2,
-    patch: 0,
+    patch: 1,
 };
 
 /// LMDB table name for the finalised txout-set accumulator.
@@ -142,6 +142,54 @@ pub(crate) const TX_OUT_SET_INFO_ACCUMULATOR_DATABASE_NAME: &str =
 
 /// Singleton key for the finalised txout-set accumulator table.
 pub(crate) const TX_OUT_SET_INFO_ACCUMULATOR_KEY: &[u8] = b"tx_out_set_info_accumulator";
+
+/// Metadata key recording the height the finalised txout-set accumulator currently reflects.
+///
+/// Stored in the `metadata` table as `StoredEntryFixed<Height>`. The accumulator is not maintained
+/// per block on the bulk-sync write path. After a catch-up run it is brought up to the tip either by
+/// a full from-genesis rebuild ([`DbV1::rebuild_tx_out_set_accumulator`], used for the first build /
+/// an unusually large gap) or, in steady state, by applying just the delta for the newly-written
+/// range ([`DbV1::update_tx_out_set_accumulator_for_range`]). Both advance this watermark to the new
+/// tip in the same transaction as the accumulator. It lets the dispatch pick the cheap incremental
+/// path and lets readers detect a *stale* accumulator (watermark `<` db tip) after a sync was
+/// interrupted before the accumulator step ran, rather than serving incorrect `gettxoutsetinfo` data.
+pub(crate) const TX_OUT_SET_ACCUMULATOR_BUILT_HEIGHT_KEY: &[u8] =
+    b"_tx_out_set_accumulator_built_height";
+
+/// Maximum accumulator staleness (`db_tip - watermark`, in blocks) still updated incrementally.
+///
+/// Below this gap, [`DbV1::write_blocks_to_height`] advances the persisted txout-set accumulator by
+/// applying only the delta for the just-written range — O(range) work, independent of chain length.
+/// At or above it (the first build, or a sync interrupted far behind the on-disk tip) it falls back
+/// to the full from-genesis [`DbV1::rebuild_tx_out_set_accumulator`]. The incremental path does
+/// ~O(range outputs) random `spent`/prev-output lookups (page faults once the DB exceeds RAM), so
+/// this is set conservatively — well under the fixed full-scan cost — while still covering a
+/// multi-hour offline catch-up. It is a performance knob, not a correctness one:
+/// both paths produce the identical accumulator at the tip.
+pub(crate) const ACCUMULATOR_INCREMENTAL_MAX_GAP: u32 = 1_000;
+
+/// Number of txid-prefix shards used by the bulk txout-set accumulator builder.
+///
+/// The builder holds the set of spent outpoints in memory while scanning the block data. Sharding
+/// on the creating-txid's first byte bounds that working set to roughly `1 / shards` of the total
+/// spent index, at the cost of one extra sequential pass over the block data per shard. The
+/// per-shard partials recombine exactly (XOR commitment + additive counters), so the result is
+/// independent of the shard count. `1` is a single optimal pass and is correct on any host with
+/// enough RAM for the full spent set; raise it on memory-constrained deployments.
+pub(crate) const ACCUMULATOR_BUILD_SHARDS: u16 = 1;
+
+/// Number of committed block writes / migration heights between explicit
+/// `env.sync(true)` durability checkpoints.
+///
+/// The LMDB environment is opened with `MDB_NOSYNC` (see [`DbV1::spawn`]), so an individual
+/// `txn.commit()` is *not* flushed to disk. Because the environment does not use `WRITE_MAP`,
+/// LMDB still guarantees ACI on crash — only durability (D) is lost: a crash rolls the database
+/// back to the last on-disk-consistent transaction, it never corrupts it (copy-on-write + dual
+/// meta pages always leave a recoverable committed snapshot). Forcing a sync every
+/// `SYNC_CHECKPOINT_INTERVAL` writes bounds how much committed-but-unflushed tail a crash can
+/// discard. The tail is always safe to re-do: clean sync resumes from the on-disk tip and
+/// re-fetches the missing blocks, and migrations resume idempotently from their progress keys.
+pub(crate) const SYNC_CHECKPOINT_INTERVAL: u32 = 1000;
 
 /// [`DbCore`] capability implementation for [`DbV1`].
 ///
@@ -279,11 +327,11 @@ pub(crate) struct DbV1 {
     /// (current and future) wake on a single `cancel()` call.
     cancel_token: CancellationToken,
 
-    /// ZainoDB status.
+    /// FinalisedState status.
     status: NamedAtomicStatus,
 
     /// BlockCache config data.
-    config: BlockCacheConfig,
+    config: ChainIndexConfig,
 }
 
 /// Inherent implementation for [`DbV1`].
@@ -303,8 +351,8 @@ impl DbV1 {
     /// - opens or creates all V1 named databases,
     /// - validates or initializes the `"metadata"` record (schema hash + version), and
     /// - spawns the background validator / maintenance task.
-    pub(crate) async fn spawn(config: &BlockCacheConfig) -> Result<Self, FinalisedStateError> {
-        info!("Launching ZainoDB");
+    pub(crate) async fn spawn(config: &ChainIndexConfig) -> Result<Self, FinalisedStateError> {
+        info!("Launching FinalisedState");
 
         // Prepare database details and path.
         let db_size_bytes = config.storage.database.size.to_byte_count();
@@ -330,11 +378,23 @@ impl DbV1 {
             .expect("max_readers was clamped to fit in u32");
 
         // Open LMDB environment and set environmental details.
+        //
+        // `NO_SYNC`: commits are not fsynced. The core write path now does many random-key
+        // inserts per block (the `spent` and `txid_location` B-trees are keyed by 32-byte
+        // hashes), which made per-commit fsync the dominant sync cost once those trees outgrew
+        // the page cache. Under `NO_SYNC` the OS batches that write-back; we force durability at
+        // explicit checkpoints (`SYNC_CHECKPOINT_INTERVAL`) and on graceful shutdown instead.
+        // `WRITE_MAP` is unset, so a crash never corrupts the database — it only discards the
+        // unflushed tail of recent commits, which clean sync and migrations safely re-do.
         let env = Environment::new()
             .set_max_dbs(15)
             .set_map_size(db_size_bytes)
             .set_max_readers(max_readers)
-            .set_flags(EnvironmentFlags::NO_TLS | EnvironmentFlags::NO_READAHEAD)
+            .set_flags(
+                EnvironmentFlags::NO_TLS
+                    | EnvironmentFlags::NO_READAHEAD
+                    | EnvironmentFlags::NO_SYNC,
+            )
             .open(&db_path)?;
 
         // Open individual LMDB DBs.
@@ -397,7 +457,7 @@ impl DbV1 {
                 validated_set: DashSet::new(),
                 db_handler: std::sync::Mutex::new(None),
                 cancel_token: CancellationToken::new(),
-                status: NamedAtomicStatus::new("ZainoDB", StatusType::Spawning),
+                status: NamedAtomicStatus::new("FinalisedState", StatusType::Spawning),
                 config: config.clone(),
             };
         }
@@ -421,7 +481,7 @@ impl DbV1 {
                 validated_set: DashSet::new(),
                 db_handler: std::sync::Mutex::new(None),
                 cancel_token: CancellationToken::new(),
-                status: NamedAtomicStatus::new("ZainoDB", StatusType::Spawning),
+                status: NamedAtomicStatus::new("FinalisedState", StatusType::Spawning),
                 config: config.clone(),
             };
         }
@@ -631,7 +691,16 @@ impl DbV1 {
         .map_err(|e| FinalisedStateError::Custom(format!("spawn_blocking failed: {e}")))?
     }
 
-    /// Scans the whole finalised chain once at start-up and validates every block by checksum and continuity.
+    /// Scans the whole finalised chain once at start-up and validates every block by checksum and
+    /// continuity.
+    ///
+    /// Iterates the height-keyed `headers` table, which LMDB orders by big-endian height — i.e. in
+    /// **ascending block-height order**. This lets `validated_tip` advance monotonically as each
+    /// height is validated (every height is `validated_tip + 1` in turn), and surfaces any gap
+    /// immediately (the parent-hash continuity check in `validate_block_blocking` fails at the first
+    /// missing height). The previous implementation iterated the hash-keyed `heights` table, which
+    /// validated in pseudo-random height order — thrashing the cache and preventing the tip from
+    /// advancing until the whole set had been validated.
     async fn initial_block_scan(&self) -> Result<(), FinalisedStateError> {
         let zaino_db = Self {
             env: Arc::clone(&self.env),
@@ -658,13 +727,17 @@ impl DbV1 {
 
         tokio::task::spawn_blocking(move || {
             let ro = zaino_db.env.begin_ro_txn()?;
-            let mut cursor = ro.open_ro_cursor(zaino_db.heights)?;
+            let mut cursor = ro.open_ro_cursor(zaino_db.headers)?;
 
-            for (hash_bytes, height_entry_bytes) in cursor.iter() {
-                let hash = BlockHash::from_bytes(hash_bytes)?;
-                let height = *StoredEntryFixed::<Height>::from_bytes(height_entry_bytes)
-                    .map_err(|e| FinalisedStateError::Custom(format!("corrupt height entry: {e}")))?
-                    .inner();
+            // `headers` is keyed by big-endian height, so the cursor yields blocks in ascending
+            // height order. Both the height and hash are read from the header entry itself.
+            for (height_bytes, header_entry_bytes) in cursor.iter() {
+                let height = Height::from_bytes(height_bytes)?;
+                let header_entry = StoredEntryVar::<BlockHeaderData>::from_bytes(
+                    header_entry_bytes,
+                )
+                .map_err(|e| FinalisedStateError::Custom(format!("corrupt header entry: {e}")))?;
+                let hash = *header_entry.inner().context.hash();
 
                 zaino_db.validate_block_blocking(height, hash)?
             }
@@ -696,6 +769,16 @@ impl DbV1 {
     /// reverse txid index directly from stored block data.
     pub(crate) fn txids_db(&self) -> Database {
         self.txids
+    }
+
+    /// Provides access to the transparent DB table, required for Migration1_1_0To1_2_0 Stage B to
+    /// read stored block transparent data directly. Reading the table raw (rather than via the
+    /// `BlockTransparentExt` accessor) deliberately bypasses `validate_block_blocking`: the
+    /// migration backfills from already-on-disk, already-trusted data, so per-height block
+    /// re-validation (merkle-root recompute + full-payload checksums) is redundant cost. The
+    /// background validator started at spawn is responsible for validating the on-disk chain.
+    pub(crate) fn transparent_db(&self) -> Database {
+        self.transparent
     }
 
     /// **Temporary 0.4.0-alpha.1 cache compatibility.**
@@ -835,9 +918,9 @@ impl DbV1 {
     /// [`DbV1::check_schema_version`], because that would initialize fresh metadata using the
     /// current [`DB_VERSION_V1`] value instead of the historical v1.0.0 value required by the tests.
     pub(crate) async fn spawn_v1_0_0(
-        config: &BlockCacheConfig,
+        config: &ChainIndexConfig,
     ) -> Result<Self, FinalisedStateError> {
-        info!("Launching ZainoDB");
+        info!("Launching FinalisedState");
 
         // Prepare database details and path.
         let db_size_bytes = config.storage.database.size.to_byte_count();
@@ -863,11 +946,23 @@ impl DbV1 {
             .expect("max_readers was clamped to fit in u32");
 
         // Open LMDB environment and set environmental details.
+        //
+        // `NO_SYNC`: commits are not fsynced. The core write path now does many random-key
+        // inserts per block (the `spent` and `txid_location` B-trees are keyed by 32-byte
+        // hashes), which made per-commit fsync the dominant sync cost once those trees outgrew
+        // the page cache. Under `NO_SYNC` the OS batches that write-back; we force durability at
+        // explicit checkpoints (`SYNC_CHECKPOINT_INTERVAL`) and on graceful shutdown instead.
+        // `WRITE_MAP` is unset, so a crash never corrupts the database — it only discards the
+        // unflushed tail of recent commits, which clean sync and migrations safely re-do.
         let env = Environment::new()
             .set_max_dbs(15)
             .set_map_size(db_size_bytes)
             .set_max_readers(max_readers)
-            .set_flags(EnvironmentFlags::NO_TLS | EnvironmentFlags::NO_READAHEAD)
+            .set_flags(
+                EnvironmentFlags::NO_TLS
+                    | EnvironmentFlags::NO_READAHEAD
+                    | EnvironmentFlags::NO_SYNC,
+            )
             .open(&db_path)?;
 
         // Open individual LMDB DBs.
@@ -927,7 +1022,7 @@ impl DbV1 {
                 validated_set: DashSet::new(),
                 db_handler: std::sync::Mutex::new(None),
                 cancel_token: CancellationToken::new(),
-                status: NamedAtomicStatus::new("ZainoDB", StatusType::Spawning),
+                status: NamedAtomicStatus::new("FinalisedState", StatusType::Spawning),
                 config: config.clone(),
             };
         }
@@ -950,7 +1045,7 @@ impl DbV1 {
                 validated_set: DashSet::new(),
                 db_handler: std::sync::Mutex::new(None),
                 cancel_token: CancellationToken::new(),
-                status: NamedAtomicStatus::new("ZainoDB", StatusType::Spawning),
+                status: NamedAtomicStatus::new("FinalisedState", StatusType::Spawning),
                 config: config.clone(),
             };
         }

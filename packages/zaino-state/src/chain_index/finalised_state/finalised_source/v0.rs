@@ -1,4 +1,4 @@
-//! ZainoDB V0 Implementation
+//! Finalised State persistent database (Schema V0)
 //!
 //! WARNING: This is a legacy development database and should not be used in production environments.
 //!
@@ -47,7 +47,7 @@ use crate::{
         },
         types::GENESIS_HEIGHT,
     },
-    config::BlockCacheConfig,
+    config::ChainIndexConfig,
     error::FinalisedStateError,
     status::{NamedAtomicStatus, StatusType},
     CompactBlockStream, Height, IndexedBlock,
@@ -142,6 +142,49 @@ impl DbWrite for DbV0 {
     /// Writes a fully-validated finalised block, enforcing strict height monotonicity.
     async fn write_block(&self, block: IndexedBlock) -> Result<(), FinalisedStateError> {
         self.write_block(block).await
+    }
+
+    /// Bulk catch-up for the legacy backend: simply loops [`DbWrite::write_block`] over
+    /// `tip+1..=height`. v0 maintains no txout-set accumulator and does not serve chainwork, so the
+    /// chainwork seed is zero (matching the prior `sync_to_height` behaviour). This code path is
+    /// retired with the v0 backend.
+    async fn write_blocks_to_height<S: crate::chain_index::source::BlockchainSource>(
+        &self,
+        height: crate::Height,
+        source: &S,
+    ) -> Result<(), FinalisedStateError> {
+        use crate::chain_index::finalised_state::build_indexed_block_from_source;
+        use zebra_chain::parameters::NetworkUpgrade;
+
+        let network = self.config.network;
+        let zebra_network = network.to_zebra_network();
+        let sapling_activation_height = NetworkUpgrade::Sapling
+            .activation_height(&zebra_network)
+            .expect("Sapling activation height must be set");
+        let nu5_activation_height = NetworkUpgrade::Nu5.activation_height(&zebra_network);
+
+        let start_height = match self.tip_height().await? {
+            None => crate::chain_index::types::GENESIS_HEIGHT.0,
+            Some(tip) => tip.0 + 1,
+        };
+        let mut parent_chainwork = crate::ChainWork::from_u256(0.into());
+
+        for height_int in start_height..=height.0 {
+            let block = build_indexed_block_from_source(
+                source,
+                network,
+                sapling_activation_height,
+                nu5_activation_height,
+                height_int,
+                parent_chainwork,
+            )
+            .await?;
+            parent_chainwork = block.context.chainwork;
+
+            self.write_block(block).await?;
+        }
+
+        Ok(())
     }
 
     /// Deletes a block at the given height, enforcing that it is the current tip.
@@ -272,7 +315,7 @@ pub struct DbV0 {
     status: NamedAtomicStatus,
 
     /// Configuration snapshot used for path/network selection and sizing parameters.
-    config: BlockCacheConfig,
+    config: ChainIndexConfig,
 }
 
 impl DbV0 {
@@ -287,8 +330,8 @@ impl DbV0 {
     ///
     /// # Errors
     /// Returns `FinalisedStateError` on any filesystem, LMDB, or task-spawn failure.
-    pub(crate) async fn spawn(config: &BlockCacheConfig) -> Result<Self, FinalisedStateError> {
-        info!("Launching ZainoDB");
+    pub(crate) async fn spawn(config: &ChainIndexConfig) -> Result<Self, FinalisedStateError> {
+        info!("Launching FinalisedState");
 
         // Prepare database details and path.
         let db_size_bytes = config.storage.database.size.to_byte_count();
@@ -327,14 +370,14 @@ impl DbV0 {
         let hashes_to_blocks =
             super::open_or_create_db(&env, "hashes_to_blocks", DatabaseFlags::empty()).await?;
 
-        // Create ZainoDB
+        // Create FinalisedState
         let mut zaino_db = Self {
             env: Arc::new(env),
             heights_to_hashes,
             hashes_to_blocks,
             db_handler: std::sync::Mutex::new(None),
             cancel_token: CancellationToken::new(),
-            status: NamedAtomicStatus::new("ZainoDB", StatusType::Spawning),
+            status: NamedAtomicStatus::new("FinalisedState", StatusType::Spawning),
             config: config.clone(),
         };
 
@@ -468,7 +511,7 @@ impl DbV0 {
         };
         let post_result = tokio::task::spawn_blocking(move || {
             // let post_result: Result<(), FinalisedStateError> = (async {
-            // Write block to ZainoDB
+            // Write block to FinalisedState
             let mut txn = zaino_db.env.begin_rw_txn()?;
 
             txn.put(
