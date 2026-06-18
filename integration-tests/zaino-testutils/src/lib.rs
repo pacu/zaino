@@ -896,6 +896,7 @@ pub async fn launch_state_and_fetch_services<V: ValidatorExt>(
             },
             ..Default::default()
         },
+        false, // ephemeral_finalised_state: tests use a persistent finalised DB
         network_type,
         None,
     ))
@@ -937,6 +938,7 @@ async fn spawn_fetch_service(
             },
             ..Default::default()
         },
+        false, // ephemeral_finalised_state: tests use a persistent finalised DB
         network,
         None,
     ))
