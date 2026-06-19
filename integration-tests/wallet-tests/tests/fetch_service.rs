@@ -758,6 +758,7 @@ macro_rules! fetch_service_tests {
     };
 }
 
+#[cfg(feature = "zcashd_support")]
 fetch_service_tests!(
     zcashd,
     zcash_local_net::validator::zcashd::Zcashd,

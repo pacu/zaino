@@ -434,6 +434,7 @@ where
     test_manager.close().await;
 }
 
+#[cfg(feature = "zcashd_support")]
 mod zcashd {
     #[allow(deprecated)]
     use zaino_state::FetchService;
