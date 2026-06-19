@@ -12,14 +12,29 @@ edition = "2021"
 license = "Apache-2.0"
 publish = false
 
+[features]
+default = ["zcashd_support"]
+
+# Support for the zcashd test validator. Default-on; being deprecated. Gates
+# the zcashd-backed wallet tests and forwards to the zaino crates. See
+# docs/adr/0001-zcashd-support-feature-gate.md.
+zcashd_support = [
+    "zaino-testutils/zcashd_support",
+    "zaino-state/zcashd_support",
+    "zaino-fetch/zcashd_support",
+    "zainod/zcashd_support",
+]
+
 [dependencies]
-# Zaino test harness (zingolib-free) + packages
-zaino-testutils = { path = "../zaino-testutils" }
-zaino-state = { path = "../../packages/zaino-state", features = ["test_dependencies"] }
+# Zaino test harness (zingolib-free) + packages. default-features = false so
+# `zcashd_support` can be dropped via --no-default-features; re-enabled by
+# forwarding above.
+zaino-testutils = { path = "../zaino-testutils", default-features = false }
+zaino-state = { path = "../../packages/zaino-state", default-features = false, features = ["test_dependencies"] }
 zaino-common = { path = "../../packages/zaino-common" }
-zaino-fetch = { path = "../../packages/zaino-fetch" }
+zaino-fetch = { path = "../../packages/zaino-fetch", default-features = false }
 zaino-proto = { path = "../../packages/zaino-proto" }
-zainod = { path = "../../packages/zainod" }
+zainod = { path = "../../packages/zainod", default-features = false }
 
 # Zingo wallet stack (0.14-compatible revs; this workspace owns its own lock)
 zingolib = { git = "https://github.com/zingolabs/zingolib.git", rev = "61418d6ecbc679a88da8268a2be5db3926501fc6", features = [
