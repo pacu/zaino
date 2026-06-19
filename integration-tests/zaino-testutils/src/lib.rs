@@ -1177,6 +1177,7 @@ pub async fn launch_zcashd_dual_fetch_services() -> ZcashdDualFetchServices {
 /// services pinned to `activation_heights`, for wallet clients (e.g. the devtool
 /// wallet) whose compiled-in regtest heights differ from zcashd's defaults and
 /// must be matched by the validator.
+#[cfg(feature = "zcashd_support")]
 #[allow(deprecated)]
 pub async fn launch_zcashd_dual_fetch_services_at(
     activation_heights: ActivationHeights,
