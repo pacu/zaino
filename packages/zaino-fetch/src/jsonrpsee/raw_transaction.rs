@@ -5,6 +5,9 @@ use zebra_chain::block::MAX_BLOCK_BYTES;
 use zebra_rpc::server::error::LegacyCode;
 
 /// Validates that `bytes` does not exceed the Zcash protocol transaction size limit.
+// `RpcError` is a large error type, so returning it by value trips `clippy::result_large_err`.
+// Suppressed here to avoid a boxing refactor that would ripple through every call site.
+#[allow(clippy::result_large_err)]
 pub fn validate_raw_transaction_bytes(bytes: &[u8]) -> Result<(), RpcError> {
     if bytes.len() > MAX_BLOCK_BYTES as usize {
         return Err(RpcError::new_from_legacycode(
@@ -19,6 +22,7 @@ pub fn validate_raw_transaction_bytes(bytes: &[u8]) -> Result<(), RpcError> {
 }
 
 /// Validates hex encoding and decoded transaction size before forwarding to a validator.
+#[allow(clippy::result_large_err)]
 pub fn validate_raw_transaction_hex(raw_transaction_hex: &str) -> Result<(), RpcError> {
     let bytes = hex::decode(raw_transaction_hex)
         .map_err(|_| RpcError::new_from_legacycode(LegacyCode::InvalidParameter, "invalid hex"))?;

@@ -392,7 +392,7 @@ impl ZcashIndexer for FetchServiceSubscriber {
         &self,
         raw_transaction_hex: String,
     ) -> Result<SentTransactionHash, Self::Error> {
-        validate_raw_transaction_hex(&raw_transaction_hex).map_err(FetchServiceError::RpcError)?;
+        validate_raw_transaction_hex(&raw_transaction_hex)?;
         Ok(self
             .fetcher
             .send_raw_transaction(raw_transaction_hex)
