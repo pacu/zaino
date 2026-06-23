@@ -488,11 +488,7 @@ fn rpc_error_from_error_source<'a>(
 fn error_object_from_rpc_error(
     rpc_error: &zaino_fetch::jsonrpsee::connector::RpcError,
 ) -> ErrorObjectOwned {
-    ErrorObjectOwned::owned(
-        rpc_error.code as i32,
-        rpc_error.message.clone(),
-        None::<()>,
-    )
+    ErrorObjectOwned::owned(rpc_error.code as i32, rpc_error.message.clone(), None::<()>)
 }
 
 fn getblock_error_object_from_indexer_error<Error>(error: Error) -> ErrorObjectOwned
