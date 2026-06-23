@@ -23,7 +23,7 @@ use zebra_rpc::{
     client::{GetAddressBalanceRequest, GetAddressTxIdsRequest},
     methods::{AddressBalance, GetAddressUtxos},
 };
-use zebra_state::{FromDisk, HashOrHeight, IntoDisk as _};
+use zebra_state::{FromDisk, HashOrHeight, IntoDisk as _, MAX_BLOCK_REORG_HEIGHT};
 
 use crate::{
     chain_index::{
@@ -53,7 +53,7 @@ fn passthrough_test(
     init_tracing();
     let network = Network::Regtest(ActivationHeights::default());
     // Long enough to have some finalized blocks to play with
-    let segment_length = 120;
+    let segment_length = MAX_BLOCK_REORG_HEIGHT as usize + 20;
     // No need to worry about non-best chains for this test
     let branch_count = 1;
 
@@ -94,8 +94,8 @@ fn passthrough_test(
                 .await
                 .unwrap();
             let index_reader = indexer.subscriber();
-            // 101 instead of 100 as heights are 0-indexed
-            let expected_max_serviceable_height = (2 * segment_length) - 101;
+            // + 1 as heights are 0-indexed. + an additional one due to a + 1 in some other constant definition.
+            let expected_max_serviceable_height = (2 * segment_length) - (MAX_BLOCK_REORG_HEIGHT as usize + 2);
             // Poll rather than sleeping a fixed 5 s: the indexer discovers the
             // chain topology as soon as the sync task has walked enough of the
             // source to identify the finalized-state cutoff. With a 1 s
