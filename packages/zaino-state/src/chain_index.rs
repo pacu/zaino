@@ -1322,8 +1322,9 @@ impl<Source: BlockchainSource> NodeBackedChainIndexSubscriber<Source> {
         snapshot: &ChainIndexSnapshot,
         hash_or_height: &str,
     ) -> Result<bool, ChainIndexError> {
-        let hash_or_height = HashOrHeight::from_str(hash_or_height)
-            .map_err(|error| ChainIndexError::internal(format!("invalid hash or height: {error}")))?;
+        let hash_or_height = HashOrHeight::from_str(hash_or_height).map_err(|error| {
+            ChainIndexError::internal(format!("invalid hash or height: {error}"))
+        })?;
         match hash_or_height {
             HashOrHeight::Hash(hash) => {
                 self.block_hash_known_for_treestate(snapshot, &types::BlockHash::from(hash))
@@ -2305,10 +2306,7 @@ impl<Source: BlockchainSource> ChainIndex for NodeBackedChainIndexSubscriber<Sou
         hash: &types::BlockHash,
     ) -> Result<(Option<Vec<u8>>, Option<Vec<u8>>), Self::Error> {
         let snapshot = self.snapshot_nonfinalized_state().await?;
-        if !self
-            .block_hash_known_for_treestate(&snapshot, hash)
-            .await?
-        {
+        if !self.block_hash_known_for_treestate(&snapshot, hash).await? {
             return Err(ChainIndexError::internal(format!(
                 "block hash {hash} not found in local chain index"
             )));

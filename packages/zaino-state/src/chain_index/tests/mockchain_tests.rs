@@ -611,12 +611,10 @@ async fn get_treestate() {
     let unknown = crate::BlockHash([0u8; 32]);
     let result = index_reader.get_treestate(&unknown).await;
     assert!(result.is_err());
-    assert!(
-        result
-            .expect_err("unknown hash should be rejected")
-            .message
-            .contains("not found in local chain index")
-    );
+    assert!(result
+        .expect_err("unknown hash should be rejected")
+        .message
+        .contains("not found in local chain index"));
 }
 
 #[tokio::test(flavor = "multi_thread")]
