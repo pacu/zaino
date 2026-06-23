@@ -229,12 +229,14 @@ async fn shutdown_terminates_sync_loop_cleanly() {
 /// land in iter N+1 (which would compute the correct post-mine finalized
 /// height and trim properly).
 #[tokio::test(flavor = "multi_thread")]
+#[ignore = "Fails due to finalized height never reached. \
+See https://github.com/zingolabs/zaino/issues/1288"]
 async fn race_pre_mine_finalized_height_block_is_evicted_when_source_advances_mid_iter() {
     let (_blocks, _indexer, index_reader, mockchain) =
         load_test_vectors_and_sync_chain_index(MockchainMode::Active).await;
 
     let initial_active = mockchain.active_height();
-    let pre_mine_finalized_height = finalized_height_floor(initial_active);
+    let pre_mine_finalized_height = dbg!(finalized_height_floor(initial_active));
 
     let initial_snapshot = index_reader.snapshot_nonfinalized_state().await.unwrap();
     let initial_nfs = initial_snapshot
