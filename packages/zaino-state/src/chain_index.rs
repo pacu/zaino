@@ -74,7 +74,21 @@ mod tests;
 /// preserves the original literal-`100` behavior; deriving the
 /// depth from an explicit wider-consensus reference is tracked in
 /// zingolabs/zaino#1130.
+#[cfg(not(test))]
 pub(crate) const NON_FINALIZED_DEPTH: u32 = zebra_state::MAX_BLOCK_REORG_HEIGHT + 1;
+
+/// In-crate unit tests pin the depth at the pre-zebra-10 value (`100`).
+///
+/// Zebra 10 raised `MAX_BLOCK_REORG_HEIGHT` from 99 to 1000, so the
+/// production depth is now 1001. The 201-block mock-chain test vector is
+/// far shorter than that, so at the production depth `finalized_height_floor`
+/// saturates to genesis for the whole fixture: the finalized seam never moves
+/// off block 0 and the eviction/seam invariants become untestable (see
+/// zingolabs/zaino#1288). The eviction and seam invariants are scale-free, so
+/// exercising them at a tractable depth is sound; the production depth is
+/// covered by the integration suite, which reaches real chain heights.
+#[cfg(test)]
+pub(crate) const NON_FINALIZED_DEPTH: u32 = 100;
 
 /// Lower bound on zaino's finalized-DB tip, derived from the current
 /// best-known chain tip.
